@@ -1,0 +1,23 @@
+{
+  "name": "hospital-pharmacy-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Hospital Management System (Pharmacy POS, Patients, Prescriptions, Reports)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.2",
+    "mongoose": "^8.5.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
