@@ -18,7 +18,7 @@ const PERMISSIONS = Object.freeze([
   'customers.view', 'customers.create', 'customers.update',
   'suppliers.view', 'suppliers.create', 'suppliers.update',
   'purchases.view', 'purchases.create', 'purchases.receive', 'purchases.pay',
-  'registers.manage',
+  'registers.view', 'registers.manage',
   'shifts.open', 'shifts.close', 'shifts.view',
   'devices.view', 'devices.revoke',
 ]);
@@ -41,7 +41,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'customers.view', 'customers.create', 'customers.update',
     'suppliers.view', 'suppliers.create', 'suppliers.update',
     'purchases.view', 'purchases.create', 'purchases.receive', 'purchases.pay',
-    'registers.manage',
+    'registers.view', 'registers.manage',
     'shifts.open', 'shifts.close', 'shifts.view',
     'branches.view',
     'audit.view',
@@ -54,6 +54,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'refunds.view', 'refunds.create',
     'payments.view',
     'customers.view', 'customers.create',
+    'registers.view',
     'shifts.open', 'shifts.close', 'shifts.view',
   ],
   [ROLES.STOREKEEPER]: [
