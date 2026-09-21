@@ -13,8 +13,11 @@ router.use('/customers', require('../customer.routes'));
 router.use('/registers', require('../register.routes'));
 router.use('/shifts', require('../shift.routes'));
 router.use('/payments', require('../payment.routes'));
+router.use('/suppliers', require('../supplier.routes'));
+router.use('/purchases', require('../purchase.routes'));
+router.use('/expenses', require('../expense.routes'));
+router.use('/refunds', require('../refund.routes'));
 
-// Phase 5+ will mount: suppliers, purchases, expenses, refunds, reports,
-// etims, audit-logs, sync, devices.
+// Phase 6+ will mount: reports, etims, audit-logs, sync, devices.
 
 module.exports = router;
