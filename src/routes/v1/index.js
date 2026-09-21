@@ -17,7 +17,9 @@ router.use('/suppliers', require('../supplier.routes'));
 router.use('/purchases', require('../purchase.routes'));
 router.use('/expenses', require('../expense.routes'));
 router.use('/refunds', require('../refund.routes'));
+router.use('/reports', require('../report.routes'));
+router.use('/audit-logs', require('../auditlog.routes'));
 
-// Phase 6+ will mount: reports, etims, audit-logs, sync, devices.
+// Phase 7+ will mount: etims, synfhfhfjkfgkjagkagfkagfkgakfgakfgakfgakgfkafgakfgkfgkagfkgfkkfgc, devices, notifications.
 
 module.exports = router;
