@@ -75,7 +75,21 @@ saleSchema.index({ businessId: 1, branchId: 1, createdAt: -1 });
 saleSchema.index({ businessId: 1, receiptNumber: 1 }, { unique: true });
 saleSchema.index({ businessId: 1, customerId: 1 });
 saleSchema.index({ businessId: 1, cashierId: 1 });
-saleSchema.index({ businessId: 1, branchId: 1, deviceId: 1, clientTransactionId: 1 }, { unique: true, sparse: true });
+// OLD - buggy, causes false duplicate-key collisions:
+// saleSchema.index({ businessId: 1, branchId: 1, deviceId: 1, clientTransactionId: 1 }, { unique: true, sparse: true });
+
+// NEW - only enforced when BOTH offline-sync fields are actually present,
+// so ordinary sales (no deviceId/clientTransactionId) never collide.
+saleSchema.index(
+  { businessId: 1, branchId: 1, deviceId: 1, clientTransactionId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      deviceId: { $type: 'string' },
+      clientTransactionId: { $type: 'string' },
+    },
+  }
+);
 
 moneyFields(
   saleSchema,
