@@ -14,7 +14,7 @@ router.use('/registers', require('../register.routes'));
 router.use('/shifts', require('../shift.routes'));
 router.use('/payments', require('../payment.routes'));
 
-/ routes/v1/index.js
+
 router.use('/payments/mpesa', require('../mpesa.routes'));
 router.use('/settings/integrations', require('../integration-settings.routes'));
 router.use('/etims', require('../etims.routes'));
