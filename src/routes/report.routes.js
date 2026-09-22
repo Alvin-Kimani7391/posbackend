@@ -5,6 +5,12 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { reportQuery, inventoryReportQuery } = require('../validators/report.validator');
 
 router.use(authenticate);
+
+// Self-scoped - no reports.view required. Every employee can see their own
+// numbers; the controller locks cashierId to req.user._id and branchId to
+// the caller's own branches.
+router.get('/me', validate({ query: reportQuery }), controller.myDashboard);
+
 router.use(requirePermission('reports.view'));
 
 router.get('/dashboard', validate({ query: reportQuery }), controller.dashboard);

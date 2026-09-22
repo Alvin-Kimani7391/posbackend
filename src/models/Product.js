@@ -36,6 +36,13 @@ const productSchema = new Schema(
 
     hasVariants: { type: Boolean, default: false },
 
+    // --- eTIMS (DigiTax) registration tracking - see integrations/etims ---
+    etims: {
+      itemId: { type: String }, // DigiTax's item_id once registered
+      status: { type: String, enum: ['UNREGISTERED', 'PENDING', 'REGISTERED', 'FAILED'], default: 'UNREGISTERED' },
+      lastError: { type: String },
+    },
+
     image: { type: String },
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
 

@@ -87,8 +87,6 @@ async function getProfitReport(businessId, { branchId, from, to }) {
     {
       $group: {
         _id: null,
-        // revenue excludes tax regardless of tax-inclusive/exclusive mode,
-        // since item.total - item.taxAmount removes it either way.
         grossRevenue: { $sum: { $subtract: ['$items.total', '$items.taxAmount'] } },
         costOfGoodsSold: { $sum: { $multiply: ['$items.costPriceSnapshot', '$items.quantity'] } },
       },
@@ -225,8 +223,82 @@ async function getDashboard(businessId, { branchId, from, to }) {
   };
 }
 
+/**
+ * getMyDashboard - a personal, self-scoped view for a single employee
+ * (typically a CASHIER, who has no reports.view). cashierId is ALWAYS
+ * userId - it is never read from the query string, so there is no way for
+ * a caller to request another employee's figures through this function.
+ * Contains no cost/profit data (that stays behind reports.profit).
+ */
+async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, { includeInventory = false } = {}) {
+  const range = from || to ? { from, to } : { from: new Date(new Date().setHours(0, 0, 0, 0)), to: new Date() };
+  const match = saleMatch({ businessId, branchId, cashierId: userId, from: range.from, to: range.to });
+
+  const [totals] = await Sale.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        netSales: { $sum: '$total' },
+        transactionCount: { $sum: 1 },
+        totalDiscount: { $sum: { $add: ['$itemDiscount', '$cartDiscount'] } },
+      },
+    },
+  ]);
+
+  const saleIds = await Sale.find(match).distinct('_id');
+  const paymentBreakdownRaw = await Payment.aggregate([
+    { $match: { businessId, saleId: { $in: saleIds }, status: 'SUCCESS' } },
+    { $group: { _id: '$method', total: { $sum: '$amount' } } },
+  ]);
+
+  const topProductsRaw = await Sale.aggregate([
+    { $match: match },
+    { $unwind: '$items' },
+    { $group: { _id: '$items.productId', name: { $first: '$items.nameSnapshot' }, quantity: { $sum: '$items.quantity' }, revenue: { $sum: '$items.total' } } },
+    { $sort: { revenue: -1 } },
+    { $limit: 5 },
+  ]);
+
+  const recentSalesRaw = await Sale.find(match)
+    .sort({ createdAt: -1 })
+    .limit(8)
+    .select('receiptNumber total paymentStatus createdAt customerId')
+    .populate('customerId', 'name');
+
+  const t = totals || { netSales: 0, transactionCount: 0, totalDiscount: 0 };
+
+  const result = {
+    range,
+    sales: {
+      netSales: fromCents(t.netSales),
+      transactionCount: t.transactionCount,
+      averageSale: fromCents(t.transactionCount ? Math.round(t.netSales / t.transactionCount) : 0),
+      totalDiscount: fromCents(t.totalDiscount),
+      paymentBreakdown: paymentBreakdownRaw.map((p) => ({ method: p._id, total: fromCents(p.total) })),
+      topProducts: topProductsRaw.map((p) => ({ productId: p._id, name: p.name, quantity: p.quantity, revenue: fromCents(p.revenue) })),
+    },
+    recentSales: recentSalesRaw.map((s) => ({
+      id: s._id,
+      receiptNumber: s.receiptNumber,
+      total: fromCents(s.total),
+      paymentStatus: s.paymentStatus,
+      createdAt: s.createdAt,
+      customerName: s.customerId?.name || null,
+    })),
+  };
+
+  if (includeInventory && branchId) {
+    const alerts = await getLowStockAlerts(businessId, branchId);
+    result.inventory = { lowStockCount: alerts.lowStockCount, outOfStockCount: alerts.outOfStockCount };
+  }
+
+  return result;
+}
+
 module.exports = {
   getDashboard,
+  getMyDashboard,
   getSalesReport,
   getProfitReport,
   getPaymentsReport,

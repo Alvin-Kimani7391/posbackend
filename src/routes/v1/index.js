@@ -20,6 +20,6 @@ router.use('/refunds', require('../refund.routes'));
 router.use('/reports', require('../report.routes'));
 router.use('/audit-logs', require('../auditlog.routes'));
 
-// Phase 7+ will mount: etims, synfhfhfjkfgkjagkagfkagfkgakfgakfgakfgakgfkafgakfgkfgkagfkgfkkfgc, devices, notifications.
+// Phase 7+ will mount: etims,  devices, notifications.
 
 module.exports = router;
