@@ -5,6 +5,11 @@ const ProductVariant = require('../models/ProductVariant');
 const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
 const Payment = require('../models/Payment');
+
+// at the top
+const mpesaService = require('./mpesa.service');
+const etimsService = require('./etims.service');
+
 const Receipt = require('../models/Receipt');
 const Business = require('../models/Business');
 const Branch = require('../models/Branch');
@@ -195,6 +200,18 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         { session }
       );
 
+      // Resolve MPESA lines against verified MpesaTransactions before building
+      // payment docs. CASH/CARD/BANK stay exactly as before (cashier-attested).
+      for (const p of payments) {
+        if (p.method === 'MPESA') {
+          if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
+          const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, sale._id, session);
+          p.provider = 'payhero';
+          p.externalTransactionId = confirmed.externalTransactionId;
+          p.metadata = { checkoutRequestId: confirmed.checkoutRequestId };
+        }
+      }
+
       // Inventory, serials, batches - one item at a time, same transaction.
       for (const item of builtItems) {
         const { product, quantity } = item._meta;
@@ -229,14 +246,16 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         }
       }
 
-      // Payments - manual recording for every method for now. MPESA/CARD/BANK
-      // get 'provider: manual' and a cashier-entered reference; swapping in a
-      // real gateway later means adding a provider integration that calls
-      // this same Payment.create shape from a callback instead of here.
+      // Payments - manual recording for CASH/CARD/BANK; MPESA picks up
+      // provider/externalTransactionId/metadata resolved above. Swapping in
+      // a real gateway for another method later means adding a provider
+      // integration that calls this same Payment.create shape from a
+      // callback instead of here.
       const paymentDocsInput = payments.map((p) => {
         const doc = {
           businessId, branchId, saleId: sale._id, customerId: customer?._id, shiftId: shift?._id,
-          method: p.method, provider: 'manual', amount: p.amount, reference: p.reference,
+          method: p.method, provider: p.provider || 'manual', amount: p.amount, reference: p.reference,
+          externalTransactionId: p.externalTransactionId, metadata: p.metadata,
           initiatedBy: cashierUser._id, status: 'SUCCESS', completedAt: new Date(),
         };
         if (p.method === 'CASH') {
@@ -283,10 +302,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         { session }
       );
 
-      // TODO(eTIMS integration, deferred): once built, this is where a
-      // sale-completed hook would enqueue eTIMS submission. Intentionally
-      // not stubbed out yet per project instructions - no fake "submitted"
-      // status should ever appear until the real integration exists.
+      // eTIMS: enqueue only - never let a slow/down KRA endpoint block checkout.
+      // Does nothing if eTIMS isn't enabled for this business (checked inside).
+      await etimsService.enqueueForSale(businessId, branchId, sale._id, { session });
 
       result = { sale, receipt, payments: createdPayments };
     });

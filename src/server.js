@@ -13,6 +13,14 @@ async function start() {
   });
 }
 
+
+
+  // Background jobs - only after a DB connection exists, and only in the
+  // real server process (never when app.js is imported by tests).
+  require('./jobs/etimsRetry.job').start();
+  require('./jobs/mpesaReconcile.job').start();
+
+
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully`);
   if (server) {
