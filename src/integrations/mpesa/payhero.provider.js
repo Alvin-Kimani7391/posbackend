@@ -14,9 +14,12 @@ const { interpretInitiateError } = require('../../utils/mpesaErrors');
 const BASE_URL = process.env.PAYHERO_BASE_URL || 'https://backend.payhero.co.ke/api/v2';
 
 function authHeader(credentials) {
-  if (credentials.basicAuthToken) {
-    const t = credentials.basicAuthToken.trim();
-    return { Authorization: t.startsWith('Basic ') ? t : `Basic ${t}` };
+  const raw = (credentials.basicAuthToken || '').toString();
+  if (raw.trim()) {
+    // Strip any existing "Basic " prefix (case-insensitive) so we never
+    // double-prefix, and strip all whitespace/newlines a paste can carry.
+    const token = raw.replace(/^\s*basic\s+/i, '').replace(/\s+/g, '');
+    return { Authorization: `Basic ${token}` };
   }
   const token = Buffer.from(`${credentials.apiUsername}:${credentials.apiPassword}`).toString('base64');
   return { Authorization: `Basic ${token}` };
@@ -25,30 +28,17 @@ function authHeader(credentials) {
 async function stkPush({ credentials, channelId, amountCents, phone, externalReference, customerName, callbackUrl }) {
   const amount = Math.round(amountCents / 100);
   try {
-    const res = await axios.post(
-      `${BASE_URL}/payments`,
-      {
-        amount,
-        phone_number: normalizePhone(phone),
-        channel_id: Number(channelId),
-        provider: 'm-pesa',
-        external_reference: externalReference,
-        customer_name: customerName || undefined,
-        callback_url: callbackUrl,
-      },
-      { headers: { 'Content-Type': 'application/json', ...authHeader(credentials) }, timeout: 15000 }
-    );
-    if (res.data.success !== true) {
-      // Accepted the HTTP call but PayHero itself rejected the request body.
-      const e = new Error(res.data.error_message || 'PayHero declined this request');
-      e.response = { data: res.data };
-      throw e;
-    }
-    return { status: res.data.status, reference: res.data.reference, checkoutRequestId: res.data.CheckoutRequestID, raw: res.data };
+    const res = await axios.post(/* ...unchanged... */);
+    /* ...unchanged... */
   } catch (err) {
+    console.error('[PayHero STK] request failed', {
+      status: err.response?.status,
+      body: err.response?.data,
+      // never log credentials or the Authorization header
+    });
     const interpreted = interpretInitiateError(err);
     const apiErr = ApiError.externalService(interpreted.message, 'MPESA_STK_FAILED');
-    apiErr.mpesaFailureType = interpreted.type; // read by mpesa.controller to pass through to the cashier
+    apiErr.mpesaFailureType = interpreted.type;
     throw apiErr;
   }
 }

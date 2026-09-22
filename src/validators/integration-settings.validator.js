@@ -5,8 +5,11 @@ const updateMpesaSchema = z.object({
   channelId: z.string().trim().min(1).optional(),
   apiUsername: z.string().trim().min(1).optional(),
   apiPassword: z.string().trim().min(1).optional(),
-}).refine((d) => (d.apiUsername && d.apiPassword) || (!d.apiUsername && !d.apiPassword), {
+  basicAuthToken: z.string().trim().min(1).optional(), // NEW - PayHero sometimes hands out a ready-made "Basic xxxx" token instead of separate credentials
+}).refine((d) => !(d.apiUsername || d.apiPassword) || (d.apiUsername && d.apiPassword), {
   message: 'apiUsername and apiPassword must be provided together',
+}).refine((d) => !(d.basicAuthToken && (d.apiUsername || d.apiPassword)), {
+  message: 'Provide either a Basic Auth token OR a username/password, not both',
 });
 
 const updateEtimsSchema = z.object({

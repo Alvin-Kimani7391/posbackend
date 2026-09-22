@@ -48,18 +48,24 @@ function assertOwner(user) {
   }
 }
 
-async function updateMpesa(businessId, user, { enabled, channelId, apiUsername, apiPassword }) {
+async function updateMpesa(businessId, user, { enabled, channelId, apiUsername, apiPassword, basicAuthToken }) {
   assertOwner(user);
   const settings = await getOrCreate(businessId);
   const changed = [];
 
   if (enabled !== undefined) { settings.mpesa.enabled = enabled; changed.push('enabled'); }
   if (channelId !== undefined) { settings.mpesa.channelId = channelId; changed.push('channelId'); }
-  if (apiUsername && apiPassword) {
+
+  if (basicAuthToken) {
+    settings.mpesa.credentialsBlob = encrypt({ basicAuthToken });
+    settings.mpesa.credentialsSetAt = new Date();
+    changed.push('credentials');
+  } else if (apiUsername && apiPassword) {
     settings.mpesa.credentialsBlob = encrypt({ apiUsername, apiPassword });
     settings.mpesa.credentialsSetAt = new Date();
     changed.push('credentials');
   }
+
   if (settings.mpesa.enabled && (!settings.mpesa.channelId || !settings.mpesa.credentialsBlob)) {
     throw ApiError.badRequest('Set a channel ID and API credentials before enabling M-PESA', 'MPESA_INCOMPLETE_CONFIG');
   }
