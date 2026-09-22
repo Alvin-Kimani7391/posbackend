@@ -28,8 +28,27 @@ function authHeader(credentials) {
 async function stkPush({ credentials, channelId, amountCents, phone, externalReference, customerName, callbackUrl }) {
   const amount = Math.round(amountCents / 100);
   try {
-    const res = await axios.post(/* ...unchanged... */);
-    /* ...unchanged... */
+    const res = await axios.post(
+      `${BASE_URL}/payments`,
+      {
+        amount,
+        phone_number: normalizePhone(phone),
+        channel_id: Number(channelId),
+        provider: 'm-pesa',
+        external_reference: externalReference,
+        customer_name: customerName || undefined,
+        callback_url: callbackUrl,
+      },
+      { headers: { 'Content-Type': 'application/json', ...authHeader(credentials) }, timeout: 15000 }
+    );
+    if (res.data.success !== true) {
+      // Accepted the HTTP call but PayHero itself rejected the request body.
+      const e = new Error(res.data.error_message || 'PayHero declined this request');
+      e.response = { data: res.data };
+      throw e;
+    }
+    return { status: res.data.status, reference: res.data.reference, checkoutRequestId: res.data.CheckoutRequestID, raw: res.data };
+  
   } catch (err) {
     console.error('[PayHero STK] request failed', {
       status: err.response?.status,
