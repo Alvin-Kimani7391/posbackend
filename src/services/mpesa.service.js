@@ -11,6 +11,7 @@ const COOLDOWN_AFTER_FAILURES = 3;        // consecutive failed attempts...
 const COOLDOWN_WINDOW_MS = 2 * 60 * 1000; // ...within this window trigger a short cooldown
 const COOLDOWN_DURATION_MS = 60 * 1000;
 const PENDING_TIMEOUT_MS = 90 * 1000;     // Safaricom's own STK prompt expires around this mark
+const HARD_ESCALATE_MS = 10 * 60 * 1000;  // 10 minutes fully unresolved -> stop retrying automatically, tell a human
 
 async function loadMpesaConfig(businessId) {
   const settings = await IntegrationSettings.findOne({ businessId }).select('+mpesa.credentialsBlob');
@@ -100,7 +101,10 @@ async function getStatus(businessId, reference) {
     if (staleEnough) {
       try {
         const { credentials } = await loadMpesaConfig(businessId);
-        const live = await payhero.getTransactionStatus({ credentials, reference });
+        // PayHero's status endpoint takes THEIR reference (txn.providerReference,
+        // returned in the initiate response), never our internal txn.reference.
+        if (!txn.providerReference) throw new Error('No provider reference stored yet');
+        const live = await payhero.getTransactionStatus({ credentials, reference: txn.providerReference });
         txn.lastCheckedAt = new Date();
         if (live.status === 'SUCCESS') {
           txn.status = 'SUCCESS';
@@ -113,7 +117,8 @@ async function getStatus(businessId, reference) {
           txn.resultDesc = 'No response received from customer in time';
         }
         await txn.save();
-      } catch {
+      } catch (err) {
+        console.error('[mpesa] live status poll failed', { reference: txn.reference, providerReference: txn.providerReference, error: err.message });
         // Live poll hiccuped - if we're already past the timeout window,
         // still resolve to timeout locally rather than spinning forever.
         if (age > PENDING_TIMEOUT_MS) {
@@ -166,22 +171,47 @@ async function consumeForSale(businessId, reference, expectedAmountCents, saleId
   return { externalTransactionId: txn.mpesaReceiptNumber, checkoutRequestId: txn.checkoutRequestId };
 }
 
-/** Sweep for the reconciliation job - PENDING transactions whose window has clearly closed but whose browser tab may have been closed before getStatus() could resolve them locally. Mirrors the previous site's paymentReaper, minus stock restoration (nothing is reserved here until a Sale actually exists). */
+/** Sweep for the reconciliation job - PENDING transactions whose window has clearly closed but whose browser tab may have been closed before getStatus() could resolve them locally. Mirrors the previous site's paymentReaper, minus stock restoration (nothing is reserved here until a Sale actually exists).
+ * Never auto-fails a transaction the system genuinely can't resolve: if PayHero
+ * itself reports QUEUED (or the status check errors) past the pending timeout,
+ * the transaction is left PENDING and, once it's been unresolved for
+ * HARD_ESCALATE_MS, management is notified to check PayHero's dashboard
+ * directly rather than risk marking an actually-paid transaction FAILED. */
 async function reapAbandoned() {
   const cutoff = new Date(Date.now() - PENDING_TIMEOUT_MS);
   const stale = await MpesaTransaction.find({ status: 'PENDING', createdAt: { $lt: cutoff } }).limit(200);
   for (const txn of stale) {
+    const age = Date.now() - txn.createdAt.getTime();
     try {
       const { credentials } = await loadMpesaConfig(txn.businessId);
-      const live = await payhero.getTransactionStatus({ credentials, reference: txn.reference });
-      if (live.status === 'SUCCESS') { txn.status = 'SUCCESS'; }
-      else { txn.status = 'FAILED'; txn.failureType = live.status === 'FAILED' ? 'failed' : 'timeout'; }
-    } catch {
-      txn.status = 'FAILED';
-      txn.failureType = 'timeout';
-      txn.resultDesc = 'No response received from customer in time';
+      if (!txn.providerReference) throw new Error('No provider reference stored yet');
+      const live = await payhero.getTransactionStatus({ credentials, reference: txn.providerReference });
+      if (live.status === 'SUCCESS') {
+        txn.status = 'SUCCESS';
+        await txn.save();
+        continue;
+      }
+      if (live.status === 'FAILED') {
+        txn.status = 'FAILED';
+        txn.failureType = 'failed';
+        await txn.save();
+        continue;
+      }
+      // still QUEUED per PayHero itself - genuinely still pending, not our bug.
+    } catch (err) {
+      console.error('[mpesa reap] status check failed', { reference: txn.reference, error: err.message });
     }
-    await txn.save();
+
+    if (age > HARD_ESCALATE_MS && !txn.escalatedAt) {
+      txn.escalatedAt = new Date();
+      await txn.save();
+      await notificationService.notifyManagement(txn.businessId, {
+        type: 'PAYMENT_FAILED',
+        title: 'M-PESA payment needs manual check',
+        message: `STK push ${txn.reference} (KSh ${(txn.amount / 100).toFixed(2)}) has been unresolved for over 10 minutes. Check PayHero's dashboard directly before assuming it failed - the customer may have already paid.`,
+        data: { mpesaTransactionId: txn._id },
+      });
+    }
   }
   return stale.length;
 }

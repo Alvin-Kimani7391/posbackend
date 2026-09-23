@@ -22,7 +22,7 @@ const mpesaTransactionSchema = new Schema(
     providerReference: { type: String }, // PayHero's own "reference" field from the initiate response
 
     status: { type: String, enum: ['PENDING', 'SUCCESS', 'FAILED', 'CANCELLED'], default: 'PENDING', index: true },
-    
+
     // add to the schema, right after `status`:
 failureType: { type: String, default: '' }, // 'wrong_pin' | 'insufficient_funds' | 'cancelled' | 'timeout' | 'in_progress' | 'system_error' | 'bad_credentials' | 'rate_limited' | 'send_failed' | 'failed' | ''
 
@@ -35,6 +35,7 @@ failureType: { type: String, default: '' }, // 'wrong_pin' | 'insufficient_funds
 
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', default: null }, // set once consumed by a completed sale
     lastCheckedAt: { type: Date },
+    escalatedAt: { type: Date }, // set once reapAbandoned() has notified management about a transaction unresolved for >10min - prevents duplicate escalation notifications
   },
   { timestamps: true }
 );
