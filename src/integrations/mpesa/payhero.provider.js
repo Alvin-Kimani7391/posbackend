@@ -2,10 +2,10 @@ const axios = require('axios');
 const ApiError = require('../../utils/ApiError');
 const { interpretInitiateError } = require('../../utils/mpesaErrors');
 
-
 /**
- * Thin wrapper over PayHero's HTTP API. Auth is HTTP Basic where the token
- * is base64("<apiUsername>:<apiPassword>") - these credentials come out of
+ * Thin wrapper over PayHero's HTTP API. Auth is HTTP Basic - either a
+ * ready-made "Basic xxxx" token PayHero hands out directly, or one we build
+ * ourselves from apiUsername/apiPassword. Credentials come out of
  * IntegrationSettings.mpesa (decrypted just-in-time by the caller, never
  * cached on this object across businesses since this is stateless).
  *
@@ -26,7 +26,7 @@ function authHeader(credentials) {
 }
 
 async function stkPush({ credentials, channelId, amountCents, phone, externalReference, customerName, callbackUrl }) {
-  const amount = Math.round(amountCents / 100);
+  const amount = Math.round(amountCents / 100); // PayHero's `amount` is whole KES, not cents
   try {
     const res = await axios.post(
       `${BASE_URL}/payments`,
@@ -48,7 +48,6 @@ async function stkPush({ credentials, channelId, amountCents, phone, externalRef
       throw e;
     }
     return { status: res.data.status, reference: res.data.reference, checkoutRequestId: res.data.CheckoutRequestID, raw: res.data };
-  
   } catch (err) {
     console.error('[PayHero STK] request failed', {
       status: err.response?.status,
@@ -62,7 +61,7 @@ async function stkPush({ credentials, channelId, amountCents, phone, externalRef
   }
 }
 
-/** Active poll against PayHero, used by the reconciliation job and the manual "check status" button - never the only source of truth, the callback is primary. */
+/** Active poll against PayHero, used by the reconciliation job and the manual "check status" button - never the only source of truth, the callback is primary. NOTE: this endpoint never returns a receipt number, only status - see mpesa.service.toClientShape. */
 async function getTransactionStatus({ credentials, reference }) {
   try {
     const res = await axios.get(`${BASE_URL}/transaction-status`, {

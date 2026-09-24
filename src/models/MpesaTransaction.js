@@ -13,29 +13,26 @@ const mpesaTransactionSchema = new Schema(
     branchId: { type: Schema.Types.ObjectId, ref: 'Branch', required: true },
     initiatedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
 
-    reference: { type: String, required: true }, // our external_reference, e.g. "MPX-<nanoid>"
+    reference: { type: String, required: true }, // our external_reference, e.g. "MPX-xxxx"
     phone: { type: String, required: true },
     amount: { type: Number, required: true }, // integer cents
 
     provider: { type: String, default: 'payhero' },
     checkoutRequestId: { type: String },
-    providerReference: { type: String }, // PayHero's own "reference" field from the initiate response
+    providerReference: { type: String }, // PayHero's own "reference" from the initiate response - required for GET /transaction-status, NOT our internal `reference`
 
     status: { type: String, enum: ['PENDING', 'SUCCESS', 'FAILED', 'CANCELLED'], default: 'PENDING', index: true },
-
-    // add to the schema, right after `status`:
-failureType: { type: String, default: '' }, // 'wrong_pin' | 'insufficient_funds' | 'cancelled' | 'timeout' | 'in_progress' | 'system_error' | 'bad_credentials' | 'rate_limited' | 'send_failed' | 'failed' | ''
-
-    mpesaReceiptNumber: { type: String },
+    mpesaReceiptNumber: { type: String }, // ONLY ever arrives via PayHero's callback - transaction-status polling never returns this
     resultCode: { type: String },
     resultDesc: { type: String },
+    failureType: { type: String, default: '' }, // 'wrong_pin' | 'insufficient_funds' | 'cancelled' | 'timeout' | 'in_progress' | 'system_error' | 'bad_credentials' | 'rate_limited' | 'send_failed' | 'failed' | ''
 
     rawInitiateResponse: { type: Schema.Types.Mixed },
     rawCallback: { type: Schema.Types.Mixed },
 
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', default: null }, // set once consumed by a completed sale
     lastCheckedAt: { type: Date },
-    escalatedAt: { type: Date }, // set once reapAbandoned() has notified management about a transaction unresolved for >10min - prevents duplicate escalation notifications
+    escalatedAt: { type: Date }, // set once a genuinely-unresolved PENDING transaction has been flagged to management (see reapAbandoned)
   },
   { timestamps: true }
 );

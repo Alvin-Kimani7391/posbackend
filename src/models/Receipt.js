@@ -12,10 +12,16 @@ const receiptSchema = new Schema(
     // Fully self-contained snapshot - a thermal/PDF/SMS renderer needs
     // nothing else. Never re-fetch business/product/customer data to
     // render a historical receipt; use exactly what's stored here.
+    //
+    // `business` is a snapshot of Business.receiptSettings AS THEY WERE AT
+    // SALE TIME - if the owner changes the footer message or toggles
+    // showKraPin tomorrow, yesterday's receipt must not change.
     receiptData: {
       business: {
         name: String, address: String, phone: String, kraPin: String,
-        footerMessage: String, logo: String,
+        footerMessage: String, headerMessage: String, logo: String,
+        showKraPin: Boolean, showCashierName: Boolean, showMpesaReceiptCode: Boolean,
+        customLines: [String], paperWidth: String,
       },
       branch: { name: String, phone: String },
       cashier: { name: String },
@@ -29,7 +35,7 @@ const receiptSchema = new Schema(
       cartDiscount: Number,
       tax: Number,
       total: Number,
-      payments: [{ method: String, amount: Number, reference: String }],
+      payments: [{ method: String, amount: Number, reference: String, externalTransactionId: String }],
       amountTendered: Number,
       changeGiven: Number,
       balance: Number,
@@ -53,7 +59,8 @@ receiptSchema.index({ businessId: 1, receiptNumber: 1 });
 // (it only handles top-level fields and one level of array-of-subdocuments).
 // So Receipt gets its own transform converting exactly those nested cents
 // fields to decimal KES on output - everything else in receiptData passes
-// through untouched.
+// through untouched (externalTransactionId is a string, not money, so it's
+// never touched by this transform).
 const { fromCents } = require('../utils/money');
 
 function convertReceiptMoney(ret) {

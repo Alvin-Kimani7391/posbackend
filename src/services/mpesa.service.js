@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const MpesaTransaction = require('../models/MpesaTransaction');
 const IntegrationSettings = require('../models/IntegrationSettings');
+const Payment = require('../models/Payment');
+const Receipt = require('../models/Receipt');
 const { decryptJson } = require('../utils/crypto');
 const payhero = require('../integrations/mpesa/payhero.provider');
 const { interpretMpesaResult } = require('../utils/mpesaErrors');
@@ -72,12 +74,19 @@ async function initiateStk(businessId, branchId, user, { phone, amountCents, cus
 }
 
 function toClientShape(txn) {
+  // PayHero's transaction-status poll NEVER returns a receipt number, only
+  // the callback does - so a poll-resolved SUCCESS can legitimately have no
+  // mpesaReceiptNumber yet. Never print the literal string "undefined".
+  const successMessage = txn.mpesaReceiptNumber
+    ? `Confirmed - M-PESA receipt ${txn.mpesaReceiptNumber}`
+    : 'Confirmed - payment received';
+
   return {
     reference: txn.reference,
     status: txn.status, // PENDING | SUCCESS | FAILED | CANCELLED
     failureType: txn.failureType || null,
     message: txn.status === 'SUCCESS'
-      ? `Confirmed - M-PESA receipt ${txn.mpesaReceiptNumber}`
+      ? successMessage
       : txn.status === 'PENDING'
       ? 'Waiting for the customer to enter their PIN…'
       : (txn.resultDesc && interpretMpesaResult(txn.resultCode, txn.resultDesc).message) || 'Payment was not completed.',
@@ -119,7 +128,7 @@ async function getStatus(businessId, reference) {
         await txn.save();
       } catch (err) {
         console.error('[mpesa] live status poll failed', { reference: txn.reference, providerReference: txn.providerReference, error: err.message });
-        // Live poll hicfffffhffhfhfffhcuped - if we're already past the timeout window,
+        // Live poll hiccuped - if we're already past the timeout window,
         // still resolve to timeout locally rather than spinning forever.
         if (age > PENDING_TIMEOUT_MS) {
           txn.status = 'FAILED';
@@ -133,24 +142,70 @@ async function getStatus(businessId, reference) {
   return toClientShape(txn);
 }
 
+/**
+ * handleCallback - idempotent, but NOT a strict "PENDING-only" gate.
+ * Three cases:
+ *  1. txn is still PENDING -> normal resolution.
+ *  2. txn is already SUCCESS (resolved earlier via the receipt-less live
+ *     poll) and the callback also says success -> don't re-decide status,
+ *     just backfill mpesaReceiptNumber and propagate it onto the Payment/
+ *     Receipt if a sale was already completed against this reference.
+ *  3. txn is already FAILED (e.g. we gave up after PENDING_TIMEOUT_MS) but
+ *     the callback now says the payment actually succeeded - money DID
+ *     arrive. Never silently drop this: flip it to SUCCESS and loudly
+ *     notify management, since a sale may need manual reconciliation.
+ * A callback that disagrees with an already-SUCCESS transaction in a way
+ * that would un-pay a confirmed payment is never applied - status only
+ * ever moves toward SUCCESS from a non-terminal or FAILED state, never away
+ * from SUCCESS.
+ */
 async function handleCallback(businessId, body) {
   const parsed = payhero.parseCallback(body);
-  if (!parsed.reference) return;
+  if (!parsed.reference) return; // nothing we can match against - drop silently, PayHero doesn't retry on our error codes anyway
 
   const txn = await MpesaTransaction.findOne({ businessId, reference: parsed.reference });
-  if (!txn || txn.status !== 'PENDING') return; // unknown or already-terminal - idempotent no-op
+  if (!txn) return; // unknown reference - ignore rather than throw, avoids leaking existence info
 
   const interpreted = interpretMpesaResult(parsed.resultCode, parsed.resultDesc);
+  const callbackSaysSuccess = interpreted.type === 'success';
+  const hadReceiptAlready = !!txn.mpesaReceiptNumber;
 
-  txn.status = interpreted.type === 'success' ? 'SUCCESS' : 'FAILED';
-  txn.failureType = interpreted.type === 'success' ? '' : interpreted.type;
-  txn.mpesaReceiptNumber = parsed.mpesaReceiptNumber;
-  txn.resultCode = parsed.resultCode;
-  txn.resultDesc = parsed.resultDesc;
+  if (txn.status === 'PENDING') {
+    txn.status = callbackSaysSuccess ? 'SUCCESS' : 'FAILED';
+    txn.failureType = callbackSaysSuccess ? '' : interpreted.type;
+  } else if (txn.status === 'FAILED' && callbackSaysSuccess) {
+    txn.status = 'SUCCESS';
+    txn.failureType = '';
+    await notificationService.notifyManagement(businessId, {
+      type: 'PAYMENT_FAILED',
+      title: 'M-PESA payment succeeded after being marked failed',
+      message: `STK push ${txn.reference} (KSh ${(txn.amount / 100).toFixed(2)}) was marked failed/timed out earlier, but M-PESA now confirms it succeeded${parsed.mpesaReceiptNumber ? ` (receipt ${parsed.mpesaReceiptNumber})` : ''}. Please check whether the sale still needs to be completed.`,
+      data: { mpesaTransactionId: txn._id },
+    });
+  }
+  // else: already SUCCESS and staying SUCCESS (or already terminal in a way
+  // the callback doesn't override) - status left untouched either way.
+
+  if (parsed.mpesaReceiptNumber) txn.mpesaReceiptNumber = parsed.mpesaReceiptNumber;
+  if (parsed.resultCode !== undefined) txn.resultCode = parsed.resultCode;
+  if (parsed.resultDesc) txn.resultDesc = parsed.resultDesc;
   txn.rawCallback = body;
   await txn.save();
 
-  if (txn.status === 'FAILED') {
+  // Backfill a receipt number that arrived AFTER the sale was already
+  // completed against this reference (the poll-resolved-SUCCESS case).
+  if (txn.saleId && parsed.mpesaReceiptNumber && !hadReceiptAlready) {
+    await Payment.updateOne(
+      { saleId: txn.saleId, method: 'MPESA', reference: txn.reference },
+      { externalTransactionId: parsed.mpesaReceiptNumber }
+    );
+    await Receipt.updateOne(
+      { saleId: txn.saleId, 'receiptData.payments.reference': txn.reference },
+      { $set: { 'receiptData.payments.$.externalTransactionId': parsed.mpesaReceiptNumber } }
+    );
+  }
+
+  if (txn.status === 'FAILED' && !callbackSaysSuccess) {
     await notificationService.notifyManagement(businessId, {
       type: 'PAYMENT_FAILED',
       title: 'M-PESA payment failed',
@@ -160,6 +215,14 @@ async function handleCallback(businessId, body) {
   }
 }
 
+/**
+ * THE TRUST BOUNDARY. Called from inside sale.service.createSale's
+ * transaction when a payment line has method === 'MPESA'. Looks up the
+ * MpesaTransaction by (businessId, reference), and only accepts it if it is
+ * SUCCESS, unconsumed (saleId still null), and the amount matches exactly.
+ * The frontend's `amount` on the payment line is display-only here - the
+ * authoritative amount is whatever PayHero actually confirmed.
+ */
 async function consumeForSale(businessId, reference, expectedAmountCents, saleId, session) {
   const txn = await MpesaTransaction.findOne({ businessId, reference }).session(session);
   if (!txn) throw ApiError.badRequest('M-PESA reference not recognized', 'MPESA_REFERENCE_NOT_FOUND');
@@ -168,15 +231,22 @@ async function consumeForSale(businessId, reference, expectedAmountCents, saleId
   if (txn.amount !== expectedAmountCents) throw ApiError.badRequest('The M-PESA amount confirmed does not match this sale', 'MPESA_AMOUNT_MISMATCH');
   txn.saleId = saleId;
   await txn.save({ session });
+  // externalTransactionId may still be null here if the receipt number
+  // hasn't arrived via callback yet - handleCallback's backfill above fills
+  // it in on the Payment/Receipt once it does.
   return { externalTransactionId: txn.mpesaReceiptNumber, checkoutRequestId: txn.checkoutRequestId };
 }
 
-/** Sweep for the reconciliation job - PENDING transactions whose window has clearly closed but whose browser tab may have been closed before getStatus() could resolve them locally. Mirrors the previous site's paymentReaper, minus stock restoration (nothing is reserved here until a Sale actually exists).
- * Never auto-fails a transaction the system genuinely can't resolve: if PayHero
- * itself reports QUEUED (or the status check errors) past the pending timeout,
- * the transaction is left PENDING and, once it's been unresolved for
- * HARD_ESCALATE_MS, management is notified to check PayHero's dashboard
- * directly rather than risk marking an actually-paid transaction FAILED. */
+/**
+ * Sweep for the reconciliation job - PENDING transactions whose window has
+ * clearly closed but whose browser tab may have been closed before
+ * getStatus() could resolve them locally. Never auto-fails a transaction
+ * the system genuinely can't resolve: if PayHero itself reports QUEUED (or
+ * the status check errors) past the pending timeout, the transaction is
+ * left PENDING and, once it's been unresolved for HARD_ESCALATE_MS,
+ * management is notified to check PayHero's dashboard directly rather than
+ * risk marking an actually-paid transaction FAILED.
+ */
 async function reapAbandoned() {
   const cutoff = new Date(Date.now() - PENDING_TIMEOUT_MS);
   const stale = await MpesaTransaction.find({ status: 'PENDING', createdAt: { $lt: cutoff } }).limit(200);

@@ -25,9 +25,15 @@ const businessSchema = new Schema(
 
     receiptSettings: {
       footerMessage: { type: String, default: 'Thank you for your business!' },
+      headerMessage: { type: String, default: '' },
       showLogo: { type: Boolean, default: true },
+      showKraPin: { type: Boolean, default: true },
+      showCashierName: { type: Boolean, default: true },
+      showMpesaReceiptCode: { type: Boolean, default: true },
       receiptPrefix: { type: String, default: 'RCT' },
       invoicePrefix: { type: String, default: 'INV' },
+      paperWidth: { type: String, enum: ['58mm', '80mm'], default: '80mm' },
+      customLines: [{ type: String }], // free-form extra lines, e.g. "Returns within 7 days only"
     },
 
     taxSettings: {

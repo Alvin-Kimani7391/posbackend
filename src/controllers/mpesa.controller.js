@@ -30,6 +30,9 @@ exports.status = catchAsync(async (req, res) => {
 // PUBLIC - no `authenticate`. businessId comes from the URL (set by us when
 // we built the callback_url), not from a session, so PayHero can reach it.
 exports.callback = catchAsync(async (req, res) => {
+  // Diagnostic only - never logs credentials, just confirms whether PayHero
+  // is actually reaching this endpoint and what shape their payload takes.
+  console.log('[mpesa callback] received', { businessId: req.params.businessId, body: req.body });
   await mpesaService.handleCallback(req.params.businessId, req.body);
   return res.status(200).json({ received: true }); // PayHero just needs a 200
 });

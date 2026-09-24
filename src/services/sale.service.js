@@ -6,7 +6,6 @@ const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
 const Payment = require('../models/Payment');
 
-// at the top
 const mpesaService = require('./mpesa.service');
 const etimsService = require('./etims.service');
 
@@ -207,7 +206,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
           if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
           const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, sale._id, session);
           p.provider = 'payhero';
-          p.externalTransactionId = confirmed.externalTransactionId;
+          p.externalTransactionId = confirmed.externalTransactionId; // may be null if the receipt number hasn't arrived via callback yet - see mpesaService.handleCallback's backfill
           p.metadata = { checkoutRequestId: confirmed.checkoutRequestId };
         }
       }
@@ -277,18 +276,31 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         await Customer.updateOne({ _id: customer._id }, { $inc: { outstandingBalance: balance } }, { session });
       }
 
-      // Immutable receipt snapshot - a printer/PDF/SMS renderer needs only this document.
+      // Immutable receipt snapshot - a printer/PDF/SMS renderer needs only
+      // this document. `business` here is a snapshot of receiptSettings AS
+      // THEY WERE at sale time, so an owner changing them later never
+      // rewrites a historical receipt.
       const [receipt] = await Receipt.create(
         [{
           businessId, branchId, saleId: sale._id, receiptNumber, invoiceNumber,
           receiptData: {
-            business: { name: business.name, address: business.address, phone: business.phone, kraPin: business.kraPin, footerMessage: business.receiptSettings?.footerMessage, logo: business.logo },
+            business: {
+              name: business.name, address: business.address, phone: business.phone, kraPin: business.kraPin,
+              footerMessage: business.receiptSettings?.footerMessage,
+              headerMessage: business.receiptSettings?.headerMessage,
+              logo: business.receiptSettings?.showLogo ? business.logo : undefined,
+              showKraPin: business.receiptSettings?.showKraPin ?? true,
+              showCashierName: business.receiptSettings?.showCashierName ?? true,
+              showMpesaReceiptCode: business.receiptSettings?.showMpesaReceiptCode ?? true,
+              customLines: business.receiptSettings?.customLines || [],
+              paperWidth: business.receiptSettings?.paperWidth || '80mm',
+            },
             branch: { name: branch?.name, phone: branch?.phone },
             cashier: { name: cashierUser.name },
             customer: customer ? { name: customer.name, phone: customer.phone } : null,
             items: builtItems.map((i) => ({ name: i.nameSnapshot, sku: i.skuSnapshot, quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, taxAmount: i.taxAmount, total: i.total })),
             subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
-            payments: paymentDocsInput.map((p) => ({ method: p.method, amount: p.amount, reference: p.reference })),
+            payments: paymentDocsInput.map((p) => ({ method: p.method, amount: p.amount, reference: p.reference, externalTransactionId: p.externalTransactionId })),
             amountTendered: paymentDocsInput.filter((p) => p.method === 'CASH').reduce((s, p) => s + (p.amountTendered || 0), 0),
             changeGiven: paymentDocsInput.filter((p) => p.method === 'CASH').reduce((s, p) => s + (p.changeGiven || 0), 0),
             balance, paymentStatus,
