@@ -119,7 +119,7 @@ async function getStatus(businessId, reference) {
         await txn.save();
       } catch (err) {
         console.error('[mpesa] live status poll failed', { reference: txn.reference, providerReference: txn.providerReference, error: err.message });
-        // Live poll hiccuped - if we're already past the timeout window,
+        // Live poll hicfffffhffhfhfffhcuped - if we're already past the timeout window,
         // still resolve to timeout locally rather than spinning forever.
         if (age > PENDING_TIMEOUT_MS) {
           txn.status = 'FAILED';
