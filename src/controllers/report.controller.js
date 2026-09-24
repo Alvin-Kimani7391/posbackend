@@ -9,13 +9,6 @@ exports.dashboard = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Dashboard fetched', result);
 });
 
-/**
- * myDashboard - self-scoped stats for the logged-in employee. No
- * reports.view required: everyone is allowed to see their own numbers.
- * branchId is restricted to one of the caller's own assigned branches
- * (unless they're OWNER/ADMIN) so a cashier can't probe another branch's
- * stock alerts just by changing a query param.
- */
 exports.myDashboard = catchAsync(async (req, res) => {
   let { branchId } = req.query;
   const isElevated = req.user.role === ROLES.OWNER || req.user.role === ROLES.ADMIN;

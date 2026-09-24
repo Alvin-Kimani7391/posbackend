@@ -229,10 +229,20 @@ async function getDashboard(businessId, { branchId, from, to }) {
  * userId - it is never read from the query string, so there is no way for
  * a caller to request another employee's figures through this function.
  * Contains no cost/profit data (that stays behind reports.profit).
+ *
+ * IMPORTANT: this has NO implicit "today" fallback baked in anymore at the
+ * frontend level - the frontend now ALWAYS sends an explicit from/to
+ * (computed in the browser's local timezone, same as the admin dashboard's
+ * filter bar), so a cashier never silently gets a different "today"
+ * boundary than the server would compute on its own clock/timezone. The
+ * default below only fires if a caller genuinely omits both (e.g. a raw
+ * API call), and the resolved range is always returned in the response so
+ * the UI can label exactly what period it's showing.
  */
 async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, { includeInventory = false } = {}) {
-  const range = from || to ? { from, to } : { from: new Date(new Date().setHours(0, 0, 0, 0)), to: new Date() };
-  const match = saleMatch({ businessId, branchId, cashierId: userId, from: range.from, to: range.to });
+  const resolvedFrom = from ? new Date(from) : new Date(new Date().setHours(0, 0, 0, 0));
+  const resolvedTo = to ? new Date(to) : new Date();
+  const match = saleMatch({ businessId, branchId, cashierId: userId, from: resolvedFrom, to: resolvedTo });
 
   const [totals] = await Sale.aggregate([
     { $match: match },
@@ -262,14 +272,15 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
 
   const recentSalesRaw = await Sale.find(match)
     .sort({ createdAt: -1 })
-    .limit(8)
-    .select('receiptNumber total paymentStatus createdAt customerId')
-    .populate('customerId', 'name');
+    .limit(20)
+    .select('receiptNumber total paymentStatus createdAt customerId branchId')
+    .populate('customerId', 'name')
+    .populate('branchId', 'name');
 
   const t = totals || { netSales: 0, transactionCount: 0, totalDiscount: 0 };
 
   const result = {
-    range,
+    range: { from: resolvedFrom, to: resolvedTo },
     sales: {
       netSales: fromCents(t.netSales),
       transactionCount: t.transactionCount,
@@ -285,6 +296,7 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
       paymentStatus: s.paymentStatus,
       createdAt: s.createdAt,
       customerName: s.customerId?.name || null,
+      branchName: s.branchId?.name || null,
     })),
   };
 
