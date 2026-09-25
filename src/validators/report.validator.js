@@ -11,10 +11,11 @@ const reportQuery = z.object({
 const inventoryReportQuery = z.object({ branchId: objectId.optional() });
 
 /**
+ * FSFBSFBSKFSFFSF
  * reportDetailQuery - used by the new "expand" drill-down endpoints
  * (/reports/sales/detail, /reports/payments/detail, /reports/expenses/detail).
  * Extends the normal report filters with pagination and the extra filters
- * each detail endpoint understands. Unknown/irrelevant keys are stripped by
+ * each detail endpoint understa  nds. Unknown/irrelevant keys are stripped by
  * zod's default behaviour, so the same schema is safe to reuse across all
  * three routes even though not every route uses every field.
  */
@@ -40,4 +41,4 @@ const auditLogQuery = paginationQuery.extend({
   to: z.coerce.date().optional(),
 });
 
-module.exports = { reportQuery, inventoryReportQuery, reportDetailQuery, auditLogQuery };
+module.exports = { reportQuery, inventoryReportQuery, auditLogQuery };

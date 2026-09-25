@@ -368,6 +368,7 @@ async function listSales(businessId, { branchId, cashierId, customerId, shiftId,
     Sale.find(filter)
       .populate('customerId', 'name phone')
       .populate('cashierId', 'name')
+      .populate('branchId', 'name code')
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit),

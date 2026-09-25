@@ -32,6 +32,25 @@ exports.sales = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Sales report fetched', result);
 });
 
+/** salesDetail - the individual sales behind a Sales-report KPI. Gated by
+ * reports.view (same as every other route in this router except /me), so
+ * this is admin/manager territory - the self-scoped equivalent for an
+ * ordinary cashier remains GET /sales (see sale.controller.js). */
+exports.salesDetail = catchAsync(async (req, res) => {
+  const result = await reportService.getSalesDetail(req.businessId, req.query);
+  return sendSuccess(res, 200, 'Sales detail fetched', result);
+});
+
+exports.paymentsDetail = catchAsync(async (req, res) => {
+  const result = await reportService.getPaymentsDetail(req.businessId, req.query);
+  return sendSuccess(res, 200, 'Payments detail fetched', result);
+});
+
+exports.expensesDetail = catchAsync(async (req, res) => {
+  const result = await reportService.getExpensesDetail(req.businessId, req.query);
+  return sendSuccess(res, 200, 'Expenses detail fetched', result);
+});
+
 exports.profit = catchAsync(async (req, res) => {
   const result = await reportService.getProfitReport(req.businessId, req.query);
   return sendSuccess(res, 200, 'Profit report fetched', result);

@@ -4,11 +4,11 @@ const Refund = require('../models/Refund');
 const Expense = require('../models/Expense');
 const Customer = require('../models/Customer');
 const Supplier = require('../models/Supplier');
+const Business = require('../models/Business');
 const BranchInventory = require('../models/BranchInventory');
 const { fromCents } = require('../utils/money');
 const { getLowStockAlerts } = require('./inventory.service');
 
-/** Resolves a {from, to} query into a concrete date range. Defaults to the last 30 days if neither is given. */
 function resolveDateRange(from, to) {
   const end = to ? new Date(to) : new Date();
   const start = from ? new Date(from) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -22,7 +22,15 @@ function saleMatch({ businessId, branchId, cashierId, from, to }) {
   return match;
 }
 
-/** Every money figure returned by the report functions below is converted with fromCents right before it leaves the service - the aggregation pipelines themselves stay in integer cents throughout, same as everywhere else in the app. */
+/** Sum of (unitPrice * refundedQuantity) across a sale's items, using the
+ * per-line total/quantity actually charged - not today's product price. */
+function computeRefundedAmountCents(sale) {
+  return (sale.items || []).reduce((sum, i) => {
+    if (!i.refundedQuantity) return sum;
+    const unit = i.quantity ? i.total / i.quantity : 0;
+    return sum + Math.round(unit * i.refundedQuantity);
+  }, 0);
+}
 
 async function getSalesReport(businessId, { branchId, cashierId, from, to }) {
   const match = saleMatch({ businessId, branchId, cashierId, from, to });
@@ -60,6 +68,8 @@ async function getSalesReport(businessId, { branchId, cashierId, from, to }) {
     { $limit: 10 },
   ]);
 
+  const dailyTrend = await getSalesTrend(businessId, { branchId, cashierId, from, to });
+
   const t = totals || { totalSales: 0, transactionCount: 0, totalDiscount: 0, totalTax: 0, netSales: 0 };
   return {
     totalSales: fromCents(t.totalSales),
@@ -70,14 +80,151 @@ async function getSalesReport(businessId, { branchId, cashierId, from, to }) {
     netSales: fromCents(t.netSales),
     paymentBreakdown: paymentBreakdownRaw.map((p) => ({ method: p._id, total: fromCents(p.total) })),
     topProducts: topProductsRaw.map((p) => ({ productId: p._id, name: p.name, quantity: p.quantity, revenue: fromCents(p.revenue) })),
+    dailyTrend,
   };
 }
 
 /**
- * getProfitReport - gross profit is derived STRICTLY from each sale item's
- * stored snapshots (unitPrice/costPriceSnapshot/taxAmount at the moment it
- * was sold), never from today's Product.costPrice. See spec section 40.
+ * getSalesTrend - net sales and transaction count grouped by calendar day,
+ * in the BUSINESS'S OWN timezone (business.timezone, default
+ * Africa/Nairobi) rather than UTC, so "today" on the chart matches what
+ * the shop actually experienced as today. Returns oldest-first.
  */
+async function getSalesTrend(businessId, { branchId, cashierId, from, to }) {
+  const match = saleMatch({ businessId, branchId, cashierId, from, to });
+  const business = await Business.findById(businessId).select('timezone');
+  const timezone = business?.timezone || 'Africa/Nairobi';
+
+  const rows = await Sale.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone } },
+        netSales: { $sum: '$total' },
+        transactionCount: { $sum: 1 },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+
+  return rows.map((r) => ({ date: r._id, netSales: fromCents(r.netSales), transactionCount: r.transactionCount }));
+}
+
+/**
+ * getSalesDetail - the actual sales behind a Sales-report KPI, for the
+ * "expand" drill-downs. Unlike GET /sales, this returns the broken-out
+ * figures a KPI tile needs (tax, discount, refunded amount) alongside
+ * branch/cashier/customer names, so "Tax collected -> expand" genuinely
+ * shows each sale's tax, not just a generic transaction list.
+ *
+ *   hasDiscount=true -> only sales where itemDiscount+cartDiscount > 0
+ *   hasRefund=true   -> only sales with at least one refunded line
+ */
+async function getSalesDetail(businessId, { branchId, cashierId, from, to, hasDiscount, hasRefund, page = 1, limit = 20 }) {
+  const match = saleMatch({ businessId, branchId, cashierId, from, to });
+  if (hasDiscount) match.$expr = { $gt: [{ $add: ['$itemDiscount', '$cartDiscount'] }, 0] };
+  if (hasRefund) match['items.refundedQuantity'] = { $gt: 0 };
+
+  const [docs, total] = await Promise.all([
+    Sale.find(match)
+      .populate('customerId', 'name')
+      .populate('cashierId', 'name')
+      .populate('branchId', 'name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+    Sale.countDocuments(match),
+  ]);
+
+  const items = docs.map((s) => ({
+    id: s._id,
+    receiptNumber: s.receiptNumber,
+    createdAt: s.createdAt,
+    branchName: s.branchId?.name || null,
+    cashierName: s.cashierId?.name || null,
+    customerName: s.customerId?.name || null,
+    subtotal: fromCents(s.subtotal),
+    totalDiscount: fromCents((s.itemDiscount || 0) + (s.cartDiscount || 0)),
+    tax: fromCents(s.tax),
+    total: fromCents(s.total),
+    refundedAmount: fromCents(computeRefundedAmountCents(s)),
+    paymentStatus: s.paymentStatus,
+    saleStatus: s.saleStatus,
+  }));
+
+  return { items, total, page, limit, pages: Math.ceil(total / limit) };
+}
+
+/**
+ * getPaymentsDetail - individual payment records for the Payments-report
+ * drill-downs. Shows branch, method, reference and status per payment,
+ * with the receipt/cashier of the sale it belongs to where available.
+ */
+async function getPaymentsDetail(businessId, { branchId, from, to, method, status, page = 1, limit = 20 }) {
+  const match = { businessId, createdAt: resolveDateRange(from, to) };
+  if (branchId) match.branchId = branchId;
+  if (method) match.method = method;
+  if (status) match.status = status;
+
+  const [docs, total] = await Promise.all([
+    Payment.find(match)
+      .populate('branchId', 'name')
+      .populate({ path: 'saleId', select: 'receiptNumber cashierId', populate: { path: 'cashierId', select: 'name' } })
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+    Payment.countDocuments(match),
+  ]);
+
+  const items = docs.map((p) => ({
+    id: p._id,
+    saleId: p.saleId?._id || null,
+    receiptNumber: p.saleId?.receiptNumber || null,
+    createdAt: p.createdAt,
+    branchName: p.branchId?.name || null,
+    cashierName: p.saleId?.cashierId?.name || null,
+    method: p.method,
+    status: p.status,
+    reference: p.reference || null,
+    amount: fromCents(p.amount),
+  }));
+
+  return { items, total, page, limit, pages: Math.ceil(total / limit) };
+}
+
+/**
+ * getExpensesDetail - individual expense entries for the Expenses-report
+ * drill-downs. `description` falls back gracefully if the Expense model
+ * doesn't have that exact field name in this codebase's schema.
+ */
+async function getExpensesDetail(businessId, { branchId, from, to, category, status, page = 1, limit = 20 }) {
+  const match = { businessId, expenseDate: resolveDateRange(from, to) };
+  if (branchId) match.branchId = branchId;
+  if (category) match.category = category;
+  if (status) match.status = status;
+
+  const [docs, total] = await Promise.all([
+    Expense.find(match)
+      .populate('branchId', 'name')
+      .sort({ expenseDate: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+    Expense.countDocuments(match),
+  ]);
+
+  const items = docs.map((e) => ({
+    id: e._id,
+    createdAt: e.expenseDate,
+    branchName: e.branchId?.name || null,
+    category: e.category,
+    status: e.status,
+    description: e.description || e.notes || null,
+    amount: fromCents(e.amount),
+  }));
+
+  return { items, total, page, limit, pages: Math.ceil(total / limit) };
+}
+
 async function getProfitReport(businessId, { branchId, from, to }) {
   const match = saleMatch({ businessId, branchId, from, to });
 
@@ -191,10 +338,6 @@ async function getInventoryReport(businessId, { branchId }) {
   };
 }
 
-/**
- * getDashboard - the single "how's the business doing" view. Defaults to
- * TODAY unless a date range is given.
- */
 async function getDashboard(businessId, { branchId, from, to }) {
   const range = from || to ? { from, to } : { from: new Date(new Date().setHours(0, 0, 0, 0)), to: new Date() };
 
@@ -223,22 +366,6 @@ async function getDashboard(businessId, { branchId, from, to }) {
   };
 }
 
-/**
- * getMyDashboard - a personal, self-scoped view for a single employee
- * (typically a CASHIER, who has no reports.view). cashierId is ALWAYS
- * userId - it is never read from the query string, so there is no way for
- * a caller to request another employee's figures through this function.
- * Contains no cost/profit data (that stays behind reports.profit).
- *
- * IMPORTANT: this has NO implicit "today" fallback baked in anymore at the
- * frontend level - the frontend now ALWAYS sends an explicit from/to
- * (computed in the browser's local timezone, same as the admin dashboard's
- * filter bar), so a cashier never silently gets a different "today"
- * boundary than the server would compute on its own clock/timezone. The
- * default below only fires if a caller genuinely omits both (e.g. a raw
- * API call), and the resolved range is always returned in the response so
- * the UI can label exactly what period it's showing.
- */
 async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, { includeInventory = false } = {}) {
   const resolvedFrom = from ? new Date(from) : new Date(new Date().setHours(0, 0, 0, 0));
   const resolvedTo = to ? new Date(to) : new Date();
@@ -312,6 +439,10 @@ module.exports = {
   getDashboard,
   getMyDashboard,
   getSalesReport,
+  getSalesTrend,
+  getSalesDetail,
+  getPaymentsDetail,
+  getExpensesDetail,
   getProfitReport,
   getPaymentsReport,
   getCashierReport,
