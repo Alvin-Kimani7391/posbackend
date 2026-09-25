@@ -2,7 +2,7 @@ const router = require('express').Router();
 const controller = require('../controllers/inventory.controller');
 const validate = require('../middleware/validate');
 const { authenticate, requirePermission, requireBranchAccess } = require('../middleware/auth');
-const notificationService = require('./notification.service');
+
 const {
   listInventoryQuery,
   lowStockQuery,
