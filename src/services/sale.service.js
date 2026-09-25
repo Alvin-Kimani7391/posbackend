@@ -270,7 +270,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       // Customer credit ledger - never overwrite Customer.outstandingBalance
       // directly; every change is a ledger entry plus a matching $inc.
-            if (balance > 0 && customer) {
+                 // Customer credit ledger - never overwrite Customer.outstandingBalance
+      // directly; every change is a ledger entry plus a matching $inc.
+      if (balance > 0 && customer) {
         const newBalance = customer.outstandingBalance + balance;
         await CustomerLedger.create(
           [{ businessId, customerId: customer._id, transactionType: 'SALE_CREDIT', referenceType: 'Sale', referenceId: sale._id, debit: balance, credit: 0, balance: newBalance, createdBy: cashierUser._id }],
@@ -278,19 +280,30 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         );
         await Customer.updateOne({ _id: customer._id }, { $inc: { outstandingBalance: balance } }, { session });
 
+        // Detailed credit-sale notification - fires on EVERY credit/partial
+        // sale (not only when a risk threshold is crossed), so both the
+        // owner and the cashier who granted it always know it happened.
+        // This was the missing piece: previously only notifyCreditDue
+        // existed, and it (a) only fired on a threshold crossing and
+        // (b) never reached the cashier at all.
+        notificationService.notifyCreditSaleIssued(businessId, branchId, customer, cashierUser, {
+          amount: balance, saleId: sale._id, receiptNumber, newBalance, creditLimit: customer.creditLimit, paymentStatus,
+        }).catch((err) => console.error('notifyCreditSaleIssued failed', err));
+
         // Credit-limit warning - fires only the moment the balance CROSSES
         // the warning threshold on this sale, not on every credit sale
         // after that (same crossing-check pattern as the low-stock hook in
         // inventory.service.js#applyStockChange, and the same in-transaction
         // trade-off: could theoretically fire for a sale that's later
-        // rolled back).
+        // rolled back). Now also reaches the cashier, not just management,
+        // since `actor` is passed through.
         const warningLine = Math.round(customer.creditLimit * CREDIT_WARNING_THRESHOLD);
         const wasBelowWarning = customer.outstandingBalance < warningLine;
         const nowAtOrAboveWarning = newBalance >= warningLine;
         if (customer.creditLimit > 0 && wasBelowWarning && nowAtOrAboveWarning) {
           notificationService.notifyCreditDue(businessId, customer, {
             outstandingBalance: newBalance, creditLimit: customer.creditLimit,
-            trigger: 'sale', saleId: sale._id, receiptNumber,
+            trigger: 'sale', saleId: sale._id, receiptNumber, actor: cashierUser,
           }).catch((err) => console.error('notifyCreditDue failed', err));
         }
       }

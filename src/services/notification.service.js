@@ -44,9 +44,8 @@ async function notifyManagement(businessId, { type, title, message, data, branch
 /**
  * notifyActorAndManagement - sends the management-facing notification via
  * notifyManagement as before, AND a personalized copy to the actor
- * themselves (e.g. the cashier who opened/closed the shift), so staff get
- * the same transparency owners do - "was my drawer short, over, or
- * balanced" should never be information only visible to management.
+ * themselves (e.g. the cashier who opened/closed the shift, or who issued
+ * a credit sale), so staff get the same transparency owners do.
  *
  * Skips the actor's own copy if they're already OWNER/ADMIN/MANAGER -
  * notifyManagement already reached them in that case, and a second,
@@ -218,9 +217,72 @@ async function notifyRefundCompleted(businessId, branchId, refund, sale, actor) 
   });
 }
 
-async function notifyCreditDue(businessId, customer, { outstandingBalance, creditLimit, trigger, saleId, receiptNumber }) {
+/**
+ * notifyCreditSaleIssued - fires on EVERY sale that leaves a balance on a
+ * customer's account (whether fully on credit or partially paid), not just
+ * when some risk threshold is crossed. This is the notification that was
+ * previously MISSING entirely: neither the owner nor the cashier who
+ * granted the credit ever heard about the sale itself unless it happened
+ * to cross the warning line in notifyCreditDue below - and even then only
+ * management was told, never the cashier. Sent via notifyActorAndManagement
+ * so both sides get a detailed, personalized copy every single time.
+ */
+async function notifyCreditSaleIssued(businessId, branchId, customer, cashier, { amount, saleId, receiptNumber, newBalance, creditLimit, paymentStatus }) {
+  const availableCredit = Math.max((creditLimit || 0) - newBalance, 0);
+  const modeLabel = paymentStatus === 'CREDIT' ? 'fully on credit' : 'partially on credit';
+
+  const base = {
+    type: 'CREDIT_SALE',
+    branchId,
+    sourceUserId: cashier._id,
+    entityType: 'Sale',
+    entityId: saleId,
+    data: {
+      customerId: customer._id,
+      customerName: customer.name,
+      amount,
+      newBalance,
+      creditLimit,
+      availableCredit,
+      saleId,
+      receiptNumber,
+      paymentStatus,
+    },
+  };
+
+  return notifyActorAndManagement(
+    businessId, cashier,
+    {
+      ...base,
+      title: `Credit sale - ${customer.name}`,
+      message:
+        `${cashier.name} sold ${formatKES(amount)} to ${customer.name} ${modeLabel} (receipt ${receiptNumber}). ` +
+        `${customer.name} now owes ${formatKES(newBalance)} of a ${formatKES(creditLimit)} limit (${formatKES(availableCredit)} still available).`,
+    },
+    {
+      ...base,
+      title: `You issued credit - ${customer.name}`,
+      message:
+        `You sold ${formatKES(amount)} to ${customer.name} ${modeLabel} (receipt ${receiptNumber}). ` +
+        `They now owe ${formatKES(newBalance)} of a ${formatKES(creditLimit)} limit (${formatKES(availableCredit)} still available).`,
+    }
+  );
+}
+
+/**
+ * notifyCreditDue - the RISK-level warning: fires only the moment a
+ * customer's total balance crosses the warning threshold (or when a
+ * lowered credit limit retroactively puts them over it). Distinct from
+ * notifyCreditSaleIssued above, which reports on the sale itself every
+ * time. When `actor` is supplied (the cashier whose sale caused the
+ * crossing), the cashier gets a copy too - not just management. When
+ * there's no natural actor (e.g. an owner lowering a credit limit),
+ * management-only is correct, since the actor there IS management.
+ */
+async function notifyCreditDue(businessId, customer, { outstandingBalance, creditLimit, trigger, saleId, receiptNumber, actor }) {
   const atOrOverLimit = outstandingBalance >= creditLimit;
-  return notifyManagement(businessId, {
+
+  const managementPayload = {
     type: 'CREDIT_DUE',
     title: atOrOverLimit ? `Credit limit reached - ${customer.name}` : `Nearing credit limit - ${customer.name}`,
     message: atOrOverLimit
@@ -229,7 +291,20 @@ async function notifyCreditDue(businessId, customer, { outstandingBalance, credi
     entityType: 'Customer',
     entityId: customer._id,
     data: { customerId: customer._id, outstandingBalance, creditLimit, trigger, saleId, receiptNumber },
-  });
+  };
+
+  if (actor) {
+    const actorPayload = {
+      ...managementPayload,
+      title: atOrOverLimit ? `${customer.name} hit their credit limit` : `${customer.name} is nearing their credit limit`,
+      message: atOrOverLimit
+        ? `Heads up: after your sale, ${customer.name} now owes ${formatKES(outstandingBalance)}, at or over the ${formatKES(creditLimit)} limit set for them.`
+        : `Heads up: after your sale, ${customer.name} owes ${formatKES(outstandingBalance)} of their ${formatKES(creditLimit)} limit (${Math.round((outstandingBalance / creditLimit) * 100)}%).`,
+    };
+    return notifyActorAndManagement(businessId, actor, managementPayload, actorPayload);
+  }
+
+  return notifyManagement(businessId, managementPayload);
 }
 
 /**
@@ -294,6 +369,7 @@ module.exports = {
   notifyStockLevel,
   notifyRefundRequested,
   notifyRefundCompleted,
+  notifyCreditSaleIssued,
   notifyCreditDue,
   notifyEmployeeAlert,
   listForUser,
