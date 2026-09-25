@@ -17,6 +17,17 @@ const HARD_ESCALATE_MS = 10 * 60 * 1000;
 const RECEIPT_BACKFILL_WINDOW_MS = 15 * 60 * 1000; // how close (in time) an account-transactions entry must be to count as a match
 const RECEIPT_BACKFILL_MAX_AGE_MS = 30 * 60 * 1000; // stop trying to backfill a SUCCESS txn older than this - the callback isn't coming, and PayHero's transactions list won't stay a reliable match forever
 
+// Safaricom M-Pesa receipt codes are always exactly 10 characters: one
+// letter followed by 9 alphanumeric characters, all uppercase. Anything
+// that doesn't match this is NOT a receipt code - a wrong code on a
+// receipt is worse than a missing one, so this gate is never bypassed,
+// callback or backfill alike.
+const MPESA_RECEIPT_PATTERN = /^[A-Z][A-Z0-9]{9}$/;
+
+function looksLikeMpesaReceipt(code) {
+  return typeof code === 'string' && MPESA_RECEIPT_PATTERN.test(code.trim().toUpperCase());
+}
+
 async function loadMpesaConfig(businessId) {
   const settings = await IntegrationSettings.findOne({ businessId }).select('+mpesa.credentialsBlob');
   if (!settings?.mpesa?.enabled) throw ApiError.badRequest('M-PESA is not enabled for this business', 'MPESA_NOT_ENABLED');
@@ -126,13 +137,18 @@ async function backfillReceiptNumber(txn, credentials) {
     const expectedAmount = Math.round(txn.amount / 100); // whole KES, same unit PayHero's `amount` field uses
 
     const candidates = transactions
-      .filter((t) => t.transaction_reference && Number(t.amount) === expectedAmount)
+      .filter((t) => t.transaction_reference && looksLikeMpesaReceipt(t.transaction_reference))
+      .filter((t) => Number(t.amount) === expectedAmount)
+      // Only money coming IN, never a fee/charge/withdrawal row - those
+      // never carry the customer's own M-Pesa code and must never be
+      // mistaken for it.
+      .filter((t) => ['inbound_payment', 'payment', 'collection'].includes(t.transaction_type))
       .map((t) => ({ t, deltaMs: Math.abs(new Date(t.created_at).getTime() - anchorTime) }))
       .filter(({ deltaMs }) => deltaMs < RECEIPT_BACKFILL_WINDOW_MS)
       .sort((a, b) => a.deltaMs - b.deltaMs);
 
-    if (!candidates.length) return;
-    const receiptCode = candidates[0].t.transaction_reference;
+    if (!candidates.length) return; // no confident, correctly-shaped match - leave it blank, never guess
+    const receiptCode = candidates[0].t.transaction_reference.trim().toUpperCase();
 
     // Guard against the (rare) case of two different sales for the same
     // amount within the matching window - never assign a code another
@@ -228,7 +244,9 @@ async function handleCallback(businessId, body) {
     });
   }
 
-  if (parsed.mpesaReceiptNumber) txn.mpesaReceiptNumber = parsed.mpesaReceiptNumber;
+  if (parsed.mpesaReceiptNumber && looksLikeMpesaReceipt(parsed.mpesaReceiptNumber)) {
+    txn.mpesaReceiptNumber = parsed.mpesaReceiptNumber.trim().toUpperCase();
+  }
   if (parsed.resultCode !== undefined) txn.resultCode = parsed.resultCode;
   if (parsed.resultDesc) txn.resultDesc = parsed.resultDesc;
   txn.rawCallback = body;
