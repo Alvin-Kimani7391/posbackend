@@ -1,22 +1,19 @@
-const Joi = require('joi');
+const { z } = require('zod');
+const { objectId, paginationQuery } = require('./common');
 const { EMPLOYEE_RAISABLE_TYPES } = require('../constants/notificationTypes');
 
-const idParamSchema = Joi.object({
-  id: Joi.string().hex().length(24).required(),
+const idParamSchema = z.object({ id: objectId });
+
+const listNotificationsQuery = paginationQuery.extend({
+  unreadOnly: z.coerce.boolean().optional(),
+  type: z.string().optional(),
 });
 
-const listNotificationsQuery = Joi.object({
-  unreadOnly: Joi.boolean().truthy('true').falsy('false'),
-  type: Joi.string(),
-  page: Joi.number().integer().min(1).default(1),
-  limit: Joi.number().integer().min(1).max(100).default(20),
-});
-
-const raiseAlertSchema = Joi.object({
-  branchId: Joi.string().hex().length(24),
-  type: Joi.string().valid(...EMPLOYEE_RAISABLE_TYPES).required(),
-  message: Joi.string().min(3).max(500).required(),
-  data: Joi.object().unknown(true),
+const raiseAlertSchema = z.object({
+  branchId: objectId.optional(),
+  type: z.enum(EMPLOYEE_RAISABLE_TYPES),
+  message: z.string().trim().min(3).max(500),
+  data: z.record(z.any()).optional(),
 });
 
 module.exports = { idParamSchema, listNotificationsQuery, raiseAlertSchema };
