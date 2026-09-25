@@ -43,7 +43,7 @@ async function openShift(businessId, branchId, cashierId, { registerId, openingC
   const shift = await CashShift.create({ businessId, branchId, registerId, cashierId, openingCash, status: 'OPEN' });
   await AuditLog.create({ businessId, branchId, userId: cashierId, action: 'shift.open', entityType: 'CashShift', entityId: shift._id, newValue: { openingCash } });
 
-  const [cashier] = await Promise.all([User.findById(cashierId).select('name'), shift.populate('registerId', 'name code')]);
+  const [cashier] = await Promise.all([User.findById(cashierId).select('name role'), shift.populate('registerId', 'name code')]);
   notificationService.notifyShiftOpened(businessId, branchId, shift, cashier)
     .catch((err) => console.error('notifyShiftOpened failed', err));
 
@@ -73,7 +73,7 @@ async function closeShift(businessId, userId, id, { actualCash, notes }) {
 
   await AuditLog.create({ businessId, branchId: shift.branchId, userId, action: 'shift.close', entityType: 'CashShift', entityId: shift._id, newValue: { expectedCash, actualCash, cashDifference } });
 
-  const cashier = await User.findById(userId).select('name');
+    const cashier = await User.findById(userId).select('name role');
   const saleBreakdown = cashPayments.map((p) => ({
     saleId: p.saleId?._id,
     receiptNumber: p.saleId?.receiptNumber,

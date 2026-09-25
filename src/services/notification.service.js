@@ -7,6 +7,8 @@ const ApiError = require('../utils/ApiError');
 const formatKES = (cents) =>
   `KES ${(Math.abs(cents) / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+const MANAGEMENT_ROLES = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER];
+
 /** Creates one notification for a specific user. */
 async function notifyUser(businessId, userId, { type, title, message, data, branchId, sourceUserId, entityType, entityId, severity }) {
   return Notification.create({
@@ -26,7 +28,7 @@ async function notifyManagement(businessId, { type, title, message, data, branch
   const recipients = await User.find({
     businessId,
     status: 'active',
-    role: { $in: [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER] },
+    role: { $in: MANAGEMENT_ROLES },
   }).select('_id');
 
   if (!recipients.length) return [];
@@ -39,33 +41,65 @@ async function notifyManagement(businessId, { type, title, message, data, branch
   return Notification.insertMany(recipients.map((u) => ({ ...base, userId: u._id })));
 }
 
+/**
+ * notifyActorAndManagement - sends the management-facing notification via
+ * notifyManagement as before, AND a personalized copy to the actor
+ * themselves (e.g. the cashier who opened/closed the shift), so staff get
+ * the same transparency owners do - "was my drawer short, over, or
+ * balanced" should never be information only visible to management.
+ *
+ * Skips the actor's own copy if they're already OWNER/ADMIN/MANAGER -
+ * notifyManagement already reached them in that case, and a second,
+ * differently-worded notification for the same event would just be noise.
+ */
+async function notifyActorAndManagement(businessId, actor, managementPayload, actorPayload) {
+  const results = await notifyManagement(businessId, managementPayload);
+  if (!MANAGEMENT_ROLES.includes(actor.role)) {
+    const own = await notifyUser(businessId, actor._id, actorPayload);
+    return [...results, own];
+  }
+  return results;
+}
+
 /* -------------------------------------------------------------------- */
 /* Event-specific builders - one per thing that happens in the system.  */
 /* Title/message/data formatting for a given event lives in exactly one */
-/* place instead of beingdtytyddjjjddddhd duplicated at every call site.                */
+/* place instead of being duplicated at every call site.                */
 /* -------------------------------------------------------------------- */
 
 async function notifyShiftOpened(businessId, branchId, shift, cashier) {
-  return notifyManagement(businessId, {
+  const base = {
     type: 'SHIFT_OPENED',
-    title: `Shift opened - ${cashier.name}`,
-    message: `${cashier.name} opened register ${shift.registerId?.code || ''} with a float of ${formatKES(shift.openingCash)}.`,
     branchId,
     sourceUserId: cashier._id,
     entityType: 'CashShift',
     entityId: shift._id,
     data: { registerId: shift.registerId?._id || shift.registerId, openingCash: shift.openingCash, openedAt: shift.openedAt },
-  });
+  };
+
+  return notifyActorAndManagement(
+    businessId, cashier,
+    {
+      ...base,
+      title: `Shift opened - ${cashier.name}`,
+      message: `${cashier.name} opened register ${shift.registerId?.code || ''} with a float of ${formatKES(shift.openingCash)}.`,
+    },
+    {
+      ...base,
+      title: 'Shift opened',
+      message: `You opened register ${shift.registerId?.code || ''} with a float of ${formatKES(shift.openingCash)}. Every cash sale you ring up adds to what's expected in the drawer when you close.`,
+    }
+  );
 }
 
 /**
- * notifyShiftClosed - short / over / balanced, with the full list of cash
- * sales that made up the expected total, so a shortage can be traced back
- * to specific receipts rather than just a single delta figure. Note: a
- * discrepancy is a property of the WHOLE drawer, not one sale - there's no
- * way to say "sale X caused the shortage" - so what we give the owner
- * instead is every cash sale in the shift to cross-check against what was
- * physically counted.
+ * notifyShiftClosed - short / over / balanced, sent BOTH to management and
+ * to the cashier themselves, with the identical cash-sale breakdown in
+ * `data.sales` either way - the cashier gets exactly the same receipt-level
+ * detail the owner does, not a watered-down summary. Note: a discrepancy is
+ * a property of the WHOLE drawer, not one sale - there's no way to say
+ * "sale X caused the shortage" - so what's given instead is every cash sale
+ * in the shift, to cross-check against what was physically counted.
  */
 async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales) {
   const diff = shift.cashDifference;
@@ -74,34 +108,47 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
   if (diff < 0) { type = 'CASH_SHORTAGE'; headline = `short by ${formatKES(diff)}`; }
   else if (diff > 0) { type = 'CASH_OVER'; headline = `over by ${formatKES(diff)}`; }
 
-  return notifyManagement(businessId, {
-    type,
-    title: `Shift closed - ${cashier.name} (${headline})`,
-    message:
-      `${cashier.name} closed register${shift.registerId?.code ? ` ${shift.registerId.code}` : ''}. ` +
-      `Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)}, ` +
-      `counted ${formatKES(shift.actualCash)} - drawer is ${headline}.`,
-    branchId,
-    sourceUserId: cashier._id,
-    entityType: 'CashShift',
-    entityId: shift._id,
-    data: {
-      openingCash: shift.openingCash,
-      expectedCash: shift.expectedCash,
-      actualCash: shift.actualCash,
-      cashDifference: diff,
-      cashSaleCount: cashSales.length,
-      sales: cashSales.map((p) => ({
-        saleId: p.saleId,
-        receiptNumber: p.receiptNumber,
-        amount: p.amount,
-        amountTendered: p.amountTendered,
-        changeGiven: p.changeGiven,
-        at: p.createdAt,
-      })),
-      notes: shift.notes,
+  const data = {
+    openingCash: shift.openingCash,
+    expectedCash: shift.expectedCash,
+    actualCash: shift.actualCash,
+    cashDifference: diff,
+    cashSaleCount: cashSales.length,
+    sales: cashSales.map((p) => ({
+      saleId: p.saleId,
+      receiptNumber: p.receiptNumber,
+      amount: p.amount,
+      amountTendered: p.amountTendered,
+      changeGiven: p.changeGiven,
+      at: p.createdAt,
+    })),
+    notes: shift.notes,
+  };
+
+  const base = { type, branchId, sourceUserId: cashier._id, entityType: 'CashShift', entityId: shift._id, data };
+
+  let ownExtra = ' Nicely balanced.';
+  if (diff < 0) ownExtra = " Check the cash sales below against what you counted, and flag your manager if you can't account for the difference.";
+  else if (diff > 0) ownExtra = ' Check the cash sales below, and hand the extra over to your manager.';
+
+  return notifyActorAndManagement(
+    businessId, cashier,
+    {
+      ...base,
+      title: `Shift closed - ${cashier.name} (${headline})`,
+      message:
+        `${cashier.name} closed register${shift.registerId?.code ? ` ${shift.registerId.code}` : ''}. ` +
+        `Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)}, ` +
+        `counted ${formatKES(shift.actualCash)} - drawer is ${headline}.`,
     },
-  });
+    {
+      ...base,
+      title: `Shift closed (${headline})`,
+      message:
+        `Your shift is closed. Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)} ` +
+        `from cash sales, you counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${ownExtra}`,
+    }
+  );
 }
 
 async function notifySaleCancelled(businessId, branchId, sale, cashier) {
@@ -145,8 +192,6 @@ async function notifyStockLevel(businessId, branchId, { productId, variantId, pr
   });
 }
 
-
-
 async function notifyRefundRequested(businessId, branchId, refund, sale, requester) {
   return notifyManagement(businessId, {
     type: 'REFUND_REQUEST',
@@ -173,8 +218,6 @@ async function notifyRefundCompleted(businessId, branchId, refund, sale, actor) 
   });
 }
 
-
-
 async function notifyCreditDue(businessId, customer, { outstandingBalance, creditLimit, trigger, saleId, receiptNumber }) {
   const atOrOverLimit = outstandingBalance >= creditLimit;
   return notifyManagement(businessId, {
@@ -188,6 +231,7 @@ async function notifyCreditDue(businessId, customer, { outstandingBalance, credi
     data: { customerId: customer._id, outstandingBalance, creditLimit, trigger, saleId, receiptNumber },
   });
 }
+
 /**
  * notifyEmployeeAlert - "employee chooses to notify the owner" path. Any
  * staff member can raise one of EMPLOYEE_RAISABLE_TYPES with a free-text
@@ -242,14 +286,15 @@ async function remove(businessId, userId, id) {
 module.exports = {
   notifyUser,
   notifyManagement,
+  notifyActorAndManagement,
   notifyShiftOpened,
   notifyShiftClosed,
   notifySaleCancelled,
   notifyTransferRequested,
   notifyStockLevel,
-  notifyRefundRequested,   // new
-  notifyRefundCompleted,   // new
-  notifyCreditDue,         // new
+  notifyRefundRequested,
+  notifyRefundCompleted,
+  notifyCreditDue,
   notifyEmployeeAlert,
   listForUser,
   markRead,

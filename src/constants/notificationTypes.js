@@ -13,6 +13,7 @@ const TYPE_SEVERITY = {
   OUT_OF_STOCK: SEVERITY.CRITICAL,
   PAYMENT_FAILED: SEVERITY.CRITICAL,
   REFUND_REQUEST: SEVERITY.WARNING,
+  REFUND_COMPLETED: SEVERITY.INFO,
   CASH_SHORTAGE: SEVERITY.CRITICAL,
   CASH_OVER: SEVERITY.WARNING,
   SHIFT_OPENED: SEVERITY.INFO,
@@ -23,23 +24,18 @@ const TYPE_SEVERITY = {
   CREDIT_DUE: SEVERITY.WARNING,
   SYSTEM_ALERT: SEVERITY.WARNING,
   EMPLOYEE_ALERT: SEVERITY.WARNING,
-
-  // ...existing entries...
-  REFUND_REQUEST: SEVERITY.WARNING,
-  REFUND_COMPLETED: SEVERITY.INFO,
 };
 
 // Subset a staff member (without notifications.manage) can raise manually
 // against their own business. Deliberately excludes SHIFT_*, ETIMS_FAILED,
-// TRANSFER_REQUESTED and SALE_CANCELLED - those are always system-generated,
-// never hand-typed, so a cashier can't fabricate "the transfer auto-fired".
+// TRANSFER_REQUESTED, SALE_CANCELLED and REFUND_COMPLETED - those are
+// always system-generated, never hand-typed, so a cashier can't fabricate
+// "the transfer auto-fired" or "the refund was already completed".
 const EMPLOYEE_RAISABLE_TYPES = [
   'LOW_STOCK', 'OUT_OF_STOCK', 'PAYMENT_FAILED', 'REFUND_REQUEST',
   'CASH_SHORTAGE', 'CREDIT_DUE', 'SYSTEM_ALERT',
 ];
 
-
 const CREDIT_WARNING_THRESHOLD = 0.8; // 80% of creditLimit - fires a CREDIT_DUE warning
-
 
 module.exports = { NOTIFICATION_TYPES, SEVERITY, TYPE_SEVERITY, EMPLOYEE_RAISABLE_TYPES, CREDIT_WARNING_THRESHOLD };
