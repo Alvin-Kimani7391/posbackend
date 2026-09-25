@@ -2,7 +2,7 @@ const NOTIFICATION_TYPES = [
   'LOW_STOCK', 'OUT_OF_STOCK', 'PAYMENT_FAILED', 'REFUND_REQUEST', 'REFUND_COMPLETED',
   'CASH_SHORTAGE', 'CASH_OVER', 'SHIFT_OPENED', 'SHIFT_CLOSED',
   'SALE_CANCELLED', 'TRANSFER_REQUESTED', 'ETIMS_FAILED', 'CREDIT_DUE', 'CREDIT_SALE',
-  'SYSTEM_ALERT', 'EMPLOYEE_ALERT',
+  'CUSTOMER_PAYMENT', 'SYSTEM_ALERT', 'EMPLOYEE_ALERT',
 ];
 
 const SEVERITY = { INFO: 'info', WARNING: 'warning', CRITICAL: 'critical' };
@@ -22,20 +22,20 @@ const TYPE_SEVERITY = {
   TRANSFER_REQUESTED: SEVERITY.INFO,
   ETIMS_FAILED: SEVERITY.CRITICAL,
   CREDIT_DUE: SEVERITY.WARNING,
-  // A credit/partial sale being issued is routine business activity, not a
-  // risk warning on its own (that's what CREDIT_DUE is for) - so it gets
-  // INFO severity, same tier as SHIFT_OPENED/CLOSED and REFUND_COMPLETED.
   CREDIT_SALE: SEVERITY.INFO,
+  // Money coming IN against a debt is good news, not a warning - same tier
+  // as REFUND_COMPLETED/SHIFT_CLOSED.
+  CUSTOMER_PAYMENT: SEVERITY.INFO,
   SYSTEM_ALERT: SEVERITY.WARNING,
   EMPLOYEE_ALERT: SEVERITY.WARNING,
 };
 
 // Subset a staff member (without notifications.manage) can raise manually
 // against their own business. Deliberately excludes SHIFT_*, ETIMS_FAILED,
-// TRANSFER_REQUESTED, SALE_CANCELLED, REFUND_COMPLETED, and CREDIT_SALE -
-// those are always system-generated, never hand-typed, so a cashier can't
-// fabricate "the transfer auto-fired", "the refund was already completed",
-// or "I issued a credit sale" as a manual alert instead of an actual sale.
+// TRANSFER_REQUESTED, SALE_CANCELLED, REFUND_COMPLETED, CREDIT_SALE, and
+// CUSTOMER_PAYMENT - those are always system-generated, never hand-typed,
+// so a cashier can't fabricate "a payment was already recorded" as a
+// manual alert instead of an actual recorded payment.
 const EMPLOYEE_RAISABLE_TYPES = [
   'LOW_STOCK', 'OUT_OF_STOCK', 'PAYMENT_FAILED', 'REFUND_REQUEST',
   'CASH_SHORTAGE', 'CREDIT_DUE', 'SYSTEM_ALERT',

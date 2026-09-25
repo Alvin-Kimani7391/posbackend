@@ -307,6 +307,52 @@ async function notifyCreditDue(businessId, customer, { outstandingBalance, credi
   return notifyManagement(businessId, managementPayload);
 }
 
+
+
+
+/**
+ * notifyCustomerPaymentReceived - fires every time someone records a
+ * payment against a customer's outstanding credit balance (customer.service.js
+ * recordCustomerPayment). This was previously MISSING entirely - unlike a
+ * credit sale being issued, paying a balance down never told anyone it
+ * happened. Sent via notifyActorAndManagement so both the cashier/owner who
+ * recorded the payment and the rest of management get a detailed copy.
+ */
+async function notifyCustomerPaymentReceived(businessId, branchId, customer, actor, { amount, method, reference, newBalance }) {
+  const base = {
+    type: 'CUSTOMER_PAYMENT',
+    branchId,
+    sourceUserId: actor._id,
+    entityType: 'Customer',
+    entityId: customer._id,
+    data: {
+      customerId: customer._id,
+      customerName: customer.name,
+      amount,
+      method,
+      reference,
+      newBalance,
+    },
+  };
+
+  const balanceLine = newBalance > 0
+    ? `${customer.name} still owes ${formatKES(newBalance)}.`
+    : `${customer.name}'s balance is now fully cleared.`;
+
+  return notifyActorAndManagement(
+    businessId, actor,
+    {
+      ...base,
+      title: `Payment received - ${customer.name}`,
+      message: `${actor.name} recorded a ${formatKES(amount)} ${method} payment from ${customer.name}${reference ? ` (ref: ${reference})` : ''}. ${balanceLine}`,
+    },
+    {
+      ...base,
+      title: `You recorded a payment - ${customer.name}`,
+      message: `You recorded a ${formatKES(amount)} ${method} payment from ${customer.name}${reference ? ` (ref: ${reference})` : ''}. ${balanceLine}`,
+    }
+  );
+}
 /**
  * notifyEmployeeAlert - "employee chooses to notify the owner" path. Any
  * staff member can raise one of EMPLOYEE_RAISABLE_TYPES with a free-text
@@ -371,6 +417,7 @@ module.exports = {
   notifyRefundCompleted,
   notifyCreditSaleIssued,
   notifyCreditDue,
+  notifyCustomerPaymentReceived,
   notifyEmployeeAlert,
   listForUser,
   markRead,

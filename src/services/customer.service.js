@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
 const Payment = require('../models/Payment');
+const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const notificationService = require('./notification.service');
@@ -85,11 +86,17 @@ async function getLedger(businessId, customerId, { page, limit }) {
  * balance outside of any specific sale (e.g. paying off last week's total).
  * Atomic: Payment record + CustomerLedger entry + Customer.outstandingBalance
  * update all succeed or fail together.
+ *
+ * Notification fires AFTER the transaction commits (same pattern as
+ * refund.service.js#completeRefund and sale.service.js#cancelSale) - a
+ * User lookup is needed here because this function only receives userId,
+ * not a full user object with .name/.role the way sale.service.js's
+ * cashierUser already has.
  */
 async function recordCustomerPayment(businessId, branchId, userId, customerId, { method, amount, reference, shiftId }) {
   const session = await mongoose.startSession();
+  let result;
   try {
-    let result;
     await session.withTransaction(async () => {
       const customer = await Customer.findOne({ _id: customerId, businessId }).session(session);
       if (!customer) throw ApiError.notFound('Customer not found');
@@ -114,12 +121,23 @@ async function recordCustomerPayment(businessId, branchId, userId, customerId, {
         { session }
       );
 
-      result = { payment, newBalance };
+      result = { payment, newBalance, customer };
     });
-    return result;
   } finally {
     session.endSession();
   }
+
+  // Fire-and-forget notification, same non-blocking pattern used
+  // throughout sale.service.js / refund.service.js - a slow/failed
+  // notification should never fail an already-committed payment.
+  const actor = await User.findById(userId).select('name role');
+  if (actor) {
+    notificationService.notifyCustomerPaymentReceived(businessId, branchId, result.customer, actor, {
+      amount: result.payment.amount, method: result.payment.method, reference: result.payment.reference, newBalance: result.newBalance,
+    }).catch((err) => console.error('notifyCustomerPaymentReceived failed', err));
+  }
+
+  return { payment: result.payment, newBalance: result.newBalance };
 }
 
 module.exports = { listCustomers, getCustomer, createCustomer, updateCustomer, setCreditLimit, getLedger, recordCustomerPayment };
