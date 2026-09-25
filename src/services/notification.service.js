@@ -42,7 +42,7 @@ async function notifyManagement(businessId, { type, title, message, data, branch
 /* -------------------------------------------------------------------- */
 /* Event-specific builders - one per thing that happens in the system.  */
 /* Title/message/data formatting for a given event lives in exactly one */
-/* place instead of being duplicated at every call site.                */
+/* place instead of beingdtytyddjjjddddhd duplicated at every call site.                */
 /* -------------------------------------------------------------------- */
 
 async function notifyShiftOpened(businessId, branchId, shift, cashier) {
