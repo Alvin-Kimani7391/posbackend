@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Sale = require('../models/Sale');
 const Payment = require('../models/Payment');
 const Refund = require('../models/Refund');
@@ -9,6 +10,26 @@ const BranchInventory = require('../models/BranchInventory');
 const { fromCents } = require('../utils/money');
 const { getLowStockAlerts } = require('./inventory.service');
 
+/**
+ * toObjectId - Mongoose casts string ids to ObjectId automatically for
+ * Model.find()/.distinct()/.findOne() etc, but NOT for Model.aggregate(),
+ * which sends the $match stage to MongoDB as-is. If a caller's id (e.g.
+ * req.user._id from a JWT payload) is a plain string, an aggregate $match
+ * on an ObjectId-typed field silently matches nothing - no error, just an
+ * empty result. Every id that reaches an aggregate() pipeline in this file
+ * is wrapped in this first so string vs ObjectId can never cause a silent
+ * zero (this was the root cause of "my sales show 0" for cashiers).
+ */
+function toObjectId(id) {
+  if (!id) return id;
+  if (id instanceof mongoose.Types.ObjectId) return id;
+  try {
+    return new mongoose.Types.ObjectId(String(id));
+  } catch {
+    return id; // let it fail naturally downstream rather than throw here
+  }
+}
+
 function resolveDateRange(from, to) {
   const end = to ? new Date(to) : new Date();
   const start = from ? new Date(from) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -16,9 +37,9 @@ function resolveDateRange(from, to) {
 }
 
 function saleMatch({ businessId, branchId, cashierId, from, to }) {
-  const match = { businessId, saleStatus: 'COMPLETED', createdAt: resolveDateRange(from, to) };
-  if (branchId) match.branchId = branchId;
-  if (cashierId) match.cashierId = cashierId;
+  const match = { businessId: toObjectId(businessId), saleStatus: 'COMPLETED', createdAt: resolveDateRange(from, to) };
+  if (branchId) match.branchId = toObjectId(branchId);
+  if (cashierId) match.cashierId = toObjectId(cashierId);
   return match;
 }
 
@@ -49,14 +70,16 @@ async function getSalesReport(businessId, { branchId, cashierId, from, to }) {
     },
   ]);
 
+  // .find()/.distinct() cast query values through the schema automatically,
+  // so `match` (already-cast ObjectIds from saleMatch) works here regardless.
   const saleIds = await Sale.find(match).distinct('_id');
   const paymentBreakdownRaw = await Payment.aggregate([
-    { $match: { businessId, saleId: { $in: saleIds }, status: 'SUCCESS' } },
+    { $match: { businessId: toObjectId(businessId), saleId: { $in: saleIds }, status: 'SUCCESS' } },
     { $group: { _id: '$method', total: { $sum: '$amount' } } },
   ]);
 
   const refundAgg = await Refund.aggregate([
-    { $match: { businessId, saleId: { $in: saleIds }, status: 'COMPLETED' } },
+    { $match: { businessId: toObjectId(businessId), saleId: { $in: saleIds }, status: 'COMPLETED' } },
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
 
@@ -161,8 +184,8 @@ async function getSalesDetail(businessId, { branchId, cashierId, from, to, hasDi
  * with the receipt/cashier of the sale it belongs to where available.
  */
 async function getPaymentsDetail(businessId, { branchId, from, to, method, status, page = 1, limit = 20 }) {
-  const match = { businessId, createdAt: resolveDateRange(from, to) };
-  if (branchId) match.branchId = branchId;
+  const match = { businessId: toObjectId(businessId), createdAt: resolveDateRange(from, to) };
+  if (branchId) match.branchId = toObjectId(branchId);
   if (method) match.method = method;
   if (status) match.status = status;
 
@@ -198,8 +221,8 @@ async function getPaymentsDetail(businessId, { branchId, from, to, method, statu
  * doesn't have that exact field name in this codebase's schema.
  */
 async function getExpensesDetail(businessId, { branchId, from, to, category, status, page = 1, limit = 20 }) {
-  const match = { businessId, expenseDate: resolveDateRange(from, to) };
-  if (branchId) match.branchId = branchId;
+  const match = { businessId: toObjectId(businessId), expenseDate: resolveDateRange(from, to) };
+  if (branchId) match.branchId = toObjectId(branchId);
   if (category) match.category = category;
   if (status) match.status = status;
 
@@ -241,7 +264,7 @@ async function getProfitReport(businessId, { branchId, from, to }) {
   ]);
 
   const expenseAgg = await Expense.aggregate([
-    { $match: { businessId, ...(branchId ? { branchId } : {}), status: 'APPROVED', expenseDate: resolveDateRange(from, to) } },
+    { $match: { businessId: toObjectId(businessId), ...(branchId ? { branchId: toObjectId(branchId) } : {}), status: 'APPROVED', expenseDate: resolveDateRange(from, to) } },
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
 
@@ -261,8 +284,8 @@ async function getProfitReport(businessId, { branchId, from, to }) {
 }
 
 async function getPaymentsReport(businessId, { branchId, from, to }) {
-  const match = { businessId, createdAt: resolveDateRange(from, to) };
-  if (branchId) match.branchId = branchId;
+  const match = { businessId: toObjectId(businessId), createdAt: resolveDateRange(from, to) };
+  if (branchId) match.branchId = toObjectId(branchId);
 
   const rows = await Payment.aggregate([
     { $match: match },
@@ -291,8 +314,8 @@ async function getCashierReport(businessId, { branchId, from, to }) {
 }
 
 async function getExpenseReport(businessId, { branchId, from, to }) {
-  const match = { businessId, expenseDate: resolveDateRange(from, to) };
-  if (branchId) match.branchId = branchId;
+  const match = { businessId: toObjectId(businessId), expenseDate: resolveDateRange(from, to) };
+  if (branchId) match.branchId = toObjectId(branchId);
 
   const rows = await Expense.aggregate([
     { $match: match },
@@ -369,6 +392,11 @@ async function getDashboard(businessId, { branchId, from, to }) {
 async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, { includeInventory = false } = {}) {
   const resolvedFrom = from ? new Date(from) : new Date(new Date().setHours(0, 0, 0, 0));
   const resolvedTo = to ? new Date(to) : new Date();
+  // This is the line that used to break "My sales" for cashiers: userId
+  // (req.user._id) flows straight into an aggregate() $match below via
+  // saleMatch(), so it MUST be cast to ObjectId here - saleMatch now does
+  // that internally, but resolvedFrom/resolvedTo/businessId/userId all
+  // pass through it consistently as of this fix.
   const match = saleMatch({ businessId, branchId, cashierId: userId, from: resolvedFrom, to: resolvedTo });
 
   const [totals] = await Sale.aggregate([
@@ -383,9 +411,13 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
     },
   ]);
 
+  // .find()/.distinct() cast automatically, so this line was never the
+  // problem - it's why "recent sales" and thus the correct saleIds (used
+  // below for the payment breakdown) always worked even while the totals
+  // above read zero.
   const saleIds = await Sale.find(match).distinct('_id');
   const paymentBreakdownRaw = await Payment.aggregate([
-    { $match: { businessId, saleId: { $in: saleIds }, status: 'SUCCESS' } },
+    { $match: { businessId: toObjectId(businessId), saleId: { $in: saleIds }, status: 'SUCCESS' } },
     { $group: { _id: '$method', total: { $sum: '$amount' } } },
   ]);
 
