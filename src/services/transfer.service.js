@@ -5,6 +5,8 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange } = require('./inventory.service');
+const User = require('../models/User');
+const notificationService = require('./notification.service');
 
 async function listTransfers(businessId, { page, limit, branchId, status }) {
   const filter = { businessId };
@@ -58,6 +60,11 @@ async function requestTransfer(businessId, userId, { fromBranchId, toBranchId, i
   });
 
   await AuditLog.create({ businessId, userId, action: 'transfer.request', entityType: 'StockTransfer', entityId: transfer._id, newValue: { transferNumber, itemCount: items.length } });
+
+  const requester = await User.findById(userId).select('name');
+  notificationService.notifyTransferRequested(businessId, transfer, requester)
+    .catch((err) => console.error('notifyTransferRequested failed', err));
+
   return transfer;
 }
 

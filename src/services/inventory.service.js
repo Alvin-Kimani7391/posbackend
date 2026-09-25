@@ -7,6 +7,7 @@ const ProductVariant = require('../models/ProductVariant');
 const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
+const notificationService = require('./notification.service');
 
 /**
  * applyStockChange - THE single place that ever mutates BranchInventory.quantity.
@@ -64,14 +65,34 @@ async function applyStockChange({
 
   const previousStock = updated.quantity - quantityDelta;
 
-  const [movement] = await InventoryMovement.create(
-    [{
-      businessId, branchId, productId, variantId,
-      type, quantity: quantityDelta, previousStock, newStock: updated.quantity,
-      referenceType, referenceId, reason, performedBy,
-    }],
+    const [movement] = await InventoryMovement.create(
+    [{ businessId, branchId, productId, variantId, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, performedBy }],
     { session }
   );
+
+  // Low/out-of-stock alert - fires only the moment stock CROSSES the
+  // threshold going down, not on every sale while it stays low. Fired
+  // from inside the caller's transaction rather than after commit (unlike
+  // the sale/transfer hooks above), since applyStockChange is the one
+  // choke point every stock mutation goes through - the trade-off is that
+  // a notification could theoretically fire for a change that's later
+  // rolled back, which is an acceptable risk for a non-critical alert.
+  if (quantityDelta < 0) {
+    const threshold = updated.lowStockThreshold ?? 5;
+    const wasPositive = previousStock > 0;
+    const wasAboveThreshold = previousStock > threshold;
+    const nowOut = updated.quantity <= 0;
+    const nowAtOrBelowThreshold = updated.quantity <= threshold;
+
+    if ((nowOut && wasPositive) || (!nowOut && nowAtOrBelowThreshold && wasAboveThreshold)) {
+      Product.findById(productId).select('name').then((product) => {
+        if (!product) return;
+        return notificationService.notifyStockLevel(businessId, branchId, {
+          productId, variantId, productName: product.name, quantity: updated.quantity, threshold,
+        });
+      }).catch((err) => console.error('notifyStockLevel failed', err));
+    }
+  }
 
   return { branchInventory: updated, movement };
 }

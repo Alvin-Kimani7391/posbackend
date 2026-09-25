@@ -10,6 +10,8 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange } = require('./inventory.service');
+const User = require('../models/User');
+const notificationService = require('./notification.service');
 
 /**
  * requestRefund - validates the return quantities against what's actually
@@ -57,10 +59,13 @@ async function requestRefund(businessId, branchId, user, { saleId, items, reason
 
   await AuditLog.create({ businessId, branchId, userId: user._id, action: 'refund.request', entityType: 'Refund', entityId: refund._id, newValue: { refundNumber, amount: totalAmount, needsApproval } });
 
-  if (!needsApproval) {
-    return completeRefund(businessId, user._id, refund._id);
+  if (needsApproval) {
+    notificationService.notifyRefundRequested(businessId, branchId, refund, sale, user)
+      .catch((err) => console.error('notifyRefundRequested failed', err));
+    return refund;
   }
-  return refund;
+
+  return completeRefund(businessId, user._id, refund._id);
 }
 
 function userCanApprove(user) {
@@ -104,14 +109,16 @@ async function rejectRefund(businessId, userId, id, rejectionReason) {
  */
 async function completeRefund(businessId, userId, refundId) {
   const session = await mongoose.startSession();
+  let result;
   try {
-    let result;
     await session.withTransaction(async () => {
       const refund = await Refund.findOne({ _id: refundId, businessId }).session(session);
       if (!refund) throw ApiError.notFound('Refund not found');
 
       const sale = await Sale.findOne({ _id: refund.saleId, businessId }).session(session);
       if (!sale) throw ApiError.notFound('Original sale not found');
+
+
 
       for (const rItem of refund.items) {
         const saleItem = sale.items.find((si) => si.productId.toString() === rItem.productId.toString() && (si.variantId ? si.variantId.toString() : null) === (rItem.variantId ? rItem.variantId.toString() : null));
@@ -164,12 +171,18 @@ async function completeRefund(businessId, userId, refundId) {
         { session }
       );
 
-      result = { refund, payment };
+      result = { refund, payment, sale };
     });
-    return result;
   } finally {
     session.endSession();
   }
+
+  const actor = await User.findById(userId).select('name');
+  notificationService.notifyRefundCompleted(businessId, result.refund.branchId, result.refund, result.sale, actor)
+    .catch((err) => console.error('notifyRefundCompleted failed', err));
+
+  return { refund: result.refund, payment: result.payment };
+
 }
 
 async function listRefunds(businessId, { branchId, saleId, status, page, limit }) {

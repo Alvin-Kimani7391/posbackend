@@ -4,6 +4,7 @@ const CustomerLedger = require('../models/CustomerLedger');
 const Payment = require('../models/Payment');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
+const notificationService = require('./notification.service');
 
 async function listCustomers(businessId, { page, limit, search }) {
   const filter = { businessId };
@@ -55,6 +56,16 @@ async function setCreditLimit(businessId, userId, id, creditLimit) {
   await customer.save();
 
   await AuditLog.create({ businessId, userId, action: 'customer.credit_limit_change', entityType: 'Customer', entityId: customer._id, oldValue: { creditLimit: oldLimit }, newValue: { creditLimit } });
+
+  // A lowered limit can retroactively put an existing balance at/over the
+  // new ceiling - worth flagging immediately rather than waiting for the
+  // next credit sale to notice.
+  if (creditLimit > 0 && customer.outstandingBalance >= creditLimit) {
+    notificationService.notifyCreditDue(businessId, customer, {
+      outstandingBalance: customer.outstandingBalance, creditLimit, trigger: 'credit_limit_lowered',
+    }).catch((err) => console.error('notifyCreditDue failed', err));
+  }
+
   return customer;
 }
 

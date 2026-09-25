@@ -5,9 +5,12 @@ const ProductVariant = require('../models/ProductVariant');
 const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
 const Payment = require('../models/Payment');
+const User = require('../models/User');
 
 const mpesaService = require('./mpesa.service');
 const etimsService = require('./etims.service');
+const notificationService = require('./notification.service');
+const { CREDIT_WARNING_THRESHOLD } = require('../constants/notificationTypes');
 
 const Receipt = require('../models/Receipt');
 const Business = require('../models/Business');
@@ -267,13 +270,29 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       // Customer credit ledger - never overwrite Customer.outstandingBalance
       // directly; every change is a ledger entry plus a matching $inc.
-      if (balance > 0 && customer) {
+            if (balance > 0 && customer) {
         const newBalance = customer.outstandingBalance + balance;
         await CustomerLedger.create(
           [{ businessId, customerId: customer._id, transactionType: 'SALE_CREDIT', referenceType: 'Sale', referenceId: sale._id, debit: balance, credit: 0, balance: newBalance, createdBy: cashierUser._id }],
           { session }
         );
         await Customer.updateOne({ _id: customer._id }, { $inc: { outstandingBalance: balance } }, { session });
+
+        // Credit-limit warning - fires only the moment the balance CROSSES
+        // the warning threshold on this sale, not on every credit sale
+        // after that (same crossing-check pattern as the low-stock hook in
+        // inventory.service.js#applyStockChange, and the same in-transaction
+        // trade-off: could theoretically fire for a sale that's later
+        // rolled back).
+        const warningLine = Math.round(customer.creditLimit * CREDIT_WARNING_THRESHOLD);
+        const wasBelowWarning = customer.outstandingBalance < warningLine;
+        const nowAtOrAboveWarning = newBalance >= warningLine;
+        if (customer.creditLimit > 0 && wasBelowWarning && nowAtOrAboveWarning) {
+          notificationService.notifyCreditDue(businessId, customer, {
+            outstandingBalance: newBalance, creditLimit: customer.creditLimit,
+            trigger: 'sale', saleId: sale._id, receiptNumber,
+          }).catch((err) => console.error('notifyCreditDue failed', err));
+        }
       }
 
       // Immutable receipt snapshot - a printer/PDF/SMS renderer needs only
@@ -389,8 +408,8 @@ async function listSales(businessId, { branchId, cashierId, customerId, shiftId,
  */
 async function cancelSale(businessId, userId, id, reason) {
   const session = await mongoose.startSession();
+  let result;
   try {
-    let result;
     await session.withTransaction(async () => {
       const sale = await Sale.findOne({ _id: id, businessId }).session(session);
       if (!sale) throw ApiError.notFound('Sale not found');
@@ -448,6 +467,13 @@ async function cancelSale(businessId, userId, id, reason) {
   } finally {
     session.endSession();
   }
+
+   const cashier = await User.findById(userId).select('name');
+  notificationService.notifySaleCancelled(businessId, result.branchId, result, cashier)
+    .catch((err) => console.error('notifySaleCancelled failed', err));
+
+  return result;
+
 }
 
 module.exports = { createSale, getSale, listSales, cancelSale };
