@@ -1,6 +1,7 @@
 const CashShift = require('../models/CashShift');
 const CashRegister = require('../models/CashRegister');
 const Payment = require('../models/Payment');
+const User = require('../models/User');              // <-- add this
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const notificationService = require('./notification.service');
