@@ -112,4 +112,20 @@ function parseCallback(body) {
   };
 }
 
-module.exports = { stkPush, getTransactionStatus, parseCallback, normalizePhone };
+
+/** Best-effort receipt backfill source - GET /transaction-status never returns a receipt code, only the callback and this endpoint do. Used when the callback hasn't (yet) arrived. */
+async function getAccountTransactions({ credentials, page = 1, per = 20 }) {
+  try {
+    const res = await axios.get(`${BASE_URL}/transactions`, {
+      params: { page, per },
+      headers: authHeader(credentials),
+      timeout: 15000,
+    });
+    return res.data; // { transactions: [{ transaction_reference, amount, created_at, ... }], pagination: {...} }
+  } catch (err) {
+    const msg = err.response?.data?.error_message || err.message;
+    throw ApiError.externalService(`PayHero account-transactions check failed: ${msg}`, 'MPESA_TRANSACTIONS_CHECK_FAILED');
+  }
+}
+
+module.exports = { stkPush, getTransactionStatus, getAccountTransactions, parseCallback, normalizePhone };
