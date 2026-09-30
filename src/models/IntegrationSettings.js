@@ -10,6 +10,10 @@ const { Schema, model } = require('mongoose');
  * Non-secret operational fields (channelId, kraPin, environment, enabled)
  * sit alongside in plaintext because they're needed for routing/UI and
  * aren't sensitive on their own.
+ *
+ * mpesa.manualEnabled / tillNumber / webhookToken drive the "Pay manually with M-PESA"
+ * (Buy Goods till) option. webhookToken is a random secret that is part of the URL PayHero
+ * posts till payments to; it is select:false and only ever shown to the OWNER.
  */
 const integrationSettingsSchema = new Schema(
   {
@@ -22,6 +26,11 @@ const integrationSettingsSchema = new Schema(
       credentialsBlob: { type: String, select: false }, // encrypted { apiUsername, apiPassword }
       credentialsSetAt: { type: Date },
       updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+
+      // --- Manual (Buy Goods / Till) payments ---
+      manualEnabled: { type: Boolean, default: false },
+      tillNumber: { type: String, trim: true }, // shown to the customer at the till; not secret
+      webhookToken: { type: String, select: false }, // secret path segment of the till-payment webhook URL
     },
 
     etims: {

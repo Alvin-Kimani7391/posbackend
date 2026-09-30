@@ -7,12 +7,12 @@ const payhero = require('../integrations/mpesa/payhero.provider');
 const digitax = require('../integrations/etims/digitax.client');
 
 async function getOrCreate(businessId) {
-  let settings = await IntegrationSettings.findOne({ businessId });
+  let settings = await IntegrationSettings.findOne({ businessId }).select('+mpesa.credentialsBlob +etims.credentialsBlob');
   if (!settings) settings = await IntegrationSettings.create({ businessId });
   return settings;
 }
 
-/** Owner dashboard status view - NEVER includes credentialsBlob, only booleans/non-secret config. */
+/** Owner dashboard status view - NEVER includes credentialsBlob or webhookToken, only booleans/non-secret config. */
 async function getStatus(businessId) {
   const settings = await getOrCreate(businessId);
   return {
@@ -22,6 +22,8 @@ async function getStatus(businessId) {
       channelId: settings.mpesa.channelId || null,
       credentials: maskedHint(settings.mpesa.credentialsBlob ? 'x' : null),
       configuredAt: settings.mpesa.credentialsSetAt,
+      manualEnabled: !!settings.mpesa.manualEnabled,
+      tillNumber: settings.mpesa.tillNumber || null,
     },
     etims: {
       enabled: settings.etims.enabled,
@@ -34,10 +36,16 @@ async function getStatus(businessId) {
   };
 }
 
-/** Same as getStatus but strips to just the two flags - safe for CASHIER-level roles so the POS UI knows whether to offer STK push. */
+/** Same as getStatus but strips to just the flags the POS needs - safe for CASHIER-level roles so the POS UI knows which M-PESA options to offer (STK push and/or manual Till). */
 async function getFlagsForPos(businessId) {
   const settings = await getOrCreate(businessId);
-  return { mpesaEnabled: settings.mpesa.enabled, etimsEnabled: settings.etims.enabled };
+  const manualReady = !!(settings.mpesa.manualEnabled && settings.mpesa.tillNumber);
+  return {
+    mpesaEnabled: settings.mpesa.enabled,
+    etimsEnabled: settings.etims.enabled,
+    mpesaManualEnabled: manualReady,
+    tillNumber: manualReady ? settings.mpesa.tillNumber : null,
+  };
 }
 
 function assertOwner(user) {

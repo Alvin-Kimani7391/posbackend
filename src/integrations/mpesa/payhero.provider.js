@@ -112,6 +112,92 @@ function parseCallback(body) {
   };
 }
 
+/* ---------------------------------------------------------------------- *
+ * Inbound (Buy Goods / Till) payment notification
+ * ---------------------------------------------------------------------- */
+
+function pickFirst(obj, keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return undefined;
+}
+
+/** Safaricom-style { CallbackMetadata: { Item: [{ Name, Value }] } } -> flat object. */
+function flattenCallbackMetadata(d) {
+  const items = d?.CallbackMetadata?.Item;
+  if (!Array.isArray(items)) return {};
+  return items.reduce((acc, it) => {
+    if (it && it.Name) acc[it.Name] = it.Value;
+    return acc;
+  }, {});
+}
+
+/** Accepts yyyyMMddHHmmss (Safaricom, Nairobi time) or any ISO-ish string. Returns null when unusable. */
+function parseMpesaTime(raw) {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim();
+  if (/^\d{14}$/.test(s)) {
+    const iso = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(8, 10)}:${s.slice(10, 12)}:${s.slice(12, 14)}+03:00`;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * parseInboundPayment - reads a "money arrived on the till" notification defensively
+ * (same philosophy as parseCallback: PayHero's payload shape is not guaranteed identical
+ * across accounts). It only EXTRACTS; every trust decision (token, receipt-code shape,
+ * amount, till number, duplicate) is made by mpesa.service.ingestInboundPayment.
+ * Returns null when the body is not an object at all.
+ */
+function parseInboundPayment(body) {
+  if (!body || typeof body !== 'object') return null;
+  const root = body.response || body.data || body?.Body?.stkCallback || body;
+  const d = { ...root, ...flattenCallbackMetadata(root) };
+
+  const receipt = pickFirst(d, [
+    'MpesaReceiptNumber', 'mpesaReceiptNumber', 'mpesa_receipt_number',
+    'TransID', 'trans_id', 'transaction_reference', 'TransactionReference', 'receipt_number',
+  ]);
+
+  const amountNum = Number(pickFirst(d, ['Amount', 'amount', 'TransAmount', 'trans_amount']));
+  const amountCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum * 100) : null;
+
+  const externalReference = pickFirst(d, ['ExternalReference', 'external_reference']);
+  const resultCode = pickFirst(d, ['ResultCode', 'resultCode']);
+  const statusRaw = String(pickFirst(d, ['Status', 'status']) ?? '').toUpperCase();
+
+  let success;
+  if (resultCode !== undefined) success = Number(resultCode) === 0;
+  else if (statusRaw) success = ['SUCCESS', 'SUCCESSFUL', 'COMPLETED'].includes(statusRaw);
+  else success = true; // till notifications are only sent for completed payments; the receipt-code shape gate in the service still applies
+
+  const transactionType = String(pickFirst(d, ['transaction_type', 'TransactionType', 'type']) ?? '');
+  const isInbound = !/(withdraw|fee|charge|payout|refund|transfer_out|reversal)/i.test(transactionType);
+
+  const firstName = pickFirst(d, ['FirstName', 'first_name']);
+  const middleName = pickFirst(d, ['MiddleName', 'middle_name']);
+  const lastName = pickFirst(d, ['LastName', 'last_name']);
+  const payerName = pickFirst(d, ['customer_name', 'CustomerName', 'name'])
+    || [firstName, middleName, lastName].filter(Boolean).join(' ')
+    || undefined;
+
+  return {
+    receiptNumber: receipt !== undefined ? String(receipt).trim().toUpperCase() : undefined,
+    amountCents,
+    success,
+    isInbound,
+    isStk: typeof externalReference === 'string' && /^MPX-/i.test(externalReference),
+    payerPhone: pickFirst(d, ['MSISDN', 'msisdn', 'phone_number', 'phone', 'PhoneNumber', 'customer_phone']),
+    payerName,
+    tillNumber: pickFirst(d, ['BusinessShortCode', 'business_short_code', 'short_code', 'till_number', 'till']),
+    paidAt: parseMpesaTime(pickFirst(d, ['TransTime', 'TransactionDate', 'transaction_date', 'paid_at', 'created_at'])),
+  };
+}
 
 /** Best-effort receipt backfill source - GET /transaction-status never returns a receipt code, only the callback and this endpoint do. Used when the callback hasn't (yet) arrived. */
 async function getAccountTransactions({ credentials, page = 1, per = 20 }) {
@@ -128,4 +214,4 @@ async function getAccountTransactions({ credentials, page = 1, per = 20 }) {
   }
 }
 
-module.exports = { stkPush, getTransactionStatus, getAccountTransactions, parseCallback, normalizePhone };
+module.exports = { stkPush, getTransactionStatus, getAccountTransactions, parseCallback, parseInboundPayment, normalizePhone };

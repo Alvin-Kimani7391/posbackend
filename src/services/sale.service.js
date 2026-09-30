@@ -204,13 +204,13 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       // Resolve MPESA lines against verified MpesaTransactions before building
       // payment docs. CASH/CARD/BANK stay exactly as before (cashier-attested).
-      for (const p of payments) {
+            for (const p of payments) {
         if (p.method === 'MPESA') {
           if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
           const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, sale._id, session);
-          p.provider = 'payhero';
-          p.externalTransactionId = confirmed.externalTransactionId; // may be null if the receipt number hasn't arrived via callback yet - see mpesaService.handleCallback's backfill
-          p.metadata = { checkoutRequestId: confirmed.checkoutRequestId };
+          p.provider = confirmed.channel === 'MANUAL' ? 'payhero-till' : 'payhero';
+          p.externalTransactionId = confirmed.externalTransactionId;
+          p.metadata = { checkoutRequestId: confirmed.checkoutRequestId, channel: confirmed.channel };
         }
       }
 
