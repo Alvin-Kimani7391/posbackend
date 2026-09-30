@@ -18,7 +18,8 @@ const auditLogSchema = new Schema(
 );
 
 auditLogSchema.index({ businessId: 1, timestamp: -1 });
-
+// models/AuditLog.js
+auditLogSchema.index({ timestamp: -1 });
 // Audit logs are append-only: block updates and deletes at the model layer.
 auditLogSchema.pre(['updateOne', 'findOneAndUpdate', 'updateMany'], function blockUpdate(next) {
   next(new Error('AuditLog records are immutable and cannot be updated'));
