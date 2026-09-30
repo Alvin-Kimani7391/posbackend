@@ -1,11 +1,14 @@
 const jwt = require('jsonwebtoken');
 const { jwt: jwtConfig } = require('../config/env');
 
+// SUPER_ADMIN users belong to no business, so businessId may be undefined.
+const bizId = (user) => (user.businessId ? user.businessId.toString() : undefined);
+
 function signAccessToken(user) {
   return jwt.sign(
     {
       sub: user._id.toString(),
-      businessId: user.businessId.toString(),
+      businessId: bizId(user),
       role: user.role,
     },
     jwtConfig.secret,
@@ -17,7 +20,7 @@ function signRefreshToken(user) {
   return jwt.sign(
     {
       sub: user._id.toString(),
-      businessId: user.businessId.toString(),
+      businessId: bizId(user),
       tokenVersion: user.refreshTokenVersion,
     },
     jwtConfig.refreshSecret,

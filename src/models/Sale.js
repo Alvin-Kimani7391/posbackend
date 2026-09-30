@@ -91,6 +91,10 @@ saleSchema.index(
   }
 );
 
+
+saleSchema.index({ createdAt: -1 });
+saleSchema.index({ saleStatus: 1, createdAt: -1 });
+
 moneyFields(
   saleSchema,
   ['subtotal', 'itemDiscount', 'cartDiscount', 'tax', 'total', 'amountPaid', 'balance'],

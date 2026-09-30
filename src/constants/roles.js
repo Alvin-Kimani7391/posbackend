@@ -1,4 +1,5 @@
 const ROLES = Object.freeze({
+  SUPER_ADMIN: 'SUPER_ADMIN',   // <-- add
   OWNER: 'OWNER',
   ADMIN: 'ADMIN',
   MANAGER: 'MANAGER',

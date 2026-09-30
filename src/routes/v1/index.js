@@ -26,6 +26,7 @@ router.use('/refunds', require('../refund.routes'));
 router.use('/reports', require('../report.routes'));
 router.use('/audit-logs', require('../auditlog.routes'));
 router.use('/notifications', require('../notification.routes'));
+router.use('/admin', require('../admin.routes'));
 
 // Phase 7+ will mount: etims,  devices, jhdasfhfhhflfhfhfhfhfhfhnotifications.
 

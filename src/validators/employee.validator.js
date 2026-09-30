@@ -2,7 +2,10 @@ const { z } = require('zod');
 const { objectId, kenyanPhone } = require('./common');
 const { ROLES } = require('../constants/roles');
 
-const roleEnum = z.enum(Object.values(ROLES));
+// SUPER_ADMIN is a platform role: it can only be created with
+// scripts/create-super-admin.js, never through the employee API.
+const TENANT_ROLES = Object.values(ROLES).filter((r) => r !== ROLES.SUPER_ADMIN);
+const roleEnum = z.enum(TENANT_ROLES);
 
 const createEmployeeSchema = z
   .object({

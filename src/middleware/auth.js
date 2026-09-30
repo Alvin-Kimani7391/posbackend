@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { verifyAccessToken } = require('../utils/tokens');
 const User = require('../models/User');
+const Business = require('../models/Business');
 const { ROLES } = require('../constants/roles');
 const { DEFAULT_ROLE_PERMISSIONS } = require('../constants/permissions');
 
@@ -11,6 +12,9 @@ const { DEFAULT_ROLE_PERMISSIONS } = require('../constants/permissions');
  * req.businessId is ALWAYS derived from the token/user record, never from the
  * request body/query/params. Downstream code must use req.businessId, not
  * anything supplied by the client.
+ *
+ * SUPER_ADMIN (platform admin) has no business: req.businessId is null, and
+ * tenant routes reject them through requirePermission (no default permissions).
  */
 const authenticate = catchAsync(async (req, res, next) => {
   const header = req.headers.authorization || '';
@@ -32,16 +36,39 @@ const authenticate = catchAsync(async (req, res, next) => {
     throw ApiError.unauthorized('Account is inactive or no longer exists');
   }
 
+  // Platform admin: no business, no tenant scope.
+  if (user.role === ROLES.SUPER_ADMIN) {
+    req.user = user;
+    req.businessId = null;
+    return next();
+  }
+
   // Defense in depth: the businessId embedded in the token must still match
   // the user's current business record.
-  if (user.businessId.toString() !== payload.businessId) {
+  if (!user.businessId || user.businessId.toString() !== payload.businessId) {
     throw ApiError.unauthorized('Token/business mismatch');
+  }
+
+  // A suspended business is locked out on its very next request,
+  // even with a still-valid access token.
+  const business = await Business.findById(user.businessId).select('status').lean();
+  if (!business || business.status !== 'active') {
+    throw ApiError.forbidden('This business account is suspended. Contact support.', 'BUSINESS_SUSPENDED');
   }
 
   req.user = user;
   req.businessId = user.businessId; // <-- authoritative source of truth everywhere downstream
   next();
 });
+
+/** Platform-admin-only gate. Use AFTER authenticate. */
+function requireSuperAdmin(req, res, next) {
+  if (!req.user) return next(ApiError.unauthorized());
+  if (req.user.role !== ROLES.SUPER_ADMIN) {
+    return next(ApiError.forbidden('Platform admin access only', 'SUPER_ADMIN_ONLY'));
+  }
+  next();
+}
 
 /** Restrict a route to specific roles. Owner is never blocked by this. */
 function authorizeRole(...allowedRoles) {
@@ -102,4 +129,11 @@ function requireBranchAccess(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, authorizeRole, requirePermission, requireBranchAccess, userHasPermission };
+module.exports = {
+  authenticate,
+  authorizeRole,
+  requirePermission,
+  requireBranchAccess,
+  requireSuperAdmin,
+  userHasPermission,
+};

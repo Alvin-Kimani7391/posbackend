@@ -4,6 +4,9 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
 
+// Roles that can never be assigned through the employee API.
+const RESERVED_ROLES = [ROLES.OWNER, ROLES.SUPER_ADMIN];
+
 async function listEmployees(businessId, { page, limit, search }) {
   const filter = { businessId };
   if (search) {
@@ -30,8 +33,8 @@ async function getEmployee(businessId, userId) {
 }
 
 async function createEmployee(businessId, createdBy, data) {
-  if (data.role === ROLES.OWNER) {
-    throw ApiError.badRequest('Cannot create a second OWNER account this way', 'INVALID_ROLE');
+  if (RESERVED_ROLES.includes(data.role)) {
+    throw ApiError.badRequest('This role cannot be assigned this way', 'INVALID_ROLE');
   }
 
   const secret = data.pin || data.password;
@@ -72,6 +75,10 @@ async function createEmployee(businessId, createdBy, data) {
 async function updateEmployee(businessId, actorId, userId, updates) {
   const user = await User.findOne({ _id: userId, businessId });
   if (!user) throw ApiError.notFound('Employee not found');
+
+  if (updates.role === ROLES.SUPER_ADMIN) {
+    throw ApiError.badRequest('This role cannot be assigned this way', 'INVALID_ROLE');
+  }
   if (user.role === ROLES.OWNER && updates.role && updates.role !== ROLES.OWNER) {
     throw ApiError.badRequest('Cannot change the OWNER role', 'INVALID_ROLE_CHANGE');
   }

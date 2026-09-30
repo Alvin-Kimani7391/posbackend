@@ -69,6 +69,20 @@ async function issueTokens(user) {
   return { accessToken, refreshToken };
 }
 
+/**
+ * Blocks login/refresh for every user of a suspended or closed business.
+ * (authenticate() enforces the same rule on every request, so a suspension
+ * takes effect immediately, not only at the next login.)
+ * Platform admins belong to no business and are exempt.
+ */
+async function assertBusinessActive(user) {
+  if (user.role === ROLES.SUPER_ADMIN) return;
+  const biz = await Business.findById(user.businessId).select('status').lean();
+  if (!biz || biz.status !== 'active') {
+    throw ApiError.forbidden('This business account is suspended. Contact support.', 'BUSINESS_SUSPENDED');
+  }
+}
+
 async function loginWithPassword({ identifier, password }, meta = {}) {
   const isEmail = identifier.includes('@');
   const query = isEmail ? { email: identifier.toLowerCase() } : { phone: identifier };
@@ -83,16 +97,21 @@ async function loginWithPassword({ identifier, password }, meta = {}) {
     throw ApiError.unauthorized('Invalid credentials', 'INVALID_CREDENTIALS');
   }
 
+  await assertBusinessActive(user);
+
   user.lastLoginAt = new Date();
   await user.save();
 
-  await AuditLog.create({
-    businessId: user.businessId,
-    userId: user._id,
-    action: 'login',
-    ipAddress: meta.ip,
-    userAgent: meta.userAgent,
-  });
+  // AuditLog.businessId is required; a platform admin has none, so skip it.
+  if (user.businessId) {
+    await AuditLog.create({
+      businessId: user.businessId,
+      userId: user._id,
+      action: 'login',
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  }
 
   const tokens = await issueTokens(user);
   return { user, ...tokens };
@@ -108,6 +127,8 @@ async function loginWithPin({ businessId, employeeCode, pin }, meta = {}) {
   if (!valid) {
     throw ApiError.unauthorized('Invalid credentials', 'INVALID_CREDENTIALS');
   }
+
+  await assertBusinessActive(user);
 
   user.lastLoginAt = new Date();
   await user.save();
@@ -142,6 +163,8 @@ async function refreshTokens(refreshToken) {
   if (user.refreshTokenVersion !== payload.tokenVersion) {
     throw ApiError.unauthorized('Refresh token has been revoked', 'REFRESH_TOKEN_REVOKED');
   }
+
+  await assertBusinessActive(user);
 
   return issueTokens(user);
 }

@@ -4,7 +4,10 @@ const { ROLES } = require('../constants/roles');
 
 const userSchema = new Schema(
   {
-    businessId: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    businessId: {
+  type: Schema.Types.ObjectId, ref: 'Business', index: true,
+  required: function () { return this.role !== ROLES.SUPER_ADMIN; },
+},
     name: { type: String, required: true, trim: true },
     email: { type: String, trim: true, lowercase: true },
     phone: { type: String, required: true, trim: true },
