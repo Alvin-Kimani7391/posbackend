@@ -8,6 +8,10 @@ const { toCents } = require('../utils/money');
 const formatKES = (cents) =>
   `KES ${(Math.abs(cents) / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// A note/coin value in shillings, always with cents: 1000 -> "1,000.00"
+const formatDenom = (n) =>
+  Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 const MANAGEMENT_ROLES = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER];
 
 /** Creates one notification for a specific user. */
@@ -104,7 +108,8 @@ async function notifyShiftOpened(businessId, branchId, shift, cashier) {
  *
  * data.denominations: [{ denomination (KES), count, subtotal (cents) }] - all
  * denominations, highest first (zero-count lines included so the UI can render
- * a fixed-shape table). The message text lists only the non-zero lines.
+ * a fixed-shape table). The message text lists only the non-zero lines, each
+ * value shown with cents (e.g. "3 × 1,000.00").
  */
 async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales) {
   const diff = shift.cashDifference;
@@ -120,7 +125,7 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
   }));
   const denomLine = denominations
     .filter((d) => d.count > 0)
-    .map((d) => `${d.count} × ${d.denomination.toLocaleString('en-KE')}`)
+    .map((d) => `${d.count} × ${formatDenom(d.denomination)}`)
     .join(', ');
   const denomText = denomLine ? ` Counted: ${denomLine}.` : '';
 
@@ -146,7 +151,7 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
   const base = { type, branchId, sourceUserId: cashier._id, entityType: 'CashShift', entityId: shift._id, data };
 
   let ownExtra = ' Nicely balanced.';
-  if (diff < 0) ownExtra = " Check the cash sales below against what you counted, and flag your manager if you can't account for the difference. The shortage is now recorded against you until it is cleared.";
+  if (diff < 0) ownExtra = " Check the cash sales below against what you counted, and flag your manager if you can't account for the difference.";
   else if (diff > 0) ownExtra = ' Check the cash sales below, and hand the extra over to your manager.';
 
   return notifyActorAndManagement(
@@ -468,6 +473,13 @@ async function listForUser(businessId, userId, { unreadOnly, type, page, limit }
   return { items, total, page, limit, pages: Math.ceil(total / limit) || 1, unreadCount };
 }
 
+/** One notification, only if it belongs to this user - powers the bell's "open this one" deep link. */
+async function getOne(businessId, userId, id) {
+  const notification = await Notification.findOne({ _id: id, businessId, userId }).populate('branchId', 'name');
+  if (!notification) throw ApiError.notFound('Notification not found');
+  return notification;
+}
+
 async function markRead(businessId, userId, id) {
   const notification = await Notification.findOneAndUpdate({ _id: id, businessId, userId }, { readAt: new Date() }, { new: true });
   if (!notification) throw ApiError.notFound('Notification not found');
@@ -491,7 +503,6 @@ module.exports = {
   notifyActorAndManagement,
   notifyShiftOpened,
   notifyShiftClosed,
-  notifyShortagePayment,
   notifySaleCancelled,
   notifyTransferRequested,
   notifyStockLevel,
@@ -502,6 +513,7 @@ module.exports = {
   notifyCustomerPaymentReceived,
   notifyEmployeeAlert,
   listForUser,
+  getOne,
   markRead,
   markAllRead,
   remove,
