@@ -47,6 +47,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'branches.view',
     'audit.view',
     'notifications.view', 'notifications.send',
+    'tickets.view', 'tickets.create',
   ],
   [ROLES.CASHIER]: [
     'categories.view',
@@ -59,6 +60,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'registers.view',
     'shifts.open', 'shifts.close', 'shifts.view',
     'notifications.view', 'notifications.send',
+    'tickets.view', 'tickets.create',
   ],
   [ROLES.STOREKEEPER]: [
     'categories.view', 'categories.create', 'categories.update',
@@ -66,6 +68,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer',
     'suppliers.view', 'suppliers.create',
     'purchases.view', 'purchases.create', 'purchases.receive',
+    'tickets.view', 'tickets.create',
   ],
   [ROLES.ACCOUNTANT]: [
     'categories.view', 'products.view',
@@ -78,6 +81,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'audit.view',
     'etims.view',
     'notifications.view',
+    'tickets.view', 'tickets.create',
   ],
 });
 
