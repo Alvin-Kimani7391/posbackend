@@ -3,6 +3,7 @@ const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { TYPE_SEVERITY, EMPLOYEE_RAISABLE_TYPES } = require('../constants/notificationTypes');
 const ApiError = require('../utils/ApiError');
+const { toCents } = require('../utils/money');
 
 const formatKES = (cents) =>
   `KES ${(Math.abs(cents) / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -94,11 +95,16 @@ async function notifyShiftOpened(businessId, branchId, shift, cashier) {
 /**
  * notifyShiftClosed - short / over / balanced, sent BOTH to management and
  * to the cashier themselves, with the identical cash-sale breakdown in
- * `data.sales` either way - the cashier gets exactly the same receipt-level
- * detail the owner does, not a watered-down summary. Note: a discrepancy is
- * a property of the WHOLE drawer, not one sale - there's no way to say
- * "sale X caused the shortage" - so what's given instead is every cash sale
- * in the shift, to cross-check against what was physically counted.
+ * `data.sales` AND the identical closing cash count in `data.denominations`
+ * either way - the cashier gets exactly the same detail the owner does, not
+ * a watered-down summary. Note: a discrepancy is a property of the WHOLE
+ * drawer, not one sale - there's no way to say "sale X caused the shortage" -
+ * so what's given instead is every cash sale in the shift plus the physical
+ * count by note/coin, to cross-check against each other.
+ *
+ * data.denominations: [{ denomination (KES), count, subtotal (cents) }] - all
+ * denominations, highest first (zero-count lines included so the UI can render
+ * a fixed-shape table). The message text lists only the non-zero lines.
  */
 async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales) {
   const diff = shift.cashDifference;
@@ -107,11 +113,24 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
   if (diff < 0) { type = 'CASH_SHORTAGE'; headline = `short by ${formatKES(diff)}`; }
   else if (diff > 0) { type = 'CASH_OVER'; headline = `over by ${formatKES(diff)}`; }
 
+  const denominations = (shift.denominations || []).map((d) => ({
+    denomination: d.denomination,
+    count: d.count,
+    subtotal: toCents(d.denomination * d.count),
+  }));
+  const denomLine = denominations
+    .filter((d) => d.count > 0)
+    .map((d) => `${d.count} × ${d.denomination.toLocaleString('en-KE')}`)
+    .join(', ');
+  const denomText = denomLine ? ` Counted: ${denomLine}.` : '';
+
   const data = {
     openingCash: shift.openingCash,
     expectedCash: shift.expectedCash,
     actualCash: shift.actualCash,
     cashDifference: diff,
+    denominations,
+    denominationTotal: denominations.reduce((s, d) => s + d.subtotal, 0),
     cashSaleCount: cashSales.length,
     sales: cashSales.map((p) => ({
       saleId: p.saleId,
@@ -138,14 +157,14 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
       message:
         `${cashier.name} closed register${shift.registerId?.code ? ` ${shift.registerId.code}` : ''}. ` +
         `Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)}, ` +
-        `counted ${formatKES(shift.actualCash)} - drawer is ${headline}.`,
+        `counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${denomText}`,
     },
     {
       ...base,
       title: `Shift closed (${headline})`,
       message:
         `Your shift is closed. Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)} ` +
-        `from cash sales, you counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${ownExtra}`,
+        `from cash sales, you counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${denomText}${ownExtra}`,
     }
   );
 }
@@ -220,11 +239,7 @@ async function notifyRefundCompleted(businessId, branchId, refund, sale, actor) 
 /**
  * notifyCreditSaleIssued - fires on EVERY sale that leaves a balance on a
  * customer's account (whether fully on credit or partially paid), not just
- * when some risk threshold is crossed. This is the notification that was
- * previously MISSING entirely: neither the owner nor the cashier who
- * granted the credit ever heard about the sale itself unless it happened
- * to cross the warning line in notifyCreditDue below - and even then only
- * management was told, never the cashier. Sent via notifyActorAndManagement
+ * when some risk threshold is crossed. Sent via notifyActorAndManagement
  * so both sides get a detailed, personalized copy every single time.
  */
 async function notifyCreditSaleIssued(businessId, branchId, customer, cashier, { amount, saleId, receiptNumber, newBalance, creditLimit, paymentStatus }) {
@@ -307,16 +322,12 @@ async function notifyCreditDue(businessId, customer, { outstandingBalance, credi
   return notifyManagement(businessId, managementPayload);
 }
 
-
-
-
 /**
  * notifyCustomerPaymentReceived - fires every time someone records a
  * payment against a customer's outstanding credit balance (customer.service.js
- * recordCustomerPayment). This was previously MISSING entirely - unlike a
- * credit sale being issued, paying a balance down never told anyone it
- * happened. Sent via notifyActorAndManagement so both the cashier/owner who
- * recorded the payment and the rest of management get a detailed copy.
+ * recordCustomerPayment). Sent via notifyActorAndManagement so both the
+ * cashier/owner who recorded the payment and the rest of management get a
+ * detailed copy.
  */
 async function notifyCustomerPaymentReceived(businessId, branchId, customer, actor, { amount, method, reference, newBalance }) {
   const base = {
@@ -353,6 +364,7 @@ async function notifyCustomerPaymentReceived(businessId, branchId, customer, act
     }
   );
 }
+
 /**
  * notifyEmployeeAlert - "employee chooses to notify the owner" path. Any
  * staff member can raise one of EMPLOYEE_RAISABLE_TYPES with a free-text

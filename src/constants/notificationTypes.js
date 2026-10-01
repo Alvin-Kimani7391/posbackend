@@ -3,11 +3,12 @@ const NOTIFICATION_TYPES = [
   'CASH_SHORTAGE', 'CASH_OVER', 'SHIFT_OPENED', 'SHIFT_CLOSED',
   'SALE_CANCELLED', 'TRANSFER_REQUESTED', 'ETIMS_FAILED', 'CREDIT_DUE', 'CREDIT_SALE',
   'CUSTOMER_PAYMENT', 'SYSTEM_ALERT', 'EMPLOYEE_ALERT',
+  // Support tickets (new)
+  'TICKET_CREATED', 'TICKET_REPLY', 'TICKET_UPDATED', 'TICKET_RESOLVED', 'TICKET_CLOSED',
 ];
 
 const SEVERITY = { INFO: 'info', WARNING: 'warning', CRITICAL: 'critical' };
 
-// Default severity per type - drives badge colour / sound on the frontend.
 const TYPE_SEVERITY = {
   LOW_STOCK: SEVERITY.WARNING,
   OUT_OF_STOCK: SEVERITY.CRITICAL,
@@ -23,24 +24,21 @@ const TYPE_SEVERITY = {
   ETIMS_FAILED: SEVERITY.CRITICAL,
   CREDIT_DUE: SEVERITY.WARNING,
   CREDIT_SALE: SEVERITY.INFO,
-  // Money coming IN against a debt is good news, not a warning - same tier
-  // as REFUND_COMPLETED/SHIFT_CLOSED.
   CUSTOMER_PAYMENT: SEVERITY.INFO,
   SYSTEM_ALERT: SEVERITY.WARNING,
   EMPLOYEE_ALERT: SEVERITY.WARNING,
+  TICKET_CREATED: SEVERITY.INFO,
+  TICKET_REPLY: SEVERITY.INFO,
+  TICKET_UPDATED: SEVERITY.INFO,
+  TICKET_RESOLVED: SEVERITY.INFO,
+  TICKET_CLOSED: SEVERITY.INFO,
 };
 
-// Subset a staff member (without notifications.manage) can raise manually
-// against their own business. Deliberately excludes SHIFT_*, ETIMS_FAILED,
-// TRANSFER_REQUESTED, SALE_CANCELLED, REFUND_COMPLETED, CREDIT_SALE, and
-// CUSTOMER_PAYMENT - those are always system-generated, never hand-typed,
-// so a cashier can't fabricate "a payment was already recorded" as a
-// manual alert instead of an actual recorded payment.
 const EMPLOYEE_RAISABLE_TYPES = [
   'LOW_STOCK', 'OUT_OF_STOCK', 'PAYMENT_FAILED', 'REFUND_REQUEST',
   'CASH_SHORTAGE', 'CREDIT_DUE', 'SYSTEM_ALERT',
 ];
 
-const CREDIT_WARNING_THRESHOLD = 0.8; // 80% of creditLimit - fires a CREDIT_DUE warning
+const CREDIT_WARNING_THRESHOLD = 0.8;
 
 module.exports = { NOTIFICATION_TYPES, SEVERITY, TYPE_SEVERITY, EMPLOYEE_RAISABLE_TYPES, CREDIT_WARNING_THRESHOLD };

@@ -5,9 +5,12 @@
  */
 const router = require('express').Router();
 const controller = require('../controllers/admin.controller');
+const ticketAdmin = require('../controllers/ticket.admin.controller');
 const validate = require('../middleware/validate');
 const { authenticate, requireSuperAdmin } = require('../middleware/auth');
+const { uploadTicketImages } = require('../middleware/ticketUpload');
 const v = require('../validators/admin.validator');
+const tv = require('../validators/ticket.validator');
 
 router.use(authenticate, requireSuperAdmin);
 
@@ -25,5 +28,12 @@ router.patch('/employees/:id/status', validate({ params: v.idParamSchema, body: 
 
 router.get('/products', validate({ query: v.productsQuery }), controller.listProducts);
 router.get('/audit-logs', validate({ query: v.auditQuery }), controller.listAuditLogs);
+
+/* ---- support tickets (NEW) ---- */
+router.get('/tickets/stats', ticketAdmin.stats); // keep above /tickets/:id
+router.get('/tickets', validate({ query: tv.adminListQuery }), ticketAdmin.list);
+router.get('/tickets/:id', validate({ params: tv.idParamSchema }), ticketAdmin.get);
+router.post('/tickets/:id/reply', uploadTicketImages, validate({ params: tv.idParamSchema, body: tv.replySchema }), ticketAdmin.reply);
+router.patch('/tickets/:id/status', validate({ params: tv.idParamSchema, body: tv.adminStatusSchema }), ticketAdmin.update);
 
 module.exports = router;

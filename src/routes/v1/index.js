@@ -14,7 +14,6 @@ router.use('/registers', require('../register.routes'));
 router.use('/shifts', require('../shift.routes'));
 router.use('/payments', require('../payment.routes'));
 
-
 router.use('/payments/mpesa', require('../mpesa.routes'));
 router.use('/settings/integrations', require('../integration-settings.routes'));
 router.use('/etims', require('../etims.routes'));
@@ -26,8 +25,7 @@ router.use('/refunds', require('../refund.routes'));
 router.use('/reports', require('../report.routes'));
 router.use('/audit-logs', require('../auditlog.routes'));
 router.use('/notifications', require('../notification.routes'));
+router.use('/tickets', require('../ticket.routes')); // NEW
 router.use('/admin', require('../admin.routes'));
-
-// Phase 7+ will mount: etims,  devices, jhdasfhfhhflfhfhfhfhfhfhnotifications.
 
 module.exports = router;

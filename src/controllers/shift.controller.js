@@ -28,9 +28,10 @@ exports.list = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Shifts fetched', result);
 });
 
+// Now returns { shift, cashSales } so the owner can see every cash sale behind a shift.
 exports.getOne = catchAsync(async (req, res) => {
-  const shift = await shiftService.getShift(req.businessId, req.params.id);
-  return sendSuccess(res, 200, 'Shift fetched', { shift });
+  const result = await shiftService.getShiftDetail(req.businessId, req.params.id);
+  return sendSuccess(res, 200, 'Shift fetched', result);
 });
 
 exports.open = catchAsync(async (req, res) => {
