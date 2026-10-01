@@ -7,6 +7,7 @@ const ApiError = require('../utils/ApiError');
 const { fromCents } = require('../utils/money');
 const { normalizeDenominations, denominationsTotalCents } = require('../utils/denominations');
 const notificationService = require('./notification.service');
+const shortageService = require('./shortage.service');
 
 async function getCurrentShift(businessId, branchId, cashierId) {
   return CashShift.findOne({ businessId, branchId, cashierId, status: 'OPEN' }).populate('registerId', 'name code');
@@ -126,6 +127,17 @@ async function closeShift(businessId, userId, id, { denominations, actualCash, n
     entityId: shift._id,
     newValue: { expectedCash, actualCash: countedCents, cashDifference, denominations: countedDenominations.filter((d) => d.count > 0) },
   });
+
+  // A SHORT drawer becomes a trackable debt against the cashier who ran it.
+  // Never fail the close over this - the unique index on shiftId plus
+  // shortageService.backfillFromShifts() can always recreate a missed record.
+  if (cashDifference < 0) {
+    try {
+      await shortageService.recordForShift(shift);
+    } catch (err) {
+      console.error('recordForShift failed', err);
+    }
+  }
 
   const cashier = await User.findById(userId).select('name role');
   const saleBreakdown = cashPayments.map((p) => ({

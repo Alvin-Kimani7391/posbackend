@@ -99,7 +99,12 @@ async function createProduct(businessId, userId, data) {
     action: 'product.create',
     entityType: 'Product',
     entityId: product._id,
-    newValue: { name: product.name, sku: product.sku, variantCount: createdVariants.length },
+    newValue: {
+      name: product.name,
+      sku: product.sku,
+      defaultDiscount: product.defaultDiscount,
+      variantCount: createdVariants.length,
+    },
   });
 
   const obj = product.toObject();
@@ -113,10 +118,23 @@ async function updateProduct(businessId, userId, id, updates) {
 
   await assertCategoryBelongsToBusiness(businessId, updates.categoryId);
 
-  const oldValue = { sellingPrice: product.sellingPrice, costPrice: product.costPrice, status: product.status };
+  const oldValue = {
+    sellingPrice: product.sellingPrice,
+    costPrice: product.costPrice,
+    defaultDiscount: product.defaultDiscount,
+    status: product.status,
+  };
 
   Object.assign(product, updates);
   product.updatedBy = userId;
+
+  // The per-unit discount may never exceed the unit price. Checked on the
+  // MERGED values so lowering the price below an existing discount is caught
+  // too. (Variant products have per-variant prices; those are clamped to the
+  // line total at sale time instead.)
+  if (!product.hasVariants && (product.defaultDiscount || 0) > (product.sellingPrice || 0)) {
+    throw ApiError.badRequest('Discount cannot be more than the selling price', 'INVALID_DISCOUNT');
+  }
 
   try {
     await product.save();
@@ -134,7 +152,12 @@ async function updateProduct(businessId, userId, id, updates) {
     entityType: 'Product',
     entityId: product._id,
     oldValue,
-    newValue: { sellingPrice: product.sellingPrice, costPrice: product.costPrice, status: product.status },
+    newValue: {
+      sellingPrice: product.sellingPrice,
+      costPrice: product.costPrice,
+      defaultDiscount: product.defaultDiscount,
+      status: product.status,
+    },
   });
 
   return getProduct(businessId, id);
@@ -210,6 +233,7 @@ async function archiveVariant(businessId, userId, productId, variantId) {
  * Unified barcode lookup used by the POS scanner - checks products first,
  * then variants, and returns a normalized shape either way so the frontend
  * doesn't need to special-case which one it got.
+ * (The returned product carries defaultDiscount, which the POS auto-applies.)
  */
 async function lookupByBarcode(businessId, barcode) {
   const product = await Product.findOne({ businessId, barcode, status: 'active' }).populate('categoryId', 'name');

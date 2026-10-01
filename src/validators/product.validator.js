@@ -18,7 +18,10 @@ const variantInput = z.object({
   lowStockThreshold: z.coerce.number().int().min(0).optional(),
 });
 
-const createProductSchema = z.object({
+// Plain object shape, shared by create (adds a cross-field check below) and
+// update (partial). Kept separate because .partial() is not available once a
+// schema has been wrapped in superRefine().
+const productBase = z.object({
   categoryId: objectId.optional(),
   name: z.string().trim().min(1),
   sku: z.string().trim().min(1),
@@ -29,6 +32,8 @@ const createProductSchema = z.object({
   costPrice: moneyInput.optional().default(0),
   sellingPrice: moneyInput,
   wholesalePrice: moneyInput.optional(),
+  // Standing per-unit discount, auto-applied at the till. 0 = none.
+  defaultDiscount: moneyInput.optional().default(0),
   taxRate: z.coerce.number().min(0).max(100).optional(),
   taxCategory: z.string().trim().optional(),
   unit: z.enum(Product.UNITS).optional(),
@@ -41,7 +46,23 @@ const createProductSchema = z.object({
   variants: z.array(variantInput).optional(),
 });
 
-const updateProductSchema = createProductSchema.partial().omit({ variants: true });
+// Values here are already integer cents (the transforms above have run).
+const createProductSchema = productBase.superRefine((data, ctx) => {
+  const hasVariants = Array.isArray(data.variants) && data.variants.length > 0;
+  if (!hasVariants && data.sellingPrice !== undefined && data.defaultDiscount > data.sellingPrice) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['defaultDiscount'],
+      message: 'Discount cannot be more than the selling price',
+    });
+  }
+});
+
+// Partial: an omitted defaultDiscount stays undefined (the default(0) is NOT
+// applied), so editing other fields never silently wipes a saved discount.
+// The "discount <= price" rule for updates is enforced in product.service.js
+// against the merged (existing + changed) values.
+const updateProductSchema = productBase.partial().omit({ variants: true });
 
 const listProductsQuery = paginationQuery.extend({
   categoryId: objectId.optional(),

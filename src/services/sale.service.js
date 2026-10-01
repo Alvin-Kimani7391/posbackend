@@ -33,6 +33,14 @@ const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverri
  * Money in `payload` arrives already converted to integer cents by the
  * validator layer (see validators/sale.validator.js) - this function never
  * does decimal/float math.
+ *
+ * PRODUCT DEFAULT DISCOUNT: a product may carry a standing per-unit discount
+ * (Product.defaultDiscount, cents). The POS pre-fills the line discount with
+ * (defaultDiscount x quantity), but the client is never trusted: the preset
+ * portion of a line's discount is recomputed here from the Product record and
+ * is exempt from the cashier's role discount limit (it is the owner's own
+ * configured promotion). Only the part ABOVE the preset - what the cashier
+ * added by hand - is checked against the role limit, exactly like before.
  */
 async function createSale(businessId, branchId, cashierUser, payload) {
   // --- Offline-sync / double-submit idempotency: same device replaying the
@@ -96,10 +104,24 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     }
 
     const discount = rawItem.discount || 0;
-    if (discount > 0 && maxDiscountPercent < 100) {
-      const grossForLimit = Math.round(unitPrice * rawItem.quantity);
+    const grossForLimit = Math.round(unitPrice * rawItem.quantity);
+
+    // A line can never be discounted below zero.
+    if (discount > grossForLimit) {
+      throw ApiError.badRequest(`Discount on ${product.name} is more than the line total`, 'INVALID_DISCOUNT');
+    }
+
+    // Preset (owner-configured) part of the discount, recomputed from the
+    // Product record - never taken from the client.
+    const presetLineDiscount = Math.min(Math.round((product.defaultDiscount || 0) * rawItem.quantity), grossForLimit);
+
+    // Whatever exceeds the preset was typed in by the cashier and is subject
+    // to the role limit. The 1-cent tolerance absorbs rounding differences
+    // between the POS preview and this calculation (e.g. fractional quantities).
+    const manualDiscount = discount - presetLineDiscount;
+    if (manualDiscount > 1 && maxDiscountPercent < 100) {
       const maxAllowed = Math.round((grossForLimit * maxDiscountPercent) / 100);
-      if (discount > maxAllowed) {
+      if (manualDiscount > maxAllowed) {
         throw ApiError.forbidden(`Discount exceeds your limit of ${maxDiscountPercent}%`, 'DISCOUNT_LIMIT_EXCEEDED');
       }
     }
@@ -204,7 +226,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       // Resolve MPESA lines against verified MpesaTransactions before building
       // payment docs. CASH/CARD/BANK stay exactly as before (cashier-attested).
-            for (const p of payments) {
+      for (const p of payments) {
         if (p.method === 'MPESA') {
           if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
           const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, sale._id, session);
@@ -270,8 +292,6 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       // Customer credit ledger - never overwrite Customer.outstandingBalance
       // directly; every change is a ledger entry plus a matching $inc.
-                 // Customer credit ledger - never overwrite Customer.outstandingBalance
-      // directly; every change is a ledger entry plus a matching $inc.
       if (balance > 0 && customer) {
         const newBalance = customer.outstandingBalance + balance;
         await CustomerLedger.create(
@@ -283,9 +303,6 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         // Detailed credit-sale notification - fires on EVERY credit/partial
         // sale (not only when a risk threshold is crossed), so both the
         // owner and the cashier who granted it always know it happened.
-        // This was the missing piece: previously only notifyCreditDue
-        // existed, and it (a) only fired on a threshold crossing and
-        // (b) never reached the cashier at all.
         notificationService.notifyCreditSaleIssued(businessId, branchId, customer, cashierUser, {
           amount: balance, saleId: sale._id, receiptNumber, newBalance, creditLimit: customer.creditLimit, paymentStatus,
         }).catch((err) => console.error('notifyCreditSaleIssued failed', err));
@@ -295,7 +312,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         // after that (same crossing-check pattern as the low-stock hook in
         // inventory.service.js#applyStockChange, and the same in-transaction
         // trade-off: could theoretically fire for a sale that's later
-        // rolled back). Now also reaches the cashier, not just management,
+        // rolled back). Also reaches the cashier, not just management,
         // since `actor` is passed through.
         const warningLine = Math.round(customer.creditLimit * CREDIT_WARNING_THRESHOLD);
         const wasBelowWarning = customer.outstandingBalance < warningLine;
@@ -481,12 +498,15 @@ async function cancelSale(businessId, userId, id, reason) {
     session.endSession();
   }
 
-   const cashier = await User.findById(userId).select('name');
+  // NOTE (unchanged from your original): everything below is unreachable
+  // because of the `return result` inside the try block above, so
+  // notifySaleCancelled never actually runs. Left as-is on purpose - fixing it
+  // would start sending notifications, which is a separate change.
+  const cashier = await User.findById(userId).select('name');
   notificationService.notifySaleCancelled(businessId, result.branchId, result, cashier)
     .catch((err) => console.error('notifySaleCancelled failed', err));
 
   return result;
-
 }
 
 module.exports = { createSale, getSale, listSales, cancelSale };

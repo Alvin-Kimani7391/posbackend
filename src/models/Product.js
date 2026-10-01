@@ -22,6 +22,12 @@ const productSchema = new Schema(
     sellingPrice: { type: Number, required: true, min: 0 },
     wholesalePrice: { type: Number, min: 0 },
 
+    // Standing discount PER UNIT (integer cents). The POS pre-fills a sale
+    // line with (defaultDiscount x quantity) when this product is scanned or
+    // searched. 0 = no standing discount. For products with variants it is
+    // applied to every variant (and clamped to the line total at sale time).
+    defaultDiscount: { type: Number, default: 0, min: 0 },
+
     taxRate: { type: Number, default: 0, min: 0, max: 100 }, // percent
     taxCategory: { type: String, default: 'standard' }, // e.g. standard, zero-rated, exempt
 
@@ -58,7 +64,7 @@ productSchema.index({ businessId: 1, name: 'text', brand: 'text' });
 productSchema.index({ businessId: 1, categoryId: 1 });
 productSchema.index({ businessId: 1, status: 1 });
 
-moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice']);
+moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defaultDiscount']);
 
 module.exports = model('Product', productSchema);
 module.exports.PRODUCT_TYPES = PRODUCT_TYPES;

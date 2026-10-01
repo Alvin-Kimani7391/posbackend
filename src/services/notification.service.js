@@ -146,7 +146,7 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
   const base = { type, branchId, sourceUserId: cashier._id, entityType: 'CashShift', entityId: shift._id, data };
 
   let ownExtra = ' Nicely balanced.';
-  if (diff < 0) ownExtra = " Check the cash sales below against what you counted, and flag your manager if you can't account for the difference.";
+  if (diff < 0) ownExtra = " Check the cash sales below against what you counted, and flag your manager if you can't account for the difference. The shortage is now recorded against you until it is cleared.";
   else if (diff > 0) ownExtra = ' Check the cash sales below, and hand the extra over to your manager.';
 
   return notifyActorAndManagement(
@@ -167,6 +167,75 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
         `from cash sales, you counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${denomText}${ownExtra}`,
     }
   );
+}
+
+/**
+ * notifyShortagePayment - a manager/owner recorded a repayment against a
+ * cashier's shortage. Goes to ALL management (so owner + other managers see
+ * who took the money and how much is left) AND to the cashier themselves.
+ * Uses type SHORTAGE_CLEARED when this payment brought the balance to zero,
+ * SHORTAGE_PAYMENT otherwise. Amounts in `data` are integer cents, like every
+ * other notification payload.
+ *
+ * The cashier is the RECIPIENT here, not the actor, so notifyActorAndManagement
+ * (which keys off the actor) isn't used - we skip the cashier copy only if the
+ * cashier is themselves management (they already got the management copy).
+ */
+async function notifyShortagePayment(businessId, shortage, cashier, actor, payment) {
+  const cleared = shortage.status === 'CLEARED';
+  const type = cleared ? 'SHORTAGE_CLEARED' : 'SHORTAGE_PAYMENT';
+  const cashierName = cashier?.name || 'The cashier';
+  const actorName = actor?.name || 'A manager';
+  const methodLabel = String(payment.method || 'CASH').replace(/_/g, ' ').toLowerCase();
+  const refText = payment.reference ? ` (ref: ${payment.reference})` : '';
+
+  const base = {
+    type,
+    branchId: shortage.branchId,
+    sourceUserId: actor?._id,
+    entityType: 'CashierShortage',
+    entityId: shortage._id,
+    data: {
+      shortageId: shortage._id,
+      shiftId: shortage.shiftId?._id || shortage.shiftId,
+      cashierId: shortage.cashierId?._id || shortage.cashierId,
+      cashierName,
+      shortageAmount: shortage.amount,
+      paymentAmount: payment.amount,
+      totalPaid: shortage.amountPaid,
+      balance: shortage.balance,
+      method: payment.method,
+      reference: payment.reference,
+      status: shortage.status,
+      recordedBy: actorName,
+    },
+  };
+
+  const balanceLine = cleared
+    ? 'The shortage is now fully cleared.'
+    : `${formatKES(shortage.balance)} is still outstanding.`;
+
+  const managementPayload = {
+    ...base,
+    title: cleared ? `Shortage cleared - ${cashierName}` : `Shortage payment - ${cashierName}`,
+    message:
+      `${actorName} recorded a ${formatKES(payment.amount)} ${methodLabel} payment from ${cashierName}${refText} ` +
+      `towards a ${formatKES(shortage.amount)} shortage. ${balanceLine}`,
+  };
+
+  const results = await notifyManagement(businessId, managementPayload);
+
+  if (cashier && !MANAGEMENT_ROLES.includes(cashier.role)) {
+    const own = await notifyUser(businessId, cashier._id, {
+      ...base,
+      title: cleared ? 'Your shortage is cleared' : 'Shortage payment received',
+      message:
+        `${actorName} recorded your ${formatKES(payment.amount)} ${methodLabel} payment${refText} ` +
+        `towards the ${formatKES(shortage.amount)} shortage. ${balanceLine}`,
+    });
+    return [...results, own];
+  }
+  return results;
 }
 
 async function notifySaleCancelled(businessId, branchId, sale, cashier) {
@@ -422,6 +491,7 @@ module.exports = {
   notifyActorAndManagement,
   notifyShiftOpened,
   notifyShiftClosed,
+  notifyShortagePayment,
   notifySaleCancelled,
   notifyTransferRequested,
   notifyStockLevel,

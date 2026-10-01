@@ -20,6 +20,7 @@ const PERMISSIONS = Object.freeze([
   'purchases.view', 'purchases.create', 'purchases.receive', 'purchases.pay',
   'registers.view', 'registers.manage',
   'shifts.open', 'shifts.close', 'shifts.view',
+  'shortages.view', 'shortages.manage', // view (own only unless manage) / record repayments & clear
   'devices.view', 'devices.revoke',
   'notifications.view', 'notifications.send',
 ]);
@@ -44,6 +45,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'purchases.view', 'purchases.create', 'purchases.receive', 'purchases.pay',
     'registers.view', 'registers.manage',
     'shifts.open', 'shifts.close', 'shifts.view',
+    'shortages.view', 'shortages.manage',
     'branches.view',
     'audit.view',
     'notifications.view', 'notifications.send',
@@ -59,6 +61,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'customers.view', 'customers.create',
     'registers.view',
     'shifts.open', 'shifts.close', 'shifts.view',
+    'shortages.view', // own records only (controller self-scopes)
     'notifications.view', 'notifications.send',
     'tickets.view', 'tickets.create',
   ],
@@ -80,6 +83,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'suppliers.view',
     'audit.view',
     'etims.view',
+    'shortages.view', // read-only; cannot clear
     'notifications.view',
     'tickets.view', 'tickets.create',
   ],
