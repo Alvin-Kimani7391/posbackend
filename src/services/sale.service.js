@@ -24,6 +24,9 @@ const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange, getStockLevel } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice } = require('./sale-pricing.util');
 
+/** Escapes user text so it is matched literally inside a RegExp. */
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * createSale - see spec section 17 for the step list this follows exactly:
  * validate -> price on the backend only -> validate stock -> compute totals
@@ -410,7 +413,8 @@ async function listSales(businessId, { branchId, cashierId, customerId, shiftId,
     if (to) filter.createdAt.$lte = new Date(to);
   }
   if (search) {
-    filter.$or = [{ receiptNumber: new RegExp(search, 'i') }, { invoiceNumber: new RegExp(search, 'i') }];
+    const rx = new RegExp(escapeRegex(search), 'i');
+    filter.$or = [{ receiptNumber: rx }, { invoiceNumber: rx }];
   }
 
   const [items, total] = await Promise.all([

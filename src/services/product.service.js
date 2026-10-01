@@ -4,6 +4,9 @@ const Category = require('../models/Category');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 
+/** Escapes user text so it is matched literally inside a RegExp (e.g. "TV (43") never throws). */
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 async function assertCategoryBelongsToBusiness(businessId, categoryId) {
   if (!categoryId) return;
   const category = await Category.findOne({ _id: categoryId, businessId });
@@ -30,12 +33,8 @@ async function listProducts(businessId, { page, limit, search, categoryId, statu
   else filter.status = { $ne: 'archived' };
   if (categoryId) filter.categoryId = categoryId;
   if (search) {
-    filter.$or = [
-      { name: new RegExp(search, 'i') },
-      { sku: new RegExp(search, 'i') },
-      { barcode: new RegExp(search, 'i') },
-      { brand: new RegExp(search, 'i') },
-    ];
+    const rx = new RegExp(escapeRegex(search), 'i');
+    filter.$or = [{ name: rx }, { sku: rx }, { barcode: rx }, { brand: rx }];
   }
 
   const [items, total] = await Promise.all([
@@ -125,7 +124,10 @@ async function updateProduct(businessId, userId, id, updates) {
     status: product.status,
   };
 
-  Object.assign(product, updates);
+  // Never write `undefined` into the document: Mongoose treats it as "remove
+  // this field", which would silently wipe saved values (e.g. the discount).
+  const cleaned = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+  Object.assign(product, cleaned);
   product.updatedBy = userId;
 
   // The per-unit discount may never exceed the unit price. Checked on the
@@ -203,7 +205,8 @@ async function updateVariant(businessId, userId, productId, variantId, updates) 
   if (!variant) throw ApiError.notFound('Variant not found');
 
   const oldValue = { sellingPrice: variant.sellingPrice, costPrice: variant.costPrice, status: variant.status };
-  Object.assign(variant, updates);
+  const cleaned = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+  Object.assign(variant, cleaned);
 
   try {
     await variant.save();

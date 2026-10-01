@@ -58,11 +58,19 @@ const createProductSchema = productBase.superRefine((data, ctx) => {
   }
 });
 
-// Partial: an omitted defaultDiscount stays undefined (the default(0) is NOT
-// applied), so editing other fields never silently wipes a saved discount.
+// Partial: an omitted field must stay undefined so editing other fields never
+// silently resets a saved discount or cost price. costPrice and
+// defaultDiscount are re-declared WITHOUT .default(0) so this holds on every
+// Zod version (newer versions can apply defaults inside optional fields).
 // The "discount <= price" rule for updates is enforced in product.service.js
 // against the merged (existing + changed) values.
-const updateProductSchema = productBase.partial().omit({ variants: true });
+const updateProductSchema = productBase
+  .partial()
+  .extend({
+    costPrice: moneyInput.optional(),
+    defaultDiscount: moneyInput.optional(),
+  })
+  .omit({ variants: true });
 
 const listProductsQuery = paginationQuery.extend({
   categoryId: objectId.optional(),
@@ -75,7 +83,8 @@ const barcodeParamSchema = z.object({ barcode: z.string().trim().min(1) });
 const skuParamSchema = z.object({ sku: z.string().trim().min(1) });
 
 const addVariantSchema = variantInput;
-const updateVariantSchema = variantInput.partial();
+// costPrice re-declared without .default(0) so editing a variant's price never resets its cost.
+const updateVariantSchema = variantInput.partial().extend({ costPrice: moneyInput.optional() });
 
 module.exports = {
   createProductSchema,
