@@ -17,6 +17,8 @@ const createPurchaseSchema = z.object({
   branchId: objectId,
   supplierId: objectId,
   invoiceNumber: z.string().trim().optional(),
+  vatMode: z.enum(['NONE', 'INCLUSIVE', 'EXCLUSIVE']).default('NONE'),
+  vatRate: z.coerce.number().min(0).max(100).default(0),
   items: z.array(purchaseItemSchema).min(1),
   purchaseDate: z.coerce.date().optional(),
   notes: z.string().trim().optional(),

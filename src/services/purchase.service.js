@@ -14,6 +14,9 @@ const { applyStockChange } = require('./inventory.service');
  * "authoritative" source to check it against. What's still computed
  * server-side, never trusted raw from the client, is every DERIVED number:
  * each line's total, and the purchase's subtotal/tax/grand total.
+ *
+ * VAT note: the frontend always sends unitCost as the EX-VAT price plus the
+ * taxRate, so the maths below is the same for every VAT mode.
  */
 function computeLine({ quantity, unitCost, discount = 0, taxRate = 0 }) {
   const gross = Math.round(quantity * unitCost);
@@ -22,7 +25,22 @@ function computeLine({ quantity, unitCost, discount = 0, taxRate = 0 }) {
   return { gross, total: net + taxAmount };
 }
 
-async function createPurchase(businessId, branchId, userId, { supplierId, invoiceNumber, items, purchaseDate, notes }) {
+/** Map multer-storage-cloudinary files to the Purchase.attachments shape. */
+const toAttachments = (files = []) =>
+  files.map((f) => ({
+    url: f.path,
+    publicId: f.filename,
+    originalName: f.originalname,
+    size: f.size,
+    mimeType: f.mimetype,
+    resourceType: f.mimetype.startsWith('image/') ? 'image' : 'raw',
+  }));
+
+async function createPurchase(
+  businessId, branchId, userId,
+  { supplierId, invoiceNumber, items, purchaseDate, notes, vatMode = 'NONE', vatRate = 0 },
+  files
+) {
   const supplier = await Supplier.findOne({ _id: supplierId, businessId });
   if (!supplier) throw ApiError.badRequest('Supplier not found', 'INVALID_SUPPLIER');
 
@@ -54,6 +72,8 @@ async function createPurchase(businessId, branchId, userId, { supplierId, invoic
 
   const purchase = await Purchase.create({
     businessId, branchId, supplierId, purchaseNumber, invoiceNumber,
+    vatMode, vatRate: vatMode === 'NONE' ? 0 : vatRate,
+    attachments: toAttachments(files),
     items: builtItems, subtotal, discount: discountTotal, tax: total - subtotal + discountTotal, total,
     amountPaid: 0, balance: total, paymentStatus: 'UNPAID',
     purchaseDate, notes, createdBy: userId,

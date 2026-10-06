@@ -1,17 +1,29 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
+const attachmentSchema = new Schema(
+  {
+    url: { type: String, required: true },
+    publicId: { type: String },
+    originalName: { type: String },
+    size: { type: Number },
+    mimeType: { type: String },
+    resourceType: { type: String, enum: ['image', 'raw'], default: 'raw' },
+  },
+  { _id: false }
+);
+
 const purchaseItemSchema = new Schema(
   {
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant' },
     nameSnapshot: { type: String, required: true },
     quantity: { type: Number, required: true, min: 0.001 },
-    unitCost: { type: Number, required: true }, // integer cents - what was actually paid, entered by the storekeeper
+    unitCost: { type: Number, required: true },
     taxRate: { type: Number, default: 0 },
-    discount: { type: Number, default: 0 }, // integer cents
-    total: { type: Number, required: true }, // integer cents, computed server-side from the above (never trusted raw from the client)
-    receivedQuantity: { type: Number, default: 0 }, // how much of this line has actually been received into stock so far
+    discount: { type: Number, default: 0 },
+    total: { type: Number, required: true },
+    receivedQuantity: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -23,7 +35,11 @@ const purchaseSchema = new Schema(
     supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier', required: true },
 
     purchaseNumber: { type: String, required: true },
-    invoiceNumber: { type: String, trim: true }, // the SUPPLIER's invoice number, not ours
+    invoiceNumber: { type: String, trim: true },
+
+    vatMode: { type: String, enum: ['NONE', 'INCLUSIVE', 'EXCLUSIVE'], default: 'NONE' },
+    vatRate: { type: Number, default: 0 },
+    attachments: [attachmentSchema],
 
     items: { type: [purchaseItemSchema], required: true, validate: (v) => v.length > 0 },
 

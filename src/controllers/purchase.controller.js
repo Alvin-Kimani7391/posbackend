@@ -13,7 +13,9 @@ exports.getOne = catchAsync(async (req, res) => {
 });
 
 exports.create = catchAsync(async (req, res) => {
-  const purchase = await purchaseService.createPurchase(req.businessId, req.body.branchId, req.user._id, req.body);
+  const purchase = await purchaseService.createPurchase(
+    req.businessId, req.body.branchId, req.user._id, req.body, req.files
+  );
   return sendSuccess(res, 201, 'Purchase created', { purchase });
 });
 
