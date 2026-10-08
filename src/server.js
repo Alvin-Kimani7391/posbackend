@@ -11,17 +11,14 @@ async function start() {
   server = app.listen(port, () => {
     logger.info(`POS backend listening on port ${port}`);
   });
-}
-
-
 
   // Background jobs - only after a DB connection exists, and only in the
   // real server process (never when app.js is imported by tests).
   require('./jobs/etimsRetry.job').start();
   require('./jobs/mpesaReconcile.job').start();
-    
-     require('./jobs/billing.job').start();
-     require('./jobs/crmSync.job').start();
+  require('./jobs/billing.job').start();
+  require('./jobs/crmSync.job').start();
+}
 
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully`);

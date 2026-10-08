@@ -59,37 +59,54 @@ mpesaTransactionSchema.index({ businessId: 1, channel: 1, status: 1, amount: 1 }
 mpesaTransactionSchema.index({ businessId: 1, mpesaReceiptNumber: 1 }, { sparse: true }); // "is this receipt code already used?" checks
 
 /* ------------------------------------------------------------------ *
- * CRM capture hook.
- * The moment a successful M-PESA payment is attached to a sale (saleId newly set by
- * mpesa.service.consumeForSale), ask the CRM to link the sale to the customer by phone.
- *  - pre('save') only records whether saleId was just set, so later saves of the same
- *    document (receipt backfill, status polling) never re-trigger it.
- *  - The short delay lets the sale's DB transaction commit first; crm.service retries on its
- *    own and crmSync.job is the safety net, so a miss here is never fatal.
- *  - Everything is wrapped: this hook can never throw into, or slow down, the payment flow.
+ * CRM capture hooks - they only OBSERVE a save; they never change it.
+ *
+ *  1. STK payment turns SUCCESS  -> crm.onPaymentSucceeded: the payer's phone is captured into
+ *     the CRM straight away, even if the cashier has not saved the sale yet.
+ *  2. saleId newly set (consumeForSale) -> crm.onSaleCompleted: backup trigger that links the
+ *     purchase to the customer (sale.service also calls it after the sale commits).
+ *
+ * Safety: every line is wrapped so an error here can NEVER fail or slow a payment save; the real
+ * work happens later on a timer, outside the save (and outside any sale transaction).
  * ------------------------------------------------------------------ */
-mpesaTransactionSchema.pre('save', function markSaleLinked(next) {
-  this.$locals.saleJustLinked = !!this.saleId && this.isModified('saleId');
+mpesaTransactionSchema.pre('save', function crmTrackChanges(next) {
+  try {
+    if (!this.$locals) this.$locals = {};
+    this.$locals.saleJustLinked = !!this.saleId && this.isModified('saleId');
+    this.$locals.justSucceeded = this.status === 'SUCCESS' && (this.isNew || this.isModified('status'));
+  } catch (err) {
+    /* tracking is best-effort - never block the save */
+  }
   next();
 });
 
 mpesaTransactionSchema.post('save', function crmCapture(doc) {
   try {
-    if (!doc.$locals || !doc.$locals.saleJustLinked) return;
-    doc.$locals.saleJustLinked = false;
-    if (doc.status !== 'SUCCESS' || !doc.saleId) return;
+    const flags = doc.$locals || {};
+    const saleLinked = !!flags.saleJustLinked;
+    const succeeded = !!flags.justSucceeded;
+    flags.saleJustLinked = false;
+    flags.justSucceeded = false;
+    if (doc.status !== 'SUCCESS' || (!saleLinked && !succeeded)) return;
 
     const businessId = doc.businessId;
+    const txnId = doc._id;
     const saleId = doc.saleId;
-    const t = setTimeout(() => {
-      try {
-        const crm = require('../services/crm.service');
-        if (crm && typeof crm.onSaleCompleted === 'function') crm.onSaleCompleted(businessId, saleId);
-      } catch (err) {
-        console.error('[crm] capture hook failed', err.message);
-      }
-    }, 3000);
-    if (t.unref) t.unref();
+    const isManual = doc.channel === 'MANUAL';
+
+    const later = (ms, fn) => {
+      const t = setTimeout(() => {
+        try {
+          fn(require('../services/crm.service'));
+        } catch (err) {
+          console.error('[crm] capture hook failed', err.message);
+        }
+      }, ms);
+      if (t.unref) t.unref();
+    };
+
+    if (succeeded && !isManual) later(500, (crm) => crm.onPaymentSucceeded && crm.onPaymentSucceeded(businessId, txnId));
+    if (saleLinked && saleId) later(3000, (crm) => crm.onSaleCompleted && crm.onSaleCompleted(businessId, saleId));
   } catch (err) {
     console.error('[crm] capture hook error', err.message);
   }

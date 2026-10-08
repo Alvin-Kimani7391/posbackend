@@ -66,6 +66,7 @@ async function getSettings(businessId) {
   } catch (e) {
     doc = await CrmSettings.findOne({ businessId }).lean();
   }
+  if (!doc) throw new Error('CRM settings could not be loaded');
   settingsCache.set(key, { at: Date.now(), value: doc });
   return doc;
 }
@@ -87,24 +88,76 @@ async function updateSettings(businessId, patch) {
 /* ------------------------- customer capture by phone ------------------------- */
 const isDup = (e) => e && (e.code === 11000 || e.statusCode === 409);
 
-async function ensureCustomerByPhone(businessId, phoneNorm, { name, source = 'mpesa' } = {}) {
-  const found = await Customer.findOne({ businessId, phoneNormalized: phoneNorm }).select('_id').lean();
-  if (found) return found._id;
-  const local = toLocalPhone(phoneNorm);
+/** Matches "0712345678", "+254 712 345 678", "0712-345-678", "712345678" ... for the same 9 digits. */
+function legacyPhoneRegex(phoneNorm) {
+  const body = phoneNorm.slice(-9).split('').join('[\\s.\\-]*');
+  return new RegExp(`^\\s*(?:\\+?254|0)?[\\s.\\-]*${body}\\s*$`);
+}
+
+/**
+ * Finds the customer who owns this phone. Customers created BEFORE the CRM existed have a `phone`
+ * but no `phoneNormalized`, so a normalised-only lookup would miss them and create a duplicate;
+ * we fall back to a format-tolerant match and stamp phoneNormalized on the hit.
+ */
+async function findCustomerByPhone(businessId, phoneNorm) {
+  const hit = await Customer.findOne({ businessId, phoneNormalized: phoneNorm }).select('_id').lean();
+  if (hit) return hit._id;
+
+  const legacy = await Customer.findOne({ businessId, phoneNormalized: { $exists: false }, phone: legacyPhoneRegex(phoneNorm) })
+    .sort({ createdAt: 1 }).select('_id').lean();
+  if (!legacy) return null;
   try {
-    const created = await Customer.create({
-      businessId,
-      name: (name && String(name).trim()) || local,
-      phone: local,
-      source,
-    });
-    return created._id;
+    await Customer.updateOne({ _id: legacy._id }, { $set: { phoneNormalized: phoneNorm } }, { timestamps: false });
   } catch (e) {
-    if (isDup(e)) {
-      const again = await Customer.findOne({ businessId, phoneNormalized: phoneNorm }).select('_id').lean();
-      if (again) return again._id;
+    if (!isDup(e)) console.error('[crm] could not stamp phoneNormalized', e.message);
+  }
+  return legacy._id;
+}
+
+/**
+ * Returns the customer id for this phone, creating the customer if needed.
+ * NOTE the second attempt: the original Customer index { businessId, customerNumber } is
+ * `unique + sparse`, but a COMPOUND sparse index still indexes documents that lack customerNumber
+ * (businessId is present), so a second customer without a number is rejected with E11000.
+ * Auto-captured customers have no number, so on that specific error we retry with a generated one.
+ */
+async function ensureCustomerByPhone(businessId, phoneNorm, { name, source = 'mpesa' } = {}) {
+  const existing = await findCustomerByPhone(businessId, phoneNorm);
+  if (existing) return existing;
+
+  const local = toLocalPhone(phoneNorm);
+  const doc = { businessId, name: (name && String(name).trim()) || local, phone: local, source };
+  const attempts = [doc, { ...doc, customerNumber: `AUTO-${phoneNorm.slice(-9)}` }];
+
+  let lastErr;
+  for (const d of attempts) {
+    try {
+      const created = await Customer.create(d);
+      return created._id;
+    } catch (e) {
+      lastErr = e;
+      if (isDup(e)) {
+        const again = await findCustomerByPhone(businessId, phoneNorm); // lost a race: someone just created them
+        if (again) return again;
+      }
+      const numberCollision = e && e.code === 11000 && /customerNumber/.test(String(e.message));
+      if (!numberCollision) throw e;
     }
-    throw e;
+  }
+  throw lastErr;
+}
+
+/** A cashier picked a customer who has no phone, and the payer's phone is known: remember it (never overrides). */
+async function fillMissingPhone(businessId, customerId, phoneNorm) {
+  try {
+    if (await Customer.exists({ businessId, phoneNormalized: phoneNorm })) return;
+    await Customer.updateOne(
+      { _id: customerId, businessId, $or: [{ phone: { $exists: false } }, { phone: '' }, { phone: null }] },
+      { $set: { phone: toLocalPhone(phoneNorm), phoneNormalized: phoneNorm } },
+      { timestamps: false }
+    );
+  } catch (e) {
+    console.error('[crm] could not add phone to customer', e.message);
   }
 }
 
@@ -130,7 +183,8 @@ async function loadMpesaContext(businessId, saleIds) {
 
 /* ------------------------------ sale -> purchase ------------------------------ */
 async function syncSaleBatch(businessId, sales, settings) {
-  if (!sales.length) return { linked: 0, skipped: 0 };
+  const result = { linked: 0, skipped: 0, errors: [] };
+  if (!sales.length) return result;
   const saleIds = sales.map((s) => s._id);
 
   const [existing, pays, refunds, mpesa] = await Promise.all([
@@ -160,88 +214,99 @@ async function syncSaleBatch(businessId, sales, settings) {
   sales.forEach((s) => saleItems(s).forEach((i) => { const p = itemProductId(i); if (p) productIds.add(String(p)); }));
   const catByProduct = new Map();
   if (productIds.size) {
-    const products = await Product.find({ _id: { $in: [...productIds] } }).select('categoryId category').lean();
-    const catIds = [...new Set(products.map((p) => String(p.categoryId || p.category || '')).filter(Boolean))];
-    const cats = catIds.length ? await Category.find({ _id: { $in: catIds } }).select('name').lean() : [];
-    const catName = new Map(cats.map((c) => [String(c._id), c.name]));
-    products.forEach((p) => catByProduct.set(String(p._id), catName.get(String(p.categoryId || p.category || '')) || 'Uncategorised'));
+    try {
+      const products = await Product.find({ _id: { $in: [...productIds] } }).select('categoryId category').lean();
+      const catIds = [...new Set(products.map((p) => String(p.categoryId || p.category || '')).filter(Boolean))];
+      const cats = catIds.length ? await Category.find({ _id: { $in: catIds } }).select('name').lean() : [];
+      const catName = new Map(cats.map((c) => [String(c._id), c.name]));
+      products.forEach((p) => catByProduct.set(String(p._id), catName.get(String(p.categoryId || p.category || '')) || 'Uncategorised'));
+    } catch (e) {
+      // categories are a nice-to-have: never let them block capturing the customer
+      console.error('[crm] category lookup failed (continuing as Uncategorised)', e.message);
+    }
   }
 
   const affected = new Set();
   const ops = [];
-  let linked = 0;
-  let skipped = 0;
 
   for (const s of sales) {
     const sid = String(s._id);
-    const prior = existingBySale.get(sid);
-    const excluded = SALE_EXCLUDED.includes(saleStatus(s));
-    if (excluded && !prior) { skipped += 1; continue; }
+    try {
+      const prior = existingBySale.get(sid);
+      const excluded = SALE_EXCLUDED.includes(saleStatus(s));
+      if (excluded && !prior) { result.skipped += 1; continue; }
 
-    // who bought?
-    let customerId = s.customerId || (prior && prior.customerId) || null;
-    const mp = mpesa.get(sid);
-    let linkedBy = 'sale';
-    if (!s.customerId && mp && mp.phone) {
-      customerId = await ensureCustomerByPhone(businessId, mp.phone, { name: mp.name, source: 'mpesa' });
-      linkedBy = 'mpesa';
-    }
-    if (!customerId) { skipped += 1; continue; }
+      // who bought?
+      let customerId = s.customerId || (prior && prior.customerId) || null;
+      const mp = mpesa.get(sid);
+      let linkedBy = 'sale';
+      if (!s.customerId && mp && mp.phone) {
+        customerId = await ensureCustomerByPhone(businessId, mp.phone, { name: mp.name, source: 'mpesa' });
+        linkedBy = 'mpesa';
+      } else if (s.customerId && mp && mp.phone) {
+        await fillMissingPhone(businessId, s.customerId, mp.phone);
+      }
+      if (!customerId) { result.skipped += 1; continue; }
 
-    if (prior && String(prior.customerId) !== String(customerId)) affected.add(String(prior.customerId));
-    affected.add(String(customerId));
+      if (prior && String(prior.customerId) !== String(customerId)) affected.add(String(prior.customerId));
+      affected.add(String(customerId));
 
-    const catAgg = new Map();
-    let itemCount = 0;
-    saleItems(s).forEach((i) => {
-      const cat = catByProduct.get(String(itemProductId(i))) || 'Uncategorised';
-      catAgg.set(cat, (catAgg.get(cat) || 0) + itemAmount(i));
-      itemCount += itemQty(i);
-    });
+      const catAgg = new Map();
+      let itemCount = 0;
+      saleItems(s).forEach((i) => {
+        const cat = catByProduct.get(String(itemProductId(i))) || 'Uncategorised';
+        catAgg.set(cat, (catAgg.get(cat) || 0) + itemAmount(i));
+        itemCount += itemQty(i);
+      });
 
-    const methods = [...(methodsBySale.get(sid) || [])];
-    if (mp && !methods.includes('MPESA')) methods.push('MPESA');
+      const methods = [...(methodsBySale.get(sid) || [])];
+      if (mp && !methods.includes('MPESA')) methods.push('MPESA');
 
-    const total = saleTotal(s);
-    // Refund docs and the sale's own refundedQuantity can both describe the same refund; take the larger, never more than the sale.
-    const refunded = Math.min(Math.max(refundBySale.get(sid) || 0, refundFromItems(s)), total);
+      const total = saleTotal(s);
+      // Refund docs and the sale's own refundedQuantity can both describe the same refund; take the larger, never more than the sale.
+      const refunded = Math.min(Math.max(refundBySale.get(sid) || 0, refundFromItems(s)), total);
 
-    ops.push({
-      updateOne: {
-        filter: { businessId, saleId: s._id },
-        update: {
-          $set: {
-            businessId,
-            customerId,
-            saleId: s._id,
-            branchId: s.branchId,
-            saleNumber: saleNo(s),
-            amountCents: total,
-            refundedCents: refunded,
-            itemCount,
-            categories: [...catAgg].map(([name, amountCents]) => ({ name, amountCents })),
-            paymentMethods: methods,
-            mpesaReceipt: mp && mp.receipt,
-            linkedBy,
-            purchasedAt: saleAt(s),
-            voided: excluded,
+      ops.push({
+        updateOne: {
+          filter: { businessId, saleId: s._id },
+          update: {
+            $set: {
+              businessId,
+              customerId,
+              saleId: s._id,
+              branchId: s.branchId,
+              saleNumber: saleNo(s),
+              amountCents: total,
+              refundedCents: refunded,
+              itemCount,
+              categories: [...catAgg].map(([name, amountCents]) => ({ name, amountCents })),
+              paymentMethods: methods,
+              mpesaReceipt: mp && mp.receipt,
+              linkedBy,
+              purchasedAt: saleAt(s),
+              voided: excluded,
+            },
           },
+          upsert: true,
         },
-        upsert: true,
-      },
-    });
-    linked += 1;
+      });
+      result.linked += 1;
+    } catch (e) {
+      // one bad sale must not stop the rest of the batch, and must never be silent
+      console.error('[crm] sale capture failed', sid, e.stack || e.message);
+      result.errors.push(`${sid}: ${e.message}`);
+    }
   }
 
   if (ops.length) await CustomerPurchase.bulkWrite(ops, { ordered: false });
   if (affected.size) await recomputeCustomers(businessId, [...affected], settings);
-  return { linked, skipped };
+  return result;
 }
 
 /**
  * Hook: called (fire-and-forget) right after a sale is saved - from sale.service.createSale after
  * the transaction commits, and from the MpesaTransaction model when a payment is attached to a sale.
- * Never throws into the caller. Retries a few times in case the sale is not visible yet, and
+ * Never throws into the caller. Retries a few times (sale not visible yet / transient error) and
  * ignores a second call for the same sale within a minute (both hooks may fire).
  */
 const lastCapture = new Map();
@@ -262,13 +327,38 @@ function onSaleCompleted(businessId, saleId, attempt = 0) {
       const sale = await Sale.findOne({ _id: saleId, businessId }).lean();
       if (!sale) throw new Error('sale not visible yet');
       const r = await syncSaleBatch(businessId, [sale], settings);
-      console.log('[crm] captured sale', key, JSON.stringify(r));
+      if (r.errors.length) throw new Error(r.errors[0]);
+      console.log('[crm] captured sale', key, JSON.stringify({ linked: r.linked, skipped: r.skipped }));
     } catch (e) {
-      console.error('[crm] capture attempt', attempt, 'failed', key, e.message);
+      console.error('[crm] capture attempt', attempt, 'failed', key, e.stack || e.message);
       if (attempt < delays.length - 1) onSaleCompleted(businessId, saleId, attempt + 1);
     }
   }, delays[attempt]);
   if (t.unref) t.unref();
+}
+
+/**
+ * Hook: an M-PESA STK payment just turned SUCCESS. Capture the payer's phone right away, even
+ * before the cashier finishes saving the sale (the purchase itself is linked later by onSaleCompleted).
+ */
+function onPaymentSucceeded(businessId, txnId) {
+  setImmediate(async () => {
+    try {
+      const txn = await MpesaTransaction.findOne({ _id: txnId, businessId }).select('phone status matchedInboundId').lean();
+      if (!txn || txn.status !== 'SUCCESS') return;
+      let phone = normalizePhone(txn.phone);
+      let name;
+      if (txn.matchedInboundId) {
+        const ib = await MpesaInboundPayment.findById(txn.matchedInboundId).select('payerPhone payerName').lean();
+        phone = phone || normalizePhone(ib && ib.payerPhone);
+        name = ib && ib.payerName;
+      }
+      if (!phone) return;
+      await ensureCustomerByPhone(businessId, phone, { name, source: 'mpesa' });
+    } catch (e) {
+      console.error('[crm] payment capture failed', String(txnId), e.stack || e.message);
+    }
+  });
 }
 
 /** Incremental safety-net sync: everything touched since the cursor (5-minute overlap). */
@@ -293,6 +383,41 @@ async function syncRecent(businessId, fallbackSince) {
     settingsCache.delete(String(businessId));
   }
   return total;
+}
+
+/**
+ * Manual capture + step-by-step report for ONE sale (POST /crm/sales/:id/capture).
+ * Safe to run repeatedly: it is the same idempotent sync the automatic hooks use.
+ */
+async function diagnoseSale(businessId, saleId) {
+  const steps = [];
+  const step = (name, ok, detail) => steps.push({ name, ok: !!ok, detail });
+
+  if (!mongoose.isValidObjectId(saleId)) throw ApiError.badRequest('Invalid sale id');
+  const sale = await Sale.findOne({ _id: saleId, businessId }).lean();
+  step('Sale found', sale, sale
+    ? { status: saleStatus(sale), total: saleTotal(sale), customerId: sale.customerId || null, lines: saleItems(sale).length }
+    : 'No sale with this id in this business');
+  if (!sale) return { steps };
+
+  const txns = await MpesaTransaction.find({ businessId, saleId: sale._id })
+    .select('reference status channel phone mpesaReceiptNumber').lean();
+  step('M-PESA payment attached to the sale', txns.length, txns.length ? txns : 'None - cash/card/credit sales have no phone to capture unless a customer was picked');
+
+  const ctx = (await loadMpesaContext(businessId, [sale._id])).get(String(sale._id));
+  step('Payer phone is a valid Kenyan number', (ctx && ctx.phone) || sale.customerId, ctx ? { phone: ctx.phone || null } : 'No successful M-PESA payment found');
+
+  try {
+    const settings = await getSettings(businessId);
+    const r = await syncSaleBatch(businessId, [sale], settings);
+    step('Capture ran', r.linked > 0 && !r.errors.length, r);
+  } catch (e) {
+    step('Capture ran', false, { error: e.message, where: String(e.stack || '').split('\n').slice(0, 5) });
+  }
+
+  const purchase = await CustomerPurchase.findOne({ businessId, saleId: sale._id }).lean();
+  step('Purchase recorded against a customer', purchase, purchase ? { customerId: purchase.customerId, linkedBy: purchase.linkedBy } : null);
+  return { steps };
 }
 
 /* ------------------------------ recompute stats ------------------------------ */
@@ -699,7 +824,7 @@ async function getOverview(businessId) {
 
 module.exports = {
   getSettings, updateSettings,
-  onSaleCompleted, syncSaleBatch, syncRecent, recomputeCustomers, refreshLifecycles,
+  onSaleCompleted, onPaymentSucceeded, syncSaleBatch, syncRecent, diagnoseSale, recomputeCustomers, refreshLifecycles,
   startRebuild, getRebuildStatus,
   listSegments, previewSegment, createSegment, updateSegment, deleteSegment, getSegmentAudience, resolveSegment, customerFilter,
   listCustomers, getProfile, updateTags, getOverview,
