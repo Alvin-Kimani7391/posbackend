@@ -5,12 +5,25 @@ const Payment = require('../models/Payment');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
+const { normalizePhone } = require('../utils/phone');
+const { escapeRegex } = require('./crm.engine');
 const notificationService = require('./notification.service');
+
+/** Throws a clear 409 when another customer in this business already owns this phone number. */
+async function assertPhoneFree(businessId, phone, excludeId) {
+  const n = normalizePhone(phone);
+  if (!n) return;
+  const q = { businessId, phoneNormalized: n };
+  if (excludeId) q._id = { $ne: excludeId };
+  const dup = await Customer.findOne(q).select('name');
+  if (dup) throw ApiError.conflict(`${dup.name} already uses this phone number`, 'CUSTOMER_PHONE_EXISTS');
+}
 
 async function listCustomers(businessId, { page, limit, search }) {
   const filter = { businessId };
   if (search) {
-    filter.$or = [{ name: new RegExp(search, 'i') }, { phone: new RegExp(search, 'i') }, { customerNumber: new RegExp(search, 'i') }];
+    const rx = new RegExp(escapeRegex(search), 'i');
+    filter.$or = [{ name: rx }, { phone: rx }, { phoneNormalized: rx }, { customerNumber: rx }];
   }
 
   const [items, total] = await Promise.all([
@@ -27,7 +40,8 @@ async function getCustomer(businessId, id) {
 }
 
 async function createCustomer(businessId, userId, data) {
-  const customer = await Customer.create({ ...data, businessId });
+  if (data.phone) await assertPhoneFree(businessId, data.phone);
+  const customer = await Customer.create({ ...data, businessId, source: 'manual' });
   await AuditLog.create({ businessId, userId, action: 'customer.create', entityType: 'Customer', entityId: customer._id, newValue: { name: customer.name, phone: customer.phone } });
   return customer;
 }
@@ -39,8 +53,11 @@ async function updateCustomer(businessId, userId, id, updates) {
   // creditLimit/outstandingBalance are never edited directly here -
   // outstandingBalance only ever changes via a ledger entry, and
   // creditLimit changes go through a dedicated action so they're audited
-  // distinctly from a normal profile edit.
-  const { creditLimit, outstandingBalance, ...safeUpdates } = updates;
+  // distinctly from a normal profile edit. crm/phoneNormalized/source are CRM-owned.
+  const { creditLimit, outstandingBalance, crm, phoneNormalized, source, ...safeUpdates } = updates;
+  if (safeUpdates.phone && safeUpdates.phone !== customer.phone) {
+    await assertPhoneFree(businessId, safeUpdates.phone, customer._id);
+  }
   Object.assign(customer, safeUpdates);
   await customer.save();
 

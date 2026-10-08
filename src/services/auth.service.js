@@ -220,6 +220,9 @@ async function changePassword(user, { currentPassword, newPassword }) {
   await fullUser.save();
 }
 
+   const billing = require('./billing.service');
+   await billing.startSubscription(business._id).catch((e) => console.error('[billing] start failed', e.message));
+
 module.exports = {
   registerBusinessOwner,
   loginWithPassword,

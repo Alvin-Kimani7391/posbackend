@@ -23,6 +23,7 @@ const PERMISSIONS = Object.freeze([
   'shortages.view', 'shortages.manage', // view (own only unless manage) / record repayments & clear
   'devices.view', 'devices.revoke',
   'notifications.view', 'notifications.send',
+  'billing.view', 'billing.pay',
 ]);
 
 // Default permission sets granted to each role. OWNER always gets everything
@@ -50,6 +51,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'audit.view',
     'notifications.view', 'notifications.send',
     'tickets.view', 'tickets.create',
+    'billing.view', 'billing.pay'
   ],
   [ROLES.CASHIER]: [
     'categories.view',

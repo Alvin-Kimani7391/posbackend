@@ -1,5 +1,10 @@
 const router = require('express').Router();
 
+router.use(require('../../middleware/subscriptionGate')); // <-- first (adjust path to where you keep middleware)
+
+// ...all your existing router.use(...) lines...
+router.use('/billing', require('../billing.routes')); // <-- add anywhere in the list
+
 router.use('/auth', require('../auth.routes'));
 router.use('/business', require('../business.routes'));
 router.use('/branches', require('../branch.routes'));
@@ -29,5 +34,9 @@ router.use('/notifications', require('../notification.routes'));
 router.use('/tickets', require('../ticket.routes'));
 router.use('/announcements', require('../announcement.routes')); // NEW
 router.use('/admin', require('../admin.routes'));
+router.use('/crm', require('../crm.routes'));
+
+// ...all your existing router.use(...) lines...
+router.use('/billing', require('../billing.routes')); // <-- add anywhere in the list
 
 module.exports = router;

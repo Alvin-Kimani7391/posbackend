@@ -16,6 +16,8 @@ const av = require('../validators/announcement.validator');
 
 router.use(authenticate, requireSuperAdmin);
 
+router.use('/billing', require('./billing.admin.routes'));
+
 router.get('/overview', validate({ query: v.overviewQuery }), controller.overview);
 
 router.get('/businesses', validate({ query: v.businessesQuery }), controller.listBusinesses);

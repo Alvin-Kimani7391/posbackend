@@ -19,7 +19,9 @@ async function start() {
   // real server process (never when app.js is imported by tests).
   require('./jobs/etimsRetry.job').start();
   require('./jobs/mpesaReconcile.job').start();
-
+    
+     require('./jobs/billing.job').start();
+     require('./jobs/crmSync.job').start();
 
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully`);

@@ -58,4 +58,15 @@ mpesaTransactionSchema.index({ status: 1, createdAt: 1 }); // for the reconcilia
 mpesaTransactionSchema.index({ businessId: 1, channel: 1, status: 1, amount: 1 }); // manual matching lookups
 mpesaTransactionSchema.index({ businessId: 1, mpesaReceiptNumber: 1 }, { sparse: true }); // "is this receipt code already used?" checks
 
+// CRM: the moment an M-PESA payment is attached to a sale, link it to the customer.
+// The 4s delay lets the sale's DB transaction commit; crmSync.job is the safety net.
+mpesaTransactionSchema.post('save', function crmCapture(doc) {
+  if (!doc.saleId || doc.status !== 'SUCCESS') return;
+  const t = setTimeout(() => {
+    try { require('../services/crm.service').onSaleCompleted(doc.businessId, doc.saleId); }
+    catch (err) { console.error('[crm] capture hook failed', err.message); }
+  }, 4000);
+  if (t.unref) t.unref();
+});
+
 module.exports = model('MpesaTransaction', mpesaTransactionSchema);
