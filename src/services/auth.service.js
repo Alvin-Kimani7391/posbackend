@@ -7,6 +7,7 @@ const Branch = require('../models/Branch');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
+const billing = require('./billing.service');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
 
 async function registerBusinessOwner({ businessName, ownerName, phone, email, password }) {
@@ -56,6 +57,10 @@ async function registerBusinessOwner({ businessName, ownerName, phone, email, pa
         { session }
       );
     });
+
+    // Start billing after the business and owner have been created.
+    await billing.startSubscription(business._id)
+      .catch((e) => console.error('[billing] start failed', e.message));
 
     return { business, user };
   } finally {
@@ -220,8 +225,8 @@ async function changePassword(user, { currentPassword, newPassword }) {
   await fullUser.save();
 }
 
-   const billing = require('./billing.service');
-   await billing.startSubscription(business._id).catch((e) => console.error('[billing] start failed', e.message));
+   
+  
 
 module.exports = {
   registerBusinessOwner,
