@@ -372,6 +372,17 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       result = { sale, receipt, payments: createdPayments };
     });
+
+    // CRM: the sale is now COMMITTED. Ask the CRM to link it to a customer (by the picked
+    // customer, or by the phone of the M-PESA payment). Fire-and-forget and fully guarded:
+    // it can never delay, fail or roll back a sale. Sales with no customer and no M-PESA
+    // phone are simply skipped inside the CRM. crmSync.job is the safety net.
+    try {
+      require('./crm.service').onSaleCompleted(businessId, result.sale._id);
+    } catch (crmErr) {
+      console.error('[crm] capture hook failed', crmErr.message);
+    }
+
     return result;
   } finally {
     session.endSession();

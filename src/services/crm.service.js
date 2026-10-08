@@ -5,7 +5,6 @@ const CustomerSegment = require('../models/CustomerSegment');
 const CrmSettings = require('../models/CrmSettings');
 const Sale = require('../models/Sale');
 const Payment = require('../models/Payment');
-const Refund = require('../models/Refund');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
 const MpesaTransaction = require('../models/MpesaTransaction');
@@ -13,6 +12,11 @@ const MpesaInboundPayment = require('../models/MpesaInboundPayment');
 const ApiError = require('../utils/ApiError');
 const { normalizePhone, toLocalPhone } = require('../utils/phone');
 const engine = require('./crm.engine');
+
+// Refund is optional here: if the model is missing/renamed the CRM still works
+// (refunds are then taken from Sale.items[].refundedQuantity alone).
+let Refund = null;
+try { Refund = require('../models/Refund'); } catch (e) { Refund = null; }
 
 const { DAY } = engine;
 const oid = (v) => new mongoose.Types.ObjectId(String(v));
@@ -24,17 +28,26 @@ const TZ = 'Africa/Nairobi';
    All amounts are read as raw integer cents (we query with .lean()).
    ========================================================================== */
 const SALE_EXCLUDED = ['DRAFT', 'HELD', 'PENDING', 'VOIDED', 'VOID', 'CANCELLED', 'CANCELED'];
-const saleStatus = (s) => String(s.status || '').toUpperCase();
+const saleStatus = (s) => String(s.saleStatus || s.status || '').toUpperCase();
 const saleTotal = (s) => Number(s.grandTotal ?? s.totalAmount ?? s.total ?? 0) || 0;
 const saleAt = (s) => s.completedAt || s.soldAt || s.createdAt;
 const saleNo = (s) => s.saleNumber || s.receiptNumber || s.invoiceNumber || s.number || undefined;
 const saleItems = (s) => s.items || s.lines || [];
 const itemProductId = (i) => i.productId || i.product;
-const itemName = (i) => i.name || i.productName;
 const itemAmount = (i) =>
   Number(i.lineTotal ?? i.total ?? i.subtotal ?? (Number(i.unitPrice ?? i.price ?? 0) * Number(i.quantity ?? i.qty ?? 1))) || 0;
 const itemQty = (i) => Number(i.quantity ?? i.qty ?? 1) || 1;
 const refundAmount = (r) => Number(r.totalAmount ?? r.amount ?? r.total ?? 0) || 0;
+const REFUND_NOT_COUNTED = ['PENDING', 'PENDING_APPROVAL', 'REJECTED', 'DECLINED', 'CANCELLED', 'CANCELED'];
+
+/** Refunded value implied by the sale's own line items (refundedQuantity / quantity x line total). */
+function refundFromItems(sale) {
+  return saleItems(sale).reduce((sum, i) => {
+    const rq = Number(i.refundedQuantity || 0);
+    if (rq <= 0) return sum;
+    return sum + Math.round(itemAmount(i) * Math.min(rq / itemQty(i), 1));
+  }, 0);
+}
 
 /* ------------------------------- settings ------------------------------- */
 const settingsCache = new Map();
@@ -123,7 +136,9 @@ async function syncSaleBatch(businessId, sales, settings) {
   const [existing, pays, refunds, mpesa] = await Promise.all([
     CustomerPurchase.find({ businessId, saleId: { $in: saleIds } }).select('saleId customerId').lean(),
     Payment.find({ businessId, saleId: { $in: saleIds } }).select('saleId method').lean(),
-    Refund.find({ businessId, saleId: { $in: saleIds } }).lean(),
+    Refund
+      ? Refund.find({ businessId, saleId: { $in: saleIds }, status: { $nin: REFUND_NOT_COUNTED } }).lean().catch(() => [])
+      : Promise.resolve([]),
     loadMpesaContext(businessId, saleIds),
   ]);
   const existingBySale = new Map(existing.map((e) => [String(e.saleId), e]));
@@ -187,6 +202,10 @@ async function syncSaleBatch(businessId, sales, settings) {
     const methods = [...(methodsBySale.get(sid) || [])];
     if (mp && !methods.includes('MPESA')) methods.push('MPESA');
 
+    const total = saleTotal(s);
+    // Refund docs and the sale's own refundedQuantity can both describe the same refund; take the larger, never more than the sale.
+    const refunded = Math.min(Math.max(refundBySale.get(sid) || 0, refundFromItems(s)), total);
+
     ops.push({
       updateOne: {
         filter: { businessId, saleId: s._id },
@@ -197,8 +216,8 @@ async function syncSaleBatch(businessId, sales, settings) {
             saleId: s._id,
             branchId: s.branchId,
             saleNumber: saleNo(s),
-            amountCents: saleTotal(s),
-            refundedCents: refundBySale.get(sid) || 0,
+            amountCents: total,
+            refundedCents: refunded,
             itemCount,
             categories: [...catAgg].map(([name, amountCents]) => ({ name, amountCents })),
             paymentMethods: methods,
@@ -219,35 +238,60 @@ async function syncSaleBatch(businessId, sales, settings) {
   return { linked, skipped };
 }
 
-/** Hook: call (fire-and-forget) right after a sale completes. Never throws into the sale flow. */
-function onSaleCompleted(businessId, saleId) {
-  setImmediate(async () => {
+/**
+ * Hook: called (fire-and-forget) right after a sale is saved - from sale.service.createSale after
+ * the transaction commits, and from the MpesaTransaction model when a payment is attached to a sale.
+ * Never throws into the caller. Retries a few times in case the sale is not visible yet, and
+ * ignores a second call for the same sale within a minute (both hooks may fire).
+ */
+const lastCapture = new Map();
+function onSaleCompleted(businessId, saleId, attempt = 0) {
+  const key = String(saleId);
+  if (attempt === 0) {
+    const now = Date.now();
+    if (now - (lastCapture.get(key) || 0) < 60 * 1000) return;
+    lastCapture.set(key, now);
+    if (lastCapture.size > 2000) {
+      for (const [k, at] of lastCapture) if (now - at > 5 * 60 * 1000) lastCapture.delete(k);
+    }
+  }
+  const delays = [1500, 10000, 30000, 90000];
+  const t = setTimeout(async () => {
     try {
       const settings = await getSettings(businessId);
       const sale = await Sale.findOne({ _id: saleId, businessId }).lean();
-      if (sale) await syncSaleBatch(businessId, [sale], settings);
+      if (!sale) throw new Error('sale not visible yet');
+      const r = await syncSaleBatch(businessId, [sale], settings);
+      console.log('[crm] captured sale', key, JSON.stringify(r));
     } catch (e) {
-      console.error('[crm] onSaleCompleted failed', String(saleId), e.message);
+      console.error('[crm] capture attempt', attempt, 'failed', key, e.message);
+      if (attempt < delays.length - 1) onSaleCompleted(businessId, saleId, attempt + 1);
     }
-  });
+  }, delays[attempt]);
+  if (t.unref) t.unref();
 }
 
 /** Incremental safety-net sync: everything touched since the cursor (5-minute overlap). */
 async function syncRecent(businessId, fallbackSince) {
   const settings = await getSettings(businessId);
-  const since = new Date((settings.syncCursor ? settings.syncCursor.getTime() : fallbackSince.getTime()) - 5 * 60 * 1000);
-  let cursor = settings.syncCursor || fallbackSince;
+  const start = settings.syncCursor ? new Date(settings.syncCursor) : fallbackSince;
+  let cursor = start;
+  let since = new Date(start.getTime() - 5 * 60 * 1000);
   let total = 0;
   for (;;) {
     const sales = await Sale.find({ businessId, updatedAt: { $gt: since } }).sort({ updatedAt: 1 }).limit(200).lean();
     if (!sales.length) break;
     const r = await syncSaleBatch(businessId, sales, settings);
     total += r.linked;
-    cursor = sales[sales.length - 1].updatedAt;
-    if (sales.length < 200) break;
-    since.setTime(new Date(cursor).getTime());
+    const lastAt = new Date(sales[sales.length - 1].updatedAt);
+    if (lastAt > cursor) cursor = lastAt;
+    if (sales.length < 200 || lastAt.getTime() <= since.getTime()) break; // done, or no forward progress
+    since = lastAt;
   }
-  await CrmSettings.updateOne({ businessId }, { $set: { syncCursor: cursor } });
+  if (cursor.getTime() !== start.getTime() || !settings.syncCursor) {
+    await CrmSettings.updateOne({ businessId }, { $set: { syncCursor: cursor } });
+    settingsCache.delete(String(businessId));
+  }
   return total;
 }
 
@@ -432,11 +476,12 @@ async function resolveSegment(businessId, segmentId) {
   const settings = await getSettings(businessId);
   if (String(segmentId).startsWith('sys:')) {
     const seg = engine.systemSegments(settings).find((s) => s.id === segmentId);
-    if (!seg) throw new ApiError(404, 'Segment not found');
+    if (!seg) throw ApiError.notFound('Segment not found');
     return seg;
   }
+  if (!mongoose.isValidObjectId(segmentId)) throw ApiError.notFound('Segment not found');
   const seg = await CustomerSegment.findOne({ _id: segmentId, businessId }).lean();
-  if (!seg) throw new ApiError(404, 'Segment not found');
+  if (!seg) throw ApiError.notFound('Segment not found');
   return seg;
 }
 
@@ -481,7 +526,7 @@ async function createSegment(businessId, userId, body) {
   try {
     return await CustomerSegment.create({ ...body, businessId, createdBy: userId, memberCount });
   } catch (e) {
-    if (e.code === 11000) throw new ApiError(409, 'You already have a segment with that name');
+    if (e.code === 11000) throw ApiError.conflict('You already have a segment with that name');
     throw e;
   }
 }
@@ -490,17 +535,17 @@ async function updateSegment(businessId, id, body) {
   const memberCount = await Customer.countDocuments(customerFilter(businessId, body));
   try {
     const seg = await CustomerSegment.findOneAndUpdate({ _id: id, businessId }, { $set: { ...body, memberCount } }, { new: true });
-    if (!seg) throw new ApiError(404, 'Segment not found');
+    if (!seg) throw ApiError.notFound('Segment not found');
     return seg;
   } catch (e) {
-    if (e.code === 11000) throw new ApiError(409, 'You already have a segment with that name');
+    if (e.code === 11000) throw ApiError.conflict('You already have a segment with that name');
     throw e;
   }
 }
 
 async function deleteSegment(businessId, id) {
   const r = await CustomerSegment.deleteOne({ _id: id, businessId });
-  if (!r.deletedCount) throw new ApiError(404, 'Segment not found');
+  if (!r.deletedCount) throw ApiError.notFound('Segment not found');
 }
 
 /** Phase 2 entry point: who should a campaign for this segment reach? Only valid phones, one per customer. */
@@ -544,7 +589,7 @@ async function getProfile(businessId, id) {
   const customer = await Customer.findOne({ _id: id, businessId })
     .select('name phone phoneNormalized email address customerNumber tags source status createdAt crm outstandingBalance creditLimit')
     .lean();
-  if (!customer) throw new ApiError(404, 'Customer not found');
+  if (!customer) throw ApiError.notFound('Customer not found');
 
   const since = new Date(Date.now() - 365 * DAY);
   const [purchases, monthly, segs] = await Promise.all([
@@ -568,7 +613,7 @@ async function getProfile(businessId, id) {
 async function updateTags(businessId, id, tags) {
   const clean = [...new Set((tags || []).map((t) => String(t).trim().slice(0, 24)).filter(Boolean))].slice(0, 10);
   const c = await Customer.findOneAndUpdate({ _id: id, businessId }, { $set: { tags: clean } }, { new: true }).select('tags').lean();
-  if (!c) throw new ApiError(404, 'Customer not found');
+  if (!c) throw ApiError.notFound('Customer not found');
   return c.tags;
 }
 

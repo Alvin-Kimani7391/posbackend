@@ -58,15 +58,41 @@ mpesaTransactionSchema.index({ status: 1, createdAt: 1 }); // for the reconcilia
 mpesaTransactionSchema.index({ businessId: 1, channel: 1, status: 1, amount: 1 }); // manual matching lookups
 mpesaTransactionSchema.index({ businessId: 1, mpesaReceiptNumber: 1 }, { sparse: true }); // "is this receipt code already used?" checks
 
-// CRM: the moment an M-PESA payment is attached to a sale, link it to the customer.
-// The 4s delay lets the sale's DB transaction commit; crmSync.job is the safety net.
+/* ------------------------------------------------------------------ *
+ * CRM capture hook.
+ * The moment a successful M-PESA payment is attached to a sale (saleId newly set by
+ * mpesa.service.consumeForSale), ask the CRM to link the sale to the customer by phone.
+ *  - pre('save') only records whether saleId was just set, so later saves of the same
+ *    document (receipt backfill, status polling) never re-trigger it.
+ *  - The short delay lets the sale's DB transaction commit first; crm.service retries on its
+ *    own and crmSync.job is the safety net, so a miss here is never fatal.
+ *  - Everything is wrapped: this hook can never throw into, or slow down, the payment flow.
+ * ------------------------------------------------------------------ */
+mpesaTransactionSchema.pre('save', function markSaleLinked(next) {
+  this.$locals.saleJustLinked = !!this.saleId && this.isModified('saleId');
+  next();
+});
+
 mpesaTransactionSchema.post('save', function crmCapture(doc) {
-  if (!doc.saleId || doc.status !== 'SUCCESS') return;
-  const t = setTimeout(() => {
-    try { require('../services/crm.service').onSaleCompleted(doc.businessId, doc.saleId); }
-    catch (err) { console.error('[crm] capture hook failed', err.message); }
-  }, 4000);
-  if (t.unref) t.unref();
+  try {
+    if (!doc.$locals || !doc.$locals.saleJustLinked) return;
+    doc.$locals.saleJustLinked = false;
+    if (doc.status !== 'SUCCESS' || !doc.saleId) return;
+
+    const businessId = doc.businessId;
+    const saleId = doc.saleId;
+    const t = setTimeout(() => {
+      try {
+        const crm = require('../services/crm.service');
+        if (crm && typeof crm.onSaleCompleted === 'function') crm.onSaleCompleted(businessId, saleId);
+      } catch (err) {
+        console.error('[crm] capture hook failed', err.message);
+      }
+    }, 3000);
+    if (t.unref) t.unref();
+  } catch (err) {
+    console.error('[crm] capture hook error', err.message);
+  }
 });
 
 module.exports = model('MpesaTransaction', mpesaTransactionSchema);
