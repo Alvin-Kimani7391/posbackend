@@ -8,6 +8,16 @@ const { createPurchaseSchema, listPurchasesQuery, recordPaymentSchema, idParamSc
 
 router.use(authenticate);
 
+/**
+ * Changing a product's cost/selling price/discount from a purchase is a
+ * product edit, so it needs 'products.update' - but ONLY when the request
+ * actually asks for a price update. Plain purchases are unaffected.
+ */
+const requireProductUpdateIfPricing = (req, res, next) => {
+  const wantsPriceUpdate = Array.isArray(req.body.items) && req.body.items.some((i) => i.updatePrices);
+  return wantsPriceUpdate ? requirePermission('products.update')(req, res, next) : next();
+};
+
 router.get('/', requirePermission('purchases.view'), validate({ query: listPurchasesQuery }), controller.list);
 router.post(
   '/',
@@ -15,6 +25,7 @@ router.post(
   uploadPurchaseInvoices,      // multer first so multipart fields land in req.body
   parseJsonFields('items'),    // items arrives as a JSON string
   validate({ body: createPurchaseSchema }),
+  requireProductUpdateIfPricing,
   controller.create
 );
 router.get('/:id', requirePermission('purchases.view'), validate({ params: idParamSchema }), controller.getOne);

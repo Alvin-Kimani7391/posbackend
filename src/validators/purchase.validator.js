@@ -4,14 +4,38 @@ const { toCents } = require('../utils/money');
 
 const moneyInput = z.coerce.number().nonnegative().transform(toCents);
 
-const purchaseItemSchema = z.object({
-  productId: objectId,
-  variantId: objectId.optional(),
-  quantity: z.coerce.number().positive(),
-  unitCost: moneyInput,
-  taxRate: z.coerce.number().min(0).max(100).optional().default(0),
-  discount: moneyInput.optional().default(0),
-});
+const purchaseItemSchema = z
+  .object({
+    productId: objectId,
+    variantId: objectId.optional(),
+    quantity: z.coerce.number().positive(),
+    unitCost: moneyInput,
+    taxRate: z.coerce.number().min(0).max(100).optional().default(0),
+    discount: moneyInput.optional().default(0),
+
+    // ---- NEW: optional price update applied together with the purchase ----
+    // updatePrices=true  -> the product's (or variant's) cost price is set to
+    //                       this line's real unit cost, and the optional
+    //                       sellingPrice / defaultDiscount below are saved too.
+    // Omitted fields are left untouched. Values arrive in KES, stored as cents.
+    updatePrices: z.boolean().optional().default(false),
+    sellingPrice: moneyInput.optional(),
+    defaultDiscount: moneyInput.optional(),
+  })
+  .superRefine((item, ctx) => {
+    if (!item.updatePrices) return;
+    if (
+      item.sellingPrice !== undefined &&
+      item.defaultDiscount !== undefined &&
+      item.defaultDiscount > item.sellingPrice
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['defaultDiscount'],
+        message: 'Discount cannot be more than the selling price',
+      });
+    }
+  });
 
 const createPurchaseSchema = z.object({
   branchId: objectId,

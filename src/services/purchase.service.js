@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Purchase = require('../models/Purchase');
 const Product = require('../models/Product');
+const ProductVariant = require('../models/ProductVariant');
 const Supplier = require('../models/Supplier');
 const Batch = require('../models/Batch');
 const AuditLog = require('../models/AuditLog');
@@ -36,6 +37,88 @@ const toAttachments = (files = []) =>
     resourceType: f.mimetype.startsWith('image/') ? 'image' : 'raw',
   }));
 
+/**
+ * Applies the optional "update prices with this purchase" requests.
+ * Runs INSIDE the purchase transaction, so the purchase and the price
+ * changes commit or roll back together.
+ *
+ * Rules:
+ *  - cost price  := the line's REAL unit cost (line total incl. VAT / qty),
+ *    which is the same "Real cost per unit" the purchase screen shows.
+ *    (To store ex-VAT cost instead, change `realUnitCost` in createPurchase.)
+ *  - selling price / default discount: only changed when supplied.
+ *  - variant line: variant cost + selling price change; the discount is a
+ *    product-level field so it changes on the parent product.
+ *  - the discount may never exceed the selling price (checked on merged values).
+ * Products are loaded and saved with save() (not raw updates) so the money
+ * schema plugin and validators behave exactly as in product.service.
+ */
+async function applyPriceUpdates({ businessId, branchId, userId, purchase, updates, session }) {
+  const audits = [];
+
+  for (const u of updates) {
+    const product = await Product.findOne({ _id: u.productId, businessId }).session(session);
+    if (!product) throw ApiError.badRequest(`Product not found: ${u.productId}`, 'PRODUCT_NOT_FOUND');
+
+    const oldValue = {};
+    const newValue = {};
+    let productChanged = false;
+
+    if (u.variantId) {
+      const variant = await ProductVariant.findOne({ _id: u.variantId, businessId, productId: product._id }).session(session);
+      if (!variant) throw ApiError.badRequest('Variant not found', 'VARIANT_NOT_FOUND');
+
+      oldValue.costPrice = variant.costPrice;
+      oldValue.sellingPrice = variant.sellingPrice;
+      variant.costPrice = u.costPrice;
+      if (u.sellingPrice !== undefined) variant.sellingPrice = u.sellingPrice;
+      newValue.costPrice = variant.costPrice;
+      newValue.sellingPrice = variant.sellingPrice;
+
+      if (u.defaultDiscount !== undefined && u.defaultDiscount > variant.sellingPrice) {
+        throw ApiError.badRequest(`Discount cannot be more than the selling price (${product.name})`, 'INVALID_DISCOUNT');
+      }
+      await variant.save({ session });
+    } else {
+      oldValue.costPrice = product.costPrice;
+      oldValue.sellingPrice = product.sellingPrice;
+      product.costPrice = u.costPrice;
+      if (u.sellingPrice !== undefined) product.sellingPrice = u.sellingPrice;
+      newValue.costPrice = product.costPrice;
+      newValue.sellingPrice = product.sellingPrice;
+      productChanged = true;
+    }
+
+    if (u.defaultDiscount !== undefined) {
+      oldValue.defaultDiscount = product.defaultDiscount;
+      product.defaultDiscount = u.defaultDiscount;
+      newValue.defaultDiscount = product.defaultDiscount;
+      productChanged = true;
+    }
+
+    if (!product.hasVariants && (product.defaultDiscount || 0) > (product.sellingPrice || 0)) {
+      throw ApiError.badRequest(`Discount cannot be more than the selling price (${product.name})`, 'INVALID_DISCOUNT');
+    }
+
+    if (productChanged) {
+      product.updatedBy = userId;
+      await product.save({ session });
+    }
+
+    audits.push({
+      businessId, branchId, userId,
+      action: u.variantId ? 'product.variant.update' : 'product.update',
+      entityType: u.variantId ? 'ProductVariant' : 'Product',
+      entityId: u.variantId || product._id,
+      oldValue,
+      newValue: { ...newValue, source: 'purchase', purchaseNumber: purchase.purchaseNumber },
+    });
+  }
+
+  if (audits.length) await AuditLog.create(audits, { session, ordered: true });
+  return audits.length;
+}
+
 async function createPurchase(
   businessId, branchId, userId,
   { supplierId, invoiceNumber, items, purchaseDate, notes, vatMode = 'NONE', vatRate = 0 },
@@ -50,6 +133,7 @@ async function createPurchase(
   let subtotal = 0;
   let discountTotal = 0;
   let total = 0;
+  const priceUpdates = [];
 
   const builtItems = items.map((raw) => {
     const product = productById.get(raw.productId.toString());
@@ -59,6 +143,18 @@ async function createPurchase(
     subtotal += line.gross;
     discountTotal += raw.discount || 0;
     total += line.total;
+
+    if (raw.updatePrices) {
+      // Real unit cost = what the line actually costs per unit incl. VAT.
+      const realUnitCost = Math.round(line.total / raw.quantity);
+      priceUpdates.push({
+        productId: raw.productId,
+        variantId: raw.variantId,
+        costPrice: realUnitCost,
+        sellingPrice: raw.sellingPrice,
+        defaultDiscount: raw.defaultDiscount,
+      });
+    }
 
     return {
       productId: raw.productId, variantId: raw.variantId, nameSnapshot: product.name,
@@ -70,17 +166,32 @@ async function createPurchase(
   const seq = await nextSequence(businessId, 'purchase:business', undefined);
   const purchaseNumber = `PO-${pad(seq)}`;
 
-  const purchase = await Purchase.create({
-    businessId, branchId, supplierId, purchaseNumber, invoiceNumber,
-    vatMode, vatRate: vatMode === 'NONE' ? 0 : vatRate,
-    attachments: toAttachments(files),
-    items: builtItems, subtotal, discount: discountTotal, tax: total - subtotal + discountTotal, total,
-    amountPaid: 0, balance: total, paymentStatus: 'UNPAID',
-    purchaseDate, notes, createdBy: userId,
-  });
+  const session = await mongoose.startSession();
+  try {
+    let purchase;
+    await session.withTransaction(async () => {
+      [purchase] = await Purchase.create([{
+        businessId, branchId, supplierId, purchaseNumber, invoiceNumber,
+        vatMode, vatRate: vatMode === 'NONE' ? 0 : vatRate,
+        attachments: toAttachments(files),
+        items: builtItems, subtotal, discount: discountTotal, tax: total - subtotal + discountTotal, total,
+        amountPaid: 0, balance: total, paymentStatus: 'UNPAID',
+        purchaseDate, notes, createdBy: userId,
+      }], { session });
 
-  await AuditLog.create({ businessId, branchId, userId, action: 'purchase.create', entityType: 'Purchase', entityId: purchase._id, newValue: { purchaseNumber, total } });
-  return purchase;
+      const pricesUpdated = priceUpdates.length
+        ? await applyPriceUpdates({ businessId, branchId, userId, purchase, updates: priceUpdates, session })
+        : 0;
+
+      await AuditLog.create(
+        [{ businessId, branchId, userId, action: 'purchase.create', entityType: 'Purchase', entityId: purchase._id, newValue: { purchaseNumber, total, pricesUpdated } }],
+        { session }
+      );
+    });
+    return purchase;
+  } finally {
+    session.endSession();
+  }
 }
 
 async function getPurchase(businessId, id) {
