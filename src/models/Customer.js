@@ -49,6 +49,8 @@ const customerSchema = new Schema(
 
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
 
+    smsOptOut: { type: Boolean, default: false },
+
     // ---- CRM ----
     source: { type: String, enum: ['manual', 'pos', 'mpesa'], default: 'manual' }, // how the customer first entered the book
     tags: { type: [String], default: [] },

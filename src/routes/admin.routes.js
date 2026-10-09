@@ -18,7 +18,10 @@ router.use(authenticate, requireSuperAdmin);
 
 router.use('/billing', require('./billing.admin.routes'));
 
+router.use('/sms', require('./sms.admin.routes'));
+
 router.get('/overview', validate({ query: v.overviewQuery }), controller.overview);
+
 
 router.get('/businesses', validate({ query: v.businessesQuery }), controller.listBusinesses);
 router.get('/businesses/:id', validate({ params: v.idParamSchema }), controller.getBusiness);

@@ -18,6 +18,7 @@ async function start() {
   require('./jobs/mpesaReconcile.job').start();
   require('./jobs/billing.job').start();
   require('./jobs/crmSync.job').start();
+    require('./jobs/smsQueue.job').start();
 }
 
 async function shutdown(signal) {

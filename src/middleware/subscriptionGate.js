@@ -2,6 +2,9 @@
  * Soft lock. When a business is locked for non-payment (or by admin) every tenant API call returns
  * 402 SUBSCRIPTION_LOCKED EXCEPT the routes the owner needs to log in, pay, read notices and ask for help.
  * Fails OPEN: a bug in billing must never take a paying shop offline.
+ *
+ * SMS: /sms/* stays GATED (a locked shop cannot buy or send SMS and is sent to Billing to pay),
+ * but /sms-hooks/* (PayHero + TalkSasa webhooks) is always allowed so provider callbacks never get a 402.
  */
 const { authenticate } = require('./auth');
 const Subscription = require('../models/Subscription');
@@ -11,6 +14,7 @@ const lockCache = require('../utils/lockCache');
 const ALWAYS_ALLOWED = [
   /^\/auth(\/|$)/, /^\/billing(\/|$)/, /^\/announcements(\/|$)/, /^\/notifications(\/|$)/,
   /^\/tickets(\/|$)/, /^\/admin(\/|$)/, /^\/payments\/mpesa\/(callback|c2b)(\/|$)/,
+  /^\/sms-hooks(\/|$)/,
 ];
 
 async function isLocked(businessId) {

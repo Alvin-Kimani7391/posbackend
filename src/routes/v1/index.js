@@ -1,11 +1,9 @@
 const router = require('express').Router();
 
-router.use(require('../../middleware/subscriptionGate')); // <-- first (adjust path to where you keep middleware)
-
-// ...all your existing router.use(...) lines...
-router.use('/billing', require('../billing.routes')); // <-- add anywhere in the list
+router.use(require('../../middleware/subscriptionGate')); // first (adjust path to where you keep middleware)
 
 router.use('/auth', require('../auth.routes'));
+router.use('/billing', require('../billing.routes'));
 router.use('/business', require('../business.routes'));
 router.use('/branches', require('../branch.routes'));
 router.use('/employees', require('../employee.routes'));
@@ -15,9 +13,10 @@ router.use('/inventory', require('../inventory.routes'));
 router.use('/transfers', require('../transfer.routes'));
 router.use('/sales', require('../sale.routes'));
 router.use('/customers', require('../customer.routes'));
+router.use('/crm', require('../crm.routes'));
 router.use('/registers', require('../register.routes'));
 router.use('/shifts', require('../shift.routes'));
-router.use('/shortages', require('../shortage.routes')); // NEW
+router.use('/shortages', require('../shortage.routes'));
 router.use('/payments', require('../payment.routes'));
 
 router.use('/payments/mpesa', require('../mpesa.routes'));
@@ -32,11 +31,10 @@ router.use('/reports', require('../report.routes'));
 router.use('/audit-logs', require('../auditlog.routes'));
 router.use('/notifications', require('../notification.routes'));
 router.use('/tickets', require('../ticket.routes'));
-router.use('/announcements', require('../announcement.routes')); // NEW
+router.use('/announcements', require('../announcement.routes'));
 router.use('/admin', require('../admin.routes'));
-router.use('/crm', require('../crm.routes'));
 
-// ...all your existing router.use(...) lines...
-router.use('/billing', require('../billing.routes')); // <-- add anywhere in the list
+router.use('/sms', require('../sms.routes'));
+router.use('/sms-hooks', require('../sms.webhook.routes'));
 
 module.exports = router;

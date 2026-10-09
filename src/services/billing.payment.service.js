@@ -11,6 +11,7 @@ const payhero = require('../integrations/mpesa/payhero.provider');
 const settingsSvc = require('./billing.settings');
 const notify = require('./billing.notify');
 const engine = require('./billing.service');
+const { SmsPayment } = require('../models/sms.models');
 
 const safeEqual = (a, b) => {
   const x = Buffer.from(String(a)); const y = Buffer.from(String(b));
@@ -109,7 +110,11 @@ async function backfillReceipt(paymentId) {
     .map((t) => ({ t, d: Math.abs(new Date(t.created_at).getTime() - anchor) }))
     .filter((x) => x.d < 15 * 60 * 1000)
     .sort((a, b) => a.d - b.d)[0];
-  if (hit) await attachReceipt(paymentId, hit.t.transaction_reference.trim().toUpperCase());
+  if (hit) {
+    const code = hit.t.transaction_reference.trim().toUpperCase();
+    // Never claim a code that already paid for an SMS bundle or Sender ID.
+    if (!(await SmsPayment.exists({ mpesaCode: code }))) await attachReceipt(paymentId, code);
+  }
 }
 
 /** The ONLY place an STK payment becomes SUCCESS. Atomic, so callback + poll + job can race safely. */
@@ -192,6 +197,9 @@ async function submitManual(businessId, user, { mpesaMessage, amountCents }) {
 
   if (await SubscriptionPayment.exists({ receiptKey: parsed.code })) {
     throw ApiError.conflict('That M-PESA code has already been submitted.', 'MPESA_ALREADY_SUBMITTED');
+  }
+  if (await SmsPayment.exists({ mpesaCode: parsed.code })) {
+    throw ApiError.conflict('That M-PESA code has already been used for an SMS payment.', 'MPESA_ALREADY_SUBMITTED');
   }
   const pending = await SubscriptionPayment.countDocuments({ businessId, method: 'MPESA_MANUAL', status: 'SUBMITTED' });
   if (pending >= LIMITS.MAX_PENDING_MANUAL) throw ApiError.badRequest('You already have several payments waiting for verification. Please wait for them to be reviewed.', 'TOO_MANY_PENDING');
