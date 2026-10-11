@@ -4,6 +4,7 @@ const Device = require('../models/Device');
 const Business = require('../models/Business');
 const Branch = require('../models/Branch');
 const AuditLog = require('../models/AuditLog');
+const User = require('../models/User');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
 const { nextSequence, pad } = require('../models/Counter');
@@ -169,7 +170,7 @@ async function issueGrant(businessId, user, deviceId, secret) {
 
   const device = await authenticateDevice(businessId, deviceId, secret);
   if (!device.offlineEnabled) throw ApiError.forbidden('Offline selling is not enabled for this device', 'OFFLINE_NOT_ENABLED_FOR_DEVICE');
-  if (!userCanUseBranch(user, device.branchId)) throw ApiError.forbidden('You do not have access to this device\u2019s branch', 'BRANCH_ACCESS_DENIED');
+  if (!userCanUseBranch(user, device.branchId)) throw ApiError.forbidden('You do not have access to this device’s branch', 'BRANCH_ACCESS_DENIED');
 
   const hours = effectiveOfflineHours(policy, device);
   const branch = await Branch.findById(device.branchId).select('code name');
@@ -270,17 +271,31 @@ async function updateOfflinePolicy(businessId, user, patch) {
   return getPolicy(business);
 }
 
+/* ---------- offline PIN (each user sets their own, online) ---------- */
 
-
-const User = require('../models/User');
-
+/**
+ * `password` is the proof of identity. It may be EITHER the user's account password (owner, admin, manager,
+ * accountant...) OR the user's everyday login PIN (cashiers who sign in with Business ID + employee code + PIN
+ * and may never have used a password).
+ * `pin` is the NEW offline PIN (6-8 digits, validated in the route). It is stored only as a PBKDF2 verifier.
+ */
 async function setOfflinePin(businessId, user, { password, pin }) {
-  const u = await User.findOne({ _id: user._id, businessId }).select('+passwordHash');
-  if (!u || !(await u.comparePassword(password))) throw ApiError.unauthorized('Wrong password', 'WRONG_PASSWORD');
+  const u = await User.findOne({ _id: user._id, businessId }).select('+passwordHash +pinHash');
+  if (!u) throw ApiError.unauthorized('Account not found', 'WRONG_PASSWORD');
+
+  const byPassword = await u.comparePassword(String(password)).catch(() => false);
+  const byLoginPin = byPassword ? false : await u.comparePin(String(password)).catch(() => false);
+  if (!byPassword && !byLoginPin) {
+    throw ApiError.unauthorized('Your login PIN or password is incorrect', 'WRONG_PASSWORD');
+  }
+
   const salt = crypto.randomBytes(16).toString('base64');
   const hash = crypto.pbkdf2Sync(pin, Buffer.from(salt, 'base64'), 210000, 32, 'sha256').toString('base64');
   await User.updateOne({ _id: u._id }, { $set: { offlinePin: { salt, iterations: 210000, hash, setAt: new Date() } } });
-  await AuditLog.create({ businessId, userId: u._id, action: 'offline.pin.set', entityType: 'User', entityId: u._id });
+  await AuditLog.create({
+    businessId, userId: u._id, action: 'offline.pin.set', entityType: 'User', entityId: u._id,
+    newValue: { verifiedWith: byPassword ? 'password' : 'login_pin' },
+  });
   return { ok: true };
 }
 
