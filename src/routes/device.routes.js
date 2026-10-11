@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const { z } = require('zod');
 const controller = require('../controllers/device.controller');
 const validate = require('../middleware/validate');
 const { authenticate, requirePermission, requireBranchAccess } = require('../middleware/auth');
