@@ -10,7 +10,7 @@ const authLimiter = rateLimit({
 
 const publicApiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests', code: 'RATE_LIMITED' },
@@ -23,4 +23,12 @@ const callbackLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { authLimiter, publicApiLimiter, callbackLimiter };
+const syncLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.businessId || ''}:${(req.body && req.body.deviceId) || (req.query && req.query.deviceId) || req.ip}`,
+  message: { success: false, message: 'Too many sync requests', code: 'RATE_LIMITED' },
+});
+module.exports = { authLimiter, publicApiLimiter, callbackLimiter, syncLimiter };

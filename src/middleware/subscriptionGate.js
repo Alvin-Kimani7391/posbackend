@@ -15,6 +15,7 @@ const ALWAYS_ALLOWED = [
   /^\/auth(\/|$)/, /^\/billing(\/|$)/, /^\/announcements(\/|$)/, /^\/notifications(\/|$)/,
   /^\/tickets(\/|$)/, /^\/admin(\/|$)/, /^\/payments\/mpesa\/(callback|c2b)(\/|$)/,
   /^\/sms-hooks(\/|$)/,
+    /^\/sync(\/|$)/,   // offline sales already happened; a locked shop must still be able to deliver them (flagged at ingest)
 ];
 
 async function isLocked(businessId) {

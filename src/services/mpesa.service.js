@@ -381,6 +381,16 @@ async function ingestInboundPayment(businessId, token, body) {
       console.error('[mpesa manual] immediate match failed (polling will retry)', { code, error: err.message });
     }
   }
+
+
+    if (!matched && inbound.status === 'UNCLAIMED') {
+    try {
+      await require('./offline-mpesa.service').resolveForInbound(inbound);
+    } catch (err) {
+      console.error('[mpesa] offline claim re-check failed (cron will retry)', { code, error: err.message });
+    }
+  }
+  
   return { stored: true, matched };
 }
 

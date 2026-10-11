@@ -6,6 +6,14 @@ const receiptSchema = new Schema(
     branchId: { type: Schema.Types.ObjectId, ref: 'Branch', required: true },
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', required: true, unique: true },
 
+
+
+       // ADD THESE TWO FIELDS HERE
+    soldAt: { type: Date }, 
+    isOffline: { type: Boolean, default: false },
+
+
+    
     receiptNumber: { type: String, required: true },
     invoiceNumber: { type: String },
 

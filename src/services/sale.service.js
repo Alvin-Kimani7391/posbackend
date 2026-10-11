@@ -213,7 +213,10 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       const branch = await Branch.findById(branchId).session(session);
       const seq = await nextSequence(businessId, `receipt:branch:${branchId}`, session);
       const receiptNumber = `${business.receiptSettings?.receiptPrefix || 'RCT'}-${branch?.code || 'MAIN'}-${pad(seq)}`;
-      const invoiceNumber = `${business.receiptSettings?.invoicePrefix || 'INV'}-${pad(seq)}`;
+            // Invoice numbers have their OWN per-branch counter so online and offline sales share one
+      // unique, gapless sequence per branch, and carry the branch code so branches can never collide at KRA.
+      const invoiceSeq = await nextSequence(businessId, `invoice:branch:${branchId}`, session);
+      const invoiceNumber = `${business.receiptSettings?.invoicePrefix || 'INV'}-${branch?.code || 'MAIN'}-${pad(invoiceSeq)}`;
 
       const [sale] = await Sale.create(
         [{
@@ -377,13 +380,27 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     // customer, or by the phone of the M-PESA payment). Fire-and-forget and fully guarded:
     // it can never delay, fail or roll back a sale. Sales with no customer and no M-PESA
     // phone are simply skipped inside the CRM. crmSync.job is the safety net.
+    
     try {
       require('./crm.service').onSaleCompleted(businessId, result.sale._id);
     } catch (crmErr) {
       console.error('[crm] capture hook failed', crmErr.message);
     }
 
+    // Start eTIMS processing only after the sale transaction commits.
+    etimsService.kickForSale(businessId, result.sale._id);
+
     return result;
+
+    } catch (err) {
+    // Two syncs of the same sale can both pass the first findOne; the loser hits the unique index.
+    if (err.code === 11000 && err.keyPattern?.clientTransactionId && payload.deviceId) {
+      const existing = await Sale.findOne({
+        businessId, branchId, deviceId: payload.deviceId, clientTransactionId: payload.clientTransactionId,
+      });
+      if (existing) return buildExistingSaleResult(existing);
+    }
+    throw err;
   } finally {
     session.endSession();
   }
@@ -419,9 +436,9 @@ async function listSales(businessId, { branchId, cashierId, customerId, shiftId,
   if (shiftId) filter.shiftId = shiftId;
   if (paymentStatus) filter.paymentStatus = paymentStatus;
   if (from || to) {
-    filter.createdAt = {};
-    if (from) filter.createdAt.$gte = new Date(from);
-    if (to) filter.createdAt.$lte = new Date(to);
+    filter.soldAt = {};
+    if (from) filter.soldAt.$gte = new Date(from);
+    if (to) filter.soldAt.$lte = new Date(to);
   }
   if (search) {
     const rx = new RegExp(escapeRegex(search), 'i');
@@ -433,7 +450,7 @@ async function listSales(businessId, { branchId, cashierId, customerId, shiftId,
       .populate('customerId', 'name phone')
       .populate('cashierId', 'name')
       .populate('branchId', 'name code')
-      .sort({ createdAt: -1 })
+      .sort({ soldAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
     Sale.countDocuments(filter),

@@ -28,6 +28,18 @@ const cashShiftSchema = new Schema(
 
     denominations: { type: [denominationLineSchema], default: [] }, // closing count, per note/coin
 
+        clientShiftId: { type: String },
+    deviceId: { type: String },
+    isOffline: { type: Boolean, default: false },
+    offlineCloseId: { type: String },
+    syncedAt: { type: Date },
+    closedSyncedAt: { type: Date },
+    offlineFlags: [{ _id: false, code: String, severity: { type: String, enum: ['INFO', 'WARN', 'HIGH'] }, detail: String }],
+    offlineReview: { type: String, enum: ['NONE', 'PENDING', 'RESOLVED'], default: 'NONE' },
+    offlineReviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    offlineReviewedAt: { type: Date },
+    offlineReviewNote: { type: String },
+
     openedAt: { type: Date, default: Date.now },
     closedAt: { type: Date },
     status: { type: String, enum: ['OPEN', 'CLOSED'], default: 'OPEN' },
@@ -40,6 +52,10 @@ const cashShiftSchema = new Schema(
 cashShiftSchema.index({ businessId: 1, branchId: 1, status: 1 });
 cashShiftSchema.index({ businessId: 1, cashierId: 1, status: 1 });
 cashShiftSchema.index({ businessId: 1, openedAt: -1 });
+
+
+cashShiftSchema.index({ businessId: 1, deviceId: 1, clientShiftId: 1 }, { unique: true, partialFilterExpression: { clientShiftId: { $type: 'string' } } });
+cashShiftSchema.index({ businessId: 1, offlineReview: 1 });
 
 moneyFields(cashShiftSchema, ['openingCash', 'closingCash', 'expectedCash', 'actualCash', 'cashDifference']);
 

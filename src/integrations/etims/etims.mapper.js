@@ -30,7 +30,12 @@ function saleToDigiTaxInvoice({ sale, business, branch }) {
     bhfId: branch?.code || '00',
     trdInvcNo: sale.invoiceNumber || sale.receiptNumber,
     invcNo: sale.receiptNumber,
-    salesDt: sale.createdAt,
+
+    
+    salesDt: sale.soldAt || sale.createdAt,   // the real sale time, never the sync time
+
+
+
     salesTyCd: 'N', // Normal sale - adjust for credit note / training mode per DigiTax's enum
     rcptTyCd: 'S',
     pmtTyCd: derivePaymentTypeCode(sale),

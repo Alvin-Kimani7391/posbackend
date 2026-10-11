@@ -24,6 +24,10 @@ app.use(
     credentials: true,
   })
 );
+
+app.use('/api/v1/sync', express.json({ limit: '4mb' })); // a later global parser skips bodies already parsed
+
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(cookieParser());

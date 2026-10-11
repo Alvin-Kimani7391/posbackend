@@ -31,7 +31,8 @@ const notificationService = require('./notification.service');
 async function applyStockChange({
   businessId, branchId, productId, variantId = null,
   quantityDelta, type, referenceType, referenceId, reason, performedBy,
-  session, allowNegative = false,
+  session, allowNegative = false,occurredAt = undefined,
+
 }) {
   if (!session) throw new Error('applyStockChange requires an active mongoose session');
   if (!quantityDelta) throw new Error('applyStockChange requires a non-zero quantityDelta');
@@ -66,7 +67,7 @@ async function applyStockChange({
   const previousStock = updated.quantity - quantityDelta;
 
     const [movement] = await InventoryMovement.create(
-    [{ businessId, branchId, productId, variantId, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, performedBy }],
+    [{ businessId, branchId, productId, variantId, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy, }],
     { session }
   );
 

@@ -105,7 +105,7 @@ const pricers = {
 
   async TIERED(phase, { sub, periodStart, interval }) {
     const from = addMonths(periodStart, -interval);
-    const match = { businessId: sub.businessId, saleStatus: 'COMPLETED', createdAt: { $gte: from, $lt: periodStart } };
+    const match = { businessId: sub.businessId, saleStatus: 'COMPLETED', soldAt: { $gte: from, $lt: periodStart } };
     let value;
     if (phase.tierMetric === 'SALES_VALUE') {
       const r = await Sale.aggregate([{ $match: match }, { $group: { _id: null, t: { $sum: '$total' } } }]);

@@ -62,6 +62,31 @@ const businessSchema = new Schema(
       enableSMSReceipts: { type: Boolean, default: false },
       enableWhatsAppReceipts: { type: Boolean, default: false },
       enableEmailReceipts: { type: Boolean, default: false },
+
+            offline: {
+        enabled: { type: Boolean, default: false },
+        maxOfflineHours: { type: Number, default: 12, min: 1, max: 72 },
+        sessionHours: { type: Number, default: 12, min: 1, max: 24 },
+        maxPendingSales: { type: Number, default: 200, min: 1, max: 5000 },
+        maxPendingValueCents: { type: Number, default: 20000000, min: 0 },
+        allowCredit: { type: Boolean, default: false },
+        allowManualMpesa: { type: Boolean, default: false },
+        allowCard: { type: Boolean, default: false },
+        allowRefunds: { type: Boolean, default: false },
+        maxDiscountPercent: { type: Number, default: 5, min: 0, max: 100 },
+        allowShiftCloseWithPending: { type: Boolean, default: false },
+        sharedDeviceMaxOfflineHours: { type: Number, default: 4, min: 1, max: 72 },
+        defaultDeviceMode: { type: String, enum: ['DEDICATED', 'SHARED'], default: 'DEDICATED' },
+
+                syncCustomers: { type: Boolean, default: false },
+
+
+                manualMpesaApproval: { type: String, enum: ['UNMATCHED_ONLY', 'ALWAYS'], default: 'UNMATCHED_ONLY' },
+        maxManualMpesaCents: { type: Number, default: 5000000, min: 0 },
+
+        
+      },
+
     },
 
     subscriptionPlan: { type: String, default: 'trial' },

@@ -88,7 +88,7 @@ async function openShift(businessId, branchId, cashierId, { registerId, openingC
   return shift;
 }
 
-async function closeShift(businessId, userId, id, { denominations, actualCash, notes }) {
+async function closeShift(businessId, userId, id, { denominations, actualCash, notes, closedAt }) {
   const shift = await CashShift.findOne({ _id: id, businessId }).populate('registerId', 'name code');
   if (!shift) throw ApiError.notFound('Shift not found');
   if (shift.status !== 'OPEN') throw ApiError.conflict('Shift is already closed', 'SHIFT_ALREADY_CLOSED');
@@ -113,7 +113,7 @@ async function closeShift(businessId, userId, id, { denominations, actualCash, n
   shift.cashDifference = cashDifference;
   shift.denominations = countedDenominations;
   shift.status = 'CLOSED';
-  shift.closedAt = new Date();
+  shift.closedAt = closedAt || new Date();
   shift.closedBy = userId;
   shift.notes = notes;
   await shift.save();

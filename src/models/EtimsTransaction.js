@@ -23,11 +23,15 @@ const etimsTransactionSchema = new Schema(
     submittedAt: { type: Date, default: Date.now },
     confirmedAt: { type: Date },
     retryCount: { type: Number, default: 0 },
+
+    // Short-lived claim so the post-commit kick and the cron can never submit the same invoice at once.
+    lockedUntil: { type: Date },
   },
   { timestamps: true }
 );
 
 etimsTransactionSchema.index({ businessId: 1, saleId: 1 }, { unique: true });
 etimsTransactionSchema.index({ status: 1, retryCount: 1 });
+etimsTransactionSchema.index({ status: 1, updatedAt: 1 }); // retry sweep
 
 module.exports = model('EtimsTransaction', etimsTransactionSchema);

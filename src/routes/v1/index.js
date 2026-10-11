@@ -37,4 +37,9 @@ router.use('/admin', require('../admin.routes'));
 router.use('/sms', require('../sms.routes'));
 router.use('/sms-hooks', require('../sms.webhook.routes'));
 
+router.use('/devices', require('../device.routes'));
+
+router.use('/sync', require('../sync.routes'));
+router.use('/offline', require('../offline-review.routes'));
+
 module.exports = router;

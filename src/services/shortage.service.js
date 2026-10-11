@@ -202,4 +202,20 @@ async function recordPayment(businessId, actor, id, { amount, method, reference,
   return result;
 }
 
-module.exports = { recordForShift, backfillFromShifts, listShortages, getShortage, getCashierSummary, recordPayment };
+
+
+/** An offline M-PESA payment was rejected and the manager decided the cashier must cover it. Idempotent per claim. */
+async function recordMpesaLoss({ claim, actor, session }) {
+  const existing = await CashierShortage.findOne({ claimId: claim._id }).session(session || null);
+  if (existing) return existing;
+  const [doc] = await CashierShortage.create(
+    [{
+      businessId: claim.businessId, branchId: claim.branchId, kind: 'MPESA_REJECTED', claimId: claim._id, saleId: claim.saleId,
+      cashierId: claim.cashierId, closedBy: actor._id, amount: claim.amountCents, amountPaid: 0, balance: claim.amountCents,
+      status: 'OUTSTANDING', incurredAt: new Date(), note: `Rejected offline M-PESA ${claim.mpesaCode}`,
+    }],
+    session ? { session } : {}
+  );
+  return doc;
+}
+module.exports = { recordForShift, backfillFromShifts, listShortages, getShortage, getCashierSummary, recordPayment, recordMpesaLoss };

@@ -28,7 +28,10 @@ const authenticate = catchAsync(async (req, res, next) => {
   try {
     payload = verifyAccessToken(token);
   } catch (err) {
-    throw ApiError.unauthorized('Invalid or expired access token');
+
+    throw ApiError.unauthorized('Invalid or expired access token', err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID');
+
+    
   }
 
   const user = await User.findById(payload.sub);

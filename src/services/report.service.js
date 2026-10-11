@@ -37,7 +37,7 @@ function resolveDateRange(from, to) {
 }
 
 function saleMatch({ businessId, branchId, cashierId, from, to }) {
-  const match = { businessId: toObjectId(businessId), saleStatus: 'COMPLETED', createdAt: resolveDateRange(from, to) };
+  const match = { businessId: toObjectId(businessId), saleStatus: 'COMPLETED', soldAt: resolveDateRange(from, to) };
   if (branchId) match.branchId = toObjectId(branchId);
   if (cashierId) match.cashierId = toObjectId(cashierId);
   return match;
@@ -122,7 +122,7 @@ async function getSalesTrend(businessId, { branchId, cashierId, from, to }) {
     { $match: match },
     {
       $group: {
-        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone } },
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$soldAt', timezone } },
         netSales: { $sum: '$total' },
         transactionCount: { $sum: 1 },
       },
@@ -153,7 +153,7 @@ async function getSalesDetail(businessId, { branchId, cashierId, from, to, hasDi
       .populate('customerId', 'name')
       .populate('cashierId', 'name')
       .populate('branchId', 'name')
-      .sort({ createdAt: -1 })
+      .sort({ soldAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
     Sale.countDocuments(match),
@@ -162,7 +162,7 @@ async function getSalesDetail(businessId, { branchId, cashierId, from, to, hasDi
   const items = docs.map((s) => ({
     id: s._id,
     receiptNumber: s.receiptNumber,
-    createdAt: s.createdAt,
+    createdAt: s.soldAt || s.createdAt,
     branchName: s.branchId?.name || null,
     cashierName: s.cashierId?.name || null,
     customerName: s.customerId?.name || null,
@@ -430,9 +430,9 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
   ]);
 
   const recentSalesRaw = await Sale.find(match)
-    .sort({ createdAt: -1 })
+    .sort({ soldAt: -1 })
     .limit(20)
-    .select('receiptNumber total paymentStatus createdAt customerId branchId')
+    .select('receiptNumber total paymentStatus createdAt customerId branchId soldAt')
     .populate('customerId', 'name')
     .populate('branchId', 'name');
 
@@ -453,7 +453,7 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
       receiptNumber: s.receiptNumber,
       total: fromCents(s.total),
       paymentStatus: s.paymentStatus,
-      createdAt: s.createdAt,
+      createdAt: s.soldAt || s.createdAt,
       customerName: s.customerId?.name || null,
       branchName: s.branchId?.name || null,
     })),

@@ -64,6 +64,24 @@ const saleSchema = new Schema(
     clientTransactionId: { type: String },
     deviceId: { type: String },
 
+
+
+        // --- offline ---
+    soldAt: { type: Date, default: Date.now },   // when the sale REALLY happened (createdAt = when the server saved it)
+    syncedAt: { type: Date },
+    isOffline: { type: Boolean, default: false },
+    localSeq: { type: Number },                  // per-device receipt sequence
+    catalogVersion: { type: String },
+    clockSkewMs: { type: Number },
+    grantId: { type: String },
+    reviewStatus: { type: String, enum: ['NONE', 'PENDING', 'RESOLVED'], default: 'NONE' },
+    reviewFlags: [{ _id: false, code: String, severity: { type: String, enum: ['INFO', 'WARN', 'HIGH'] }, detail: String }],
+
+        reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    reviewedAt: { type: Date },
+    reviewNote: { type: String },
+
+
     cancelledAt: { type: Date },
     cancelledBy: { type: Schema.Types.ObjectId, ref: 'User' },
     cancelReason: { type: String },
@@ -94,6 +112,17 @@ saleSchema.index(
 
 saleSchema.index({ createdAt: -1 });
 saleSchema.index({ saleStatus: 1, createdAt: -1 });
+
+
+saleSchema.index({ businessId: 1, branchId: 1, soldAt: -1 });
+saleSchema.index({ businessId: 1, reviewStatus: 1 });
+// A device can never reuse a local receipt sequence number.
+saleSchema.index(
+  { businessId: 1, deviceId: 1, localSeq: 1 },
+  { unique: true, partialFilterExpression: { localSeq: { $type: 'number' } } }
+);
+
+
 
 moneyFields(
   saleSchema,

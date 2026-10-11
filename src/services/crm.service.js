@@ -12,6 +12,7 @@ const MpesaInboundPayment = require('../models/MpesaInboundPayment');
 const ApiError = require('../utils/ApiError');
 const { normalizePhone, toLocalPhone } = require('../utils/phone');
 const engine = require('./crm.engine');
+const OfflineMpesaClaim = require('../models/OfflineMpesaClaim');
 
 // Refund is optional here: if the model is missing/renamed the CRM still works
 // (refunds are then taken from Sale.items[].refundedQuantity alone).
@@ -178,6 +179,13 @@ async function loadMpesaContext(businessId, saleIds) {
     const phone = normalizePhone(t.phone) || normalizePhone(ib && ib.payerPhone);
     out.set(String(t.saleId), { phone, name: ib && ib.payerName, receipt: t.mpesaReceiptNumber });
   });
+    const claims = await OfflineMpesaClaim.find({ businessId, saleId: { $in: saleIds }, status: { $in: ['VERIFIED_AUTO', 'APPROVED'] } })
+    .select('saleId payerName payerPhoneNormalized mpesaCode').lean();
+  claims.forEach((c) => {
+    const k = String(c.saleId);
+    const cur = out.get(k) || {};
+    out.set(k, { phone: cur.phone || c.payerPhoneNormalized, name: cur.name || c.payerName, receipt: cur.receipt || c.mpesaCode });
+  });
   return out;
 }
 
@@ -310,9 +318,9 @@ async function syncSaleBatch(businessId, sales, settings) {
  * ignores a second call for the same sale within a minute (both hooks may fire).
  */
 const lastCapture = new Map();
-function onSaleCompleted(businessId, saleId, attempt = 0) {
+function onSaleCompleted(businessId, saleId, attempt = 0, force = false) {
   const key = String(saleId);
-  if (attempt === 0) {
+  if (attempt === 0 && !force) {
     const now = Date.now();
     if (now - (lastCapture.get(key) || 0) < 60 * 1000) return;
     lastCapture.set(key, now);

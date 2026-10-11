@@ -32,6 +32,8 @@ const userSchema = new Schema(
     passwordResetTokenHash: { type: String, select: false },
     passwordResetExpires: { type: Date, select: false },
 
+        offlinePin: { type: { salt: String, iterations: Number, hash: String, setAt: Date }, select: false },
+
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
