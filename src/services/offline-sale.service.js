@@ -316,6 +316,9 @@ async function ingestOfflineSale(ctx) {
           const b = await Batch.findOneAndUpdate({ _id: item.batchId, businessId }, { $inc: { quantity: -quantity } }, { session, new: true });
           if (!b) txFlags.push(flag('BATCH_NOT_FOUND', 'WARN', `Batch for ${item.nameSnapshot} was not found`));
           else if (b.quantity < 0) txFlags.push(flag('BATCH_SHORT', 'WARN', `Batch for ${item.nameSnapshot} is now negative`));
+          // The goods are gone, so the sale is accepted, but a sale from an expired / held batch must be reviewed.
+          if (b && (b.status === 'quarantined' || b.status === 'recalled')) txFlags.push(flag('BATCH_HELD', 'HIGH', `${item.nameSnapshot}: batch ${b.batchNumber} is ${b.status}`));
+          else if (b && b.expiryDate && new Date(b.expiryDate) < new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()))) txFlags.push(flag('BATCH_EXPIRED', 'HIGH', `${item.nameSnapshot}: batch ${b.batchNumber} had expired`));
         }
       }
 

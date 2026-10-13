@@ -4,6 +4,18 @@ const { toCents } = require('../utils/money');
 
 const moneyInput = z.coerce.number().nonnegative().transform(toCents);
 
+// Supplier batch details captured when goods arrive (required for batch-tracked products when batch tracking is on).
+const receivePurchaseSchema = z.object({
+  batches: z.array(z.object({
+    productId: objectId,
+    variantId: objectId.optional(),
+    batchNumber: z.string().trim().min(1),
+    quantity: z.coerce.number().positive().optional(),
+    expiryDate: z.coerce.date().optional(),
+    manufacturingDate: z.coerce.date().optional(),
+  })).optional(),
+}).default({});
+
 const purchaseItemSchema = z
   .object({
     productId: objectId,
@@ -58,4 +70,5 @@ const listPurchasesQuery = paginationQuery.extend({
 const recordPaymentSchema = z.object({ amount: moneyInput });
 const idParamSchema = z.object({ id: objectId });
 
-module.exports = { createPurchaseSchema, listPurchasesQuery, recordPaymentSchema, idParamSchema };
+module.exports = {
+  receivePurchaseSchema, createPurchaseSchema, listPurchasesQuery, recordPaymentSchema, idParamSchema };

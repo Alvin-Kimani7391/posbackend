@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { BUSINESS_TYPES, FEATURE_KEYS } = require('../constants/businessFeatures');
 
 const receiptSettingsSchema = z
   .object({
@@ -51,13 +52,17 @@ const businessSettingsSchema = z
   })
   .strict();
 
+const featureSettingsSchema = z
+  .object(Object.fromEntries(FEATURE_KEYS.map((k) => [k, z.boolean().optional()])))
+  .strict();
+
 const updateBusinessSchema = z
   .object({
     name: z.string().trim().min(2).optional(),
     legalName: z.string().trim().optional(),
-    businessType: z
-      .enum(['supermarket', 'electronics', 'clothing', 'hardware', 'cosmetics', 'restaurant', 'general_shop', 'wholesale', 'other'])
-      .optional(),
+    businessType: z.enum(BUSINESS_TYPES).optional(),
+    businessSubtype: z.string().trim().max(60).optional(),
+    featureSettings: featureSettingsSchema.optional(),
     phone: z.string().trim().optional(),
     email: z.string().trim().email().optional(),
     address: z.string().trim().optional(),

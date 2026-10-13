@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const StockTransfer = require('../models/StockTransfer');
 const Product = require('../models/Product');
+const Branch = require('../models/Branch');
+const Business = require('../models/Business');
+const batchService = require('./batch.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
@@ -41,8 +44,14 @@ async function requestTransfer(businessId, userId, { fromBranchId, toBranchId, i
     throw ApiError.badRequest('Source and destination branch must be different', 'INVALID_TRANSFER');
   }
 
+  // Tenant safety: both branches and every product must belong to THIS business.
+  const branchCount = await Branch.countDocuments({ businessId, _id: { $in: [fromBranchId, toBranchId] } });
+  if (branchCount !== 2) throw ApiError.badRequest('Source or destination branch not found', 'INVALID_TRANSFER');
+  const uniqueProductIds = [...new Set(items.map((i) => i.productId.toString()))];
+
   // Snapshot product names for display even if a product is later renamed/archived.
-  const products = await Product.find({ businessId, _id: { $in: items.map((i) => i.productId) } });
+  const products = await Product.find({ businessId, _id: { $in: uniqueProductIds } });
+  if (products.length !== uniqueProductIds.length) throw ApiError.badRequest('One or more products were not found', 'INVALID_TRANSFER');
   const nameById = new Map(products.map((p) => [p._id.toString(), p.name]));
 
   const seq = await nextSequence(businessId, 'transfer:business', undefined);
@@ -92,15 +101,19 @@ async function approveTransfer(businessId, userId, id) {
  * yet been added to toBranch's.
  */
 async function dispatchTransfer(businessId, userId, id) {
-  const transfer = await StockTransfer.findOne({ _id: id, businessId });
-  if (!transfer) throw ApiError.notFound('Transfer not found');
-  if (transfer.status !== 'APPROVED') {
-    throw ApiError.conflict(`Cannot dispatch a transfer in status ${transfer.status}`, 'INVALID_TRANSFER_STATE');
-  }
-
   const session = await mongoose.startSession();
   try {
+    let result;
     await session.withTransaction(async () => {
+      // Re-read INSIDE the transaction so two simultaneous dispatches cannot both take the stock.
+      const transfer = await StockTransfer.findOne({ _id: id, businessId }).session(session);
+      if (!transfer) throw ApiError.notFound('Transfer not found');
+      if (transfer.status !== 'APPROVED') {
+        throw ApiError.conflict(`Cannot dispatch a transfer in status ${transfer.status}`, 'INVALID_TRANSFER_STATE');
+      }
+      const business = await Business.findById(businessId).select('featureSettings').session(session);
+      const strict = !!business?.featureSettings?.quarantineManagement;
+
       for (const item of transfer.items) {
         await applyStockChange({
           businessId,
@@ -115,31 +128,42 @@ async function dispatchTransfer(businessId, userId, id) {
           performedBy: userId,
           session,
         });
+
+        // Batch-tracked goods leave from real, in-date batches (FEFO); expired/held stock cannot be transferred.
+        const product = await Product.findOne({ _id: item.productId, businessId }).session(session);
+        if (product?.trackBatch) {
+          item.batchAllocations = await batchService.allocateForSale({
+            businessId, branchId: transfer.fromBranchId, productId: item.productId, variantId: item.variantId || null,
+            quantity: item.quantity, allowUnbatchedRemainder: !strict, productName: item.nameSnapshot || product.name, session,
+          });
+        }
       }
 
       transfer.status = 'IN_TRANSIT';
+      transfer.markModified('items');
       await transfer.save({ session });
 
       await AuditLog.create([{ businessId, userId, action: 'transfer.dispatch', entityType: 'StockTransfer', entityId: transfer._id }], { session });
+      result = transfer;
     });
+    return result;
   } finally {
     session.endSession();
   }
-
-  return transfer;
 }
 
 /** Stage 4: destination branch confirms receipt - stock lands in toBranch's BranchInventory. */
 async function receiveTransfer(businessId, userId, id) {
-  const transfer = await StockTransfer.findOne({ _id: id, businessId });
-  if (!transfer) throw ApiError.notFound('Transfer not found');
-  if (transfer.status !== 'IN_TRANSIT') {
-    throw ApiError.conflict(`Cannot receive a transfer in status ${transfer.status}`, 'INVALID_TRANSFER_STATE');
-  }
-
   const session = await mongoose.startSession();
   try {
+    let result;
     await session.withTransaction(async () => {
+      const transfer = await StockTransfer.findOne({ _id: id, businessId }).session(session);
+      if (!transfer) throw ApiError.notFound('Transfer not found');
+      if (transfer.status !== 'IN_TRANSIT') {
+        throw ApiError.conflict(`Cannot receive a transfer in status ${transfer.status}`, 'INVALID_TRANSFER_STATE');
+      }
+
       for (const item of transfer.items) {
         await applyStockChange({
           businessId,
@@ -154,6 +178,19 @@ async function receiveTransfer(businessId, userId, id) {
           performedBy: userId,
           session,
         });
+
+        // Recreate the same batches at the destination (same number, expiry and cost). Stock that expired
+        // in transit still lands (it is real stock) but cannot be sold, and shows up in the expiry report.
+        if (item.batchAllocations?.length) {
+          const product = await Product.findOne({ _id: item.productId, businessId }).session(session);
+          for (const a of item.batchAllocations) {
+            await batchService.receiveIntoBatch({
+              businessId, branchId: transfer.toBranchId, product, variantId: item.variantId || null,
+              quantity: a.quantity, batchNumber: a.batchNumber, expiryDate: a.expiryDate,
+              manufacturingDate: a.manufacturingDate, costPrice: a.unitCostCents, session, allowExpired: true, legacy: !a.expiryDate,
+            });
+          }
+        }
       }
 
       transfer.status = 'RECEIVED';
@@ -161,12 +198,12 @@ async function receiveTransfer(businessId, userId, id) {
       await transfer.save({ session });
 
       await AuditLog.create([{ businessId, userId, action: 'transfer.receive', entityType: 'StockTransfer', entityId: transfer._id }], { session });
+      result = transfer;
     });
+    return result;
   } finally {
     session.endSession();
   }
-
-  return transfer;
 }
 
 /** Cancel - only allowed before goods have left the source (REQUESTED/APPROVED). Once IN_TRANSIT, it must be received then handled as a return/adjustment. */

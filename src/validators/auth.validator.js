@@ -1,8 +1,10 @@
 const { z } = require('zod');
 const { kenyanPhone } = require('./common');
+const { BUSINESS_TYPES } = require('../constants/businessFeatures');
 
 const registerSchema = z.object({
   businessName: z.string().trim().min(2),
+  businessType: z.enum(BUSINESS_TYPES).optional(), // defaults to general_shop
   ownerName: z.string().trim().min(2),
   phone: kenyanPhone,
   email: z.string().trim().email().optional(),

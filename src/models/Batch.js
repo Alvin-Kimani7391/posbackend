@@ -15,13 +15,26 @@ const batchSchema = new Schema(
     manufacturingDate: { type: Date },
     expiryDate: { type: Date },
 
-    status: { type: String, enum: ['active', 'expired', 'depleted'], default: 'active' },
+    // active      = sellable (its quantity is part of BranchInventory.quantity)
+    // quarantined = held back (recall, damage, returned stock awaiting inspection); NOT in BranchInventory.quantity
+    // recalled    = quarantined because of a supplier/regulator recall
+    // expired / depleted = written off / used up
+    status: { type: String, enum: ['active', 'quarantined', 'recalled', 'expired', 'depleted'], default: 'active' },
+    statusReason: { type: String, trim: true },
+    statusChangedAt: { type: Date },
+    statusChangedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+
+    supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier' },
+    purchaseId: { type: Schema.Types.ObjectId, ref: 'Purchase' },
+    receivedAt: { type: Date },
+    parentBatchId: { type: Schema.Types.ObjectId, ref: 'Batch' }, // set on return-to-quarantine batches
   },
   { timestamps: true }
 );
 
 batchSchema.index({ businessId: 1, branchId: 1, productId: 1, batchNumber: 1 }, { unique: true });
 batchSchema.index({ businessId: 1, expiryDate: 1 });
+batchSchema.index({ businessId: 1, branchId: 1, productId: 1, status: 1, expiryDate: 1 });
 
 moneyFields(batchSchema, ['costPrice']);
 

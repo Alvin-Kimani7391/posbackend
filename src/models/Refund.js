@@ -8,6 +8,9 @@ const refundItemSchema = new Schema(
     nameSnapshot: { type: String, required: true },
     quantity: { type: Number, required: true, min: 0.001 }, // how many units are being returned/refunded on this line
     amount: { type: Number, required: true }, // integer cents - computed server-side, proportional to what was actually charged
+    // What happens to the returned units: RESTOCK = back to sellable stock, QUARANTINE = held for inspection
+    // (never sellable until released), DISPOSE = destroyed / not restocked.
+    disposition: { type: String, enum: ['RESTOCK', 'QUARANTINE', 'DISPOSE'], default: 'RESTOCK' },
   },
   { _id: false }
 );

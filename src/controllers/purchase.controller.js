@@ -20,7 +20,7 @@ exports.create = catchAsync(async (req, res) => {
 });
 
 exports.receive = catchAsync(async (req, res) => {
-  const purchase = await purchaseService.receivePurchase(req.businessId, req.user._id, req.params.id);
+  const purchase = await purchaseService.receivePurchase(req.businessId, req.user._id, req.params.id, req.body?.batches || []);
   return sendSuccess(res, 200, 'Purchase received', { purchase });
 });
 

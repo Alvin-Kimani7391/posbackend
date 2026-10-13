@@ -17,7 +17,7 @@ const Business = require('../models/Business');
 const Branch = require('../models/Branch');
 const CashShift = require('../models/CashShift');
 const SerialNumber = require('../models/SerialNumber');
-const Batch = require('../models/Batch');
+const batchService = require('./batch.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
@@ -243,6 +243,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       }
 
       // Inventory, serials, batches - one item at a time, same transaction.
+      const allocByItem = new Map();
       for (const item of builtItems) {
         const { product, quantity } = item._meta;
 
@@ -266,14 +267,33 @@ async function createSale(businessId, branchId, cashierUser, payload) {
           }
         }
 
-        if (item.batchId) {
-          const updatedBatch = await Batch.findOneAndUpdate(
-            { _id: item.batchId, businessId, quantity: { $gte: quantity } },
-            { $inc: { quantity: -quantity } },
-            { session, new: true }
-          );
-          if (!updatedBatch) throw ApiError.badRequest(`Insufficient batch stock for ${item.nameSnapshot}`, 'INSUFFICIENT_BATCH_STOCK');
+        // Batch-tracked products ALWAYS sell from a valid batch: the cashier's pick if given (must be in date,
+        // sellable, same branch/product/variant), otherwise FEFO. Regulated businesses (quarantineManagement on:
+        // pharmacy, cosmetics) can never sell un-batched stock; others may sell legacy stock that was never batched.
+        if (product.trackBatch || item.batchId) {
+          const strict = !!business.featureSettings?.quarantineManagement;
+          const allocations = await batchService.allocateForSale({
+            businessId, branchId, productId: item.productId, variantId: item.variantId || null, quantity,
+            requestedBatchId: item.batchId || null, allowUnbatchedRemainder: !strict,
+            productName: item.nameSnapshot, session,
+          });
+          allocByItem.set(item, allocations);
         }
+      }
+
+      // Record which batch(es) each line came from (recall tracing, cancels, refunds).
+      if (allocByItem.size) {
+        const $set = {};
+        builtItems.forEach((bi, i) => {
+          const a = allocByItem.get(bi);
+          if (a?.length) {
+            $set[`items.${i}.batchAllocations`] = a;
+            $set[`items.${i}.batchId`] = a[0].batchId;
+            sale.items[i].batchAllocations = a;
+            sale.items[i].batchId = a[0].batchId;
+          }
+        });
+        if (Object.keys($set).length) await Sale.updateOne({ _id: sale._id }, { $set }, { session });
       }
 
       // Payments - manual recording for CASH/CARD/BANK; MPESA picks up
@@ -493,8 +513,16 @@ async function cancelSale(businessId, userId, id, reason) {
             { session }
           );
         }
-        if (item.batchId) {
-          await Batch.updateOne({ _id: item.batchId, businessId }, { $inc: { quantity: item.quantity } }, { session });
+        if (item.batchId || item.batchAllocations?.length) {
+          const notSellable = await batchService.restoreAllocations(businessId, item, session);
+          // Units that went back into a held/expired batch must not count as sellable stock.
+          if (notSellable > 0 && product?.trackInventory) {
+            await applyStockChange({
+              businessId, branchId: sale.branchId, productId: item.productId, variantId: item.variantId || null,
+              quantityDelta: -notSellable, type: 'ADJUSTMENT_OUT', referenceType: 'Sale', referenceId: sale._id,
+              reason: `Sale ${sale.receiptNumber} cancelled: units returned to a held or expired batch`, performedBy: userId, session, allowNegative: true,
+            });
+          }
         }
       }
 

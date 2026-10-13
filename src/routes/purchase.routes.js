@@ -4,7 +4,7 @@ const validate = require('../middleware/validate');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { uploadPurchaseInvoices } = require('../middleware/purchaseUpload');
 const parseJsonFields = require('../middleware/parseJsonFields');
-const { createPurchaseSchema, listPurchasesQuery, recordPaymentSchema, idParamSchema } = require('../validators/purchase.validator');
+const { receivePurchaseSchema, createPurchaseSchema, listPurchasesQuery, recordPaymentSchema, idParamSchema } = require('../validators/purchase.validator');
 
 router.use(authenticate);
 
@@ -29,7 +29,7 @@ router.post(
   controller.create
 );
 router.get('/:id', requirePermission('purchases.view'), validate({ params: idParamSchema }), controller.getOne);
-router.post('/:id/receive', requirePermission('purchases.receive'), validate({ params: idParamSchema }), controller.receive);
+router.post('/:id/receive', requirePermission('purchases.receive'), validate({ params: idParamSchema, body: receivePurchaseSchema }), controller.receive);
 router.post('/:id/payments', requirePermission('purchases.pay'), validate({ params: idParamSchema, body: recordPaymentSchema }), controller.recordPayment);
 
 module.exports = router;

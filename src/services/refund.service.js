@@ -10,6 +10,7 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange } = require('./inventory.service');
+const batchService = require('./batch.service');
 const User = require('../models/User');
 const notificationService = require('./notification.service');
 
@@ -28,6 +29,12 @@ async function requestRefund(businessId, branchId, user, { saleId, items, reason
 
   const business = await Business.findById(businessId);
 
+  const products = await Product.find({ _id: { $in: items.map((i) => i.productId) }, businessId }).select('trackBatch trackInventory name');
+  const productById = new Map(products.map((pr) => [String(pr._id), pr]));
+  // Regulated businesses (pharmacy, cosmetics): returned batch-tracked goods never go straight back on the
+  // shelf. They are quarantined by default, and only a manager-level user may choose RESTOCK.
+  const strictReturns = !!business?.featureSettings?.quarantineManagement;
+
   const builtItems = items.map((raw) => {
     const saleItem = sale.items.find((si) => si.productId.toString() === raw.productId.toString() && (si.variantId ? si.variantId.toString() : null) === (raw.variantId || null));
     if (!saleItem) throw ApiError.badRequest('This item was not part of the original sale', 'ITEM_NOT_IN_SALE');
@@ -41,7 +48,17 @@ async function requestRefund(businessId, branchId, user, { saleId, items, reason
     // discount/tax), never recomputed from today's product price.
     const amount = Math.round((saleItem.total / saleItem.quantity) * raw.quantity);
 
-    return { productId: saleItem.productId, variantId: saleItem.variantId, nameSnapshot: saleItem.nameSnapshot, quantity: raw.quantity, amount };
+    const product = productById.get(String(saleItem.productId));
+    const batched = !!(product?.trackBatch || saleItem.batchId || saleItem.batchAllocations?.length);
+    let disposition = raw.disposition || (strictReturns && batched ? 'QUARANTINE' : 'RESTOCK');
+    if (disposition === 'QUARANTINE' && !batched) {
+      throw ApiError.badRequest(`${saleItem.nameSnapshot} is not batch-tracked, so it cannot be quarantined. Choose RESTOCK or DISPOSE.`, 'INVALID_DISPOSITION');
+    }
+    if (disposition === 'RESTOCK' && strictReturns && batched && !userCanApprove(user)) {
+      throw ApiError.forbidden(`${saleItem.nameSnapshot}: returned stock must be quarantined or disposed; only a manager can restock it`, 'RESTOCK_NOT_ALLOWED');
+    }
+
+    return { productId: saleItem.productId, variantId: saleItem.variantId, nameSnapshot: saleItem.nameSnapshot, quantity: raw.quantity, amount, disposition };
   });
 
   const totalAmount = builtItems.reduce((s, i) => s + i.amount, 0);
@@ -133,12 +150,35 @@ async function completeRefund(businessId, userId, refundId) {
         saleItem.refundedQuantity += rItem.quantity;
 
         const product = await Product.findOne({ _id: rItem.productId, businessId }).session(session);
-        if (product?.trackInventory) {
-          await applyStockChange({
-            businessId, branchId: refund.branchId, productId: rItem.productId, variantId: rItem.variantId || null,
-            quantityDelta: rItem.quantity, type: 'REFUND', referenceType: 'Refund', referenceId: refund._id,
-            reason: `Refund ${refund.refundNumber}`, performedBy: userId, session, allowNegative: true,
+        const disposition = rItem.disposition || 'RESTOCK';
+        const batched = !!(product?.trackBatch || saleItem.batchId || saleItem.batchAllocations?.length);
+
+        if (disposition === 'RESTOCK') {
+          if (product?.trackInventory) {
+            await applyStockChange({
+              businessId, branchId: refund.branchId, productId: rItem.productId, variantId: rItem.variantId || null,
+              quantityDelta: rItem.quantity, type: 'REFUND', referenceType: 'Refund', referenceId: refund._id,
+              reason: `Refund ${refund.refundNumber}`, performedBy: userId, session, allowNegative: true,
+            });
+          }
+          if (batched) {
+            const notSellable = await batchService.restoreAllocations(businessId, saleItem, session, rItem.quantity);
+            if (notSellable > 0 && product?.trackInventory) {
+              await applyStockChange({
+                businessId, branchId: refund.branchId, productId: rItem.productId, variantId: rItem.variantId || null,
+                quantityDelta: -notSellable, type: 'ADJUSTMENT_OUT', referenceType: 'Refund', referenceId: refund._id,
+                reason: `Refund ${refund.refundNumber}: units belong to a held or expired batch`, performedBy: userId, session, allowNegative: true,
+              });
+            }
+          }
+        } else if (disposition === 'QUARANTINE') {
+          // Not sellable: no BranchInventory change. Units are held in a quarantined return batch until inspected.
+          await batchService.quarantineReturn({
+            businessId, branchId: refund.branchId, userId, saleItem, quantity: rItem.quantity,
+            refundNumber: refund.refundNumber, receiptNumber: sale.receiptNumber, session,
           });
+        } else {
+          await AuditLog.create([{ businessId, branchId: refund.branchId, userId, action: 'refund.dispose', entityType: 'Refund', entityId: refund._id, newValue: { productId: rItem.productId, quantity: rItem.quantity } }], { session });
         }
       }
       await sale.save({ session });

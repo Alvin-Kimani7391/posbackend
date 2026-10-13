@@ -3,7 +3,8 @@ const Purchase = require('../models/Purchase');
 const Product = require('../models/Product');
 const ProductVariant = require('../models/ProductVariant');
 const Supplier = require('../models/Supplier');
-const Batch = require('../models/Batch');
+const Business = require('../models/Business');
+const batchService = require('./batch.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
@@ -220,7 +221,7 @@ async function listPurchases(businessId, { branchId, supplierId, receivedStatus,
  * (and batches, where the product tracks them) for every line still owed,
  * and adds the payable amount to the supplier's balance. Fully atomic.
  */
-async function receivePurchase(businessId, userId, id) {
+async function receivePurchase(businessId, userId, id, batchLines = []) {
   const session = await mongoose.startSession();
   try {
     let result;
@@ -228,6 +229,11 @@ async function receivePurchase(businessId, userId, id) {
       const purchase = await Purchase.findOne({ _id: id, businessId }).session(session);
       if (!purchase) throw ApiError.notFound('Purchase not found');
       if (purchase.receivedStatus === 'RECEIVED') throw ApiError.conflict('This purchase has already been fully received', 'ALREADY_RECEIVED');
+
+      // Businesses with batch tracking on MUST supply the supplier's real batch number (and expiry where the
+      // product tracks it) for every batch-tracked line. Others keep the old behaviour (batch = purchase number).
+      const biz = await Business.findById(businessId).select('featureSettings').session(session);
+      const strictBatches = !!biz?.featureSettings?.batchTracking;
 
       for (const item of purchase.items) {
         const outstanding = item.quantity - item.receivedQuantity;
@@ -243,11 +249,33 @@ async function receivePurchase(businessId, userId, id) {
         }
 
         if (product?.trackBatch) {
-          await Batch.findOneAndUpdate(
-            { businessId, branchId: purchase.branchId, productId: item.productId, batchNumber: purchase.purchaseNumber },
-            { $inc: { quantity: outstanding }, $setOnInsert: { variantId: item.variantId || null, costPrice: item.unitCost } },
-            { upsert: true, session }
-          );
+          const lines = (batchLines || []).filter((l) => String(l.productId) === String(item.productId)
+            && String(l.variantId || '') === String(item.variantId || ''));
+
+          if (!lines.length) {
+            if (strictBatches) {
+              throw ApiError.badRequest(`${product.name}: supplier batch number${product.trackExpiry ? ' and expiry date are' : ' is'} required to receive this line`, 'BATCH_DETAILS_REQUIRED');
+            }
+            await batchService.receiveIntoBatch({
+              businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: outstanding,
+              batchNumber: purchase.purchaseNumber, costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id,
+              session, legacy: true,
+            });
+          } else {
+            const qtys = lines.map((l) => (l.quantity != null ? l.quantity : (lines.length === 1 ? outstanding : null)));
+            if (qtys.some((q) => q == null || q <= 0)) throw ApiError.badRequest(`${product.name}: give a quantity for each batch`, 'BATCH_QUANTITY_REQUIRED');
+            const sum = Math.round(qtys.reduce((s, q) => s + q, 0) * 1000) / 1000;
+            if (sum !== Math.round(outstanding * 1000) / 1000) {
+              throw ApiError.badRequest(`${product.name}: batch quantities (${sum}) must add up to the quantity received (${outstanding})`, 'BATCH_QUANTITY_MISMATCH');
+            }
+            for (let i = 0; i < lines.length; i += 1) {
+              await batchService.receiveIntoBatch({
+                businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: qtys[i],
+                batchNumber: lines[i].batchNumber, expiryDate: lines[i].expiryDate, manufacturingDate: lines[i].manufacturingDate,
+                costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id, session,
+              });
+            }
+          }
         }
 
         item.receivedQuantity = item.quantity;

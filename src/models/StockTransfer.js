@@ -6,6 +6,17 @@ const transferItemSchema = new Schema(
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant', default: null },
     quantity: { type: Number, required: true, min: 1 },
     nameSnapshot: { type: String },
+    // Filled at dispatch for batch-tracked products: exactly which source batches left the branch.
+    // The destination recreates the same batches (same number, expiry, cost) on receipt.
+    batchAllocations: [{
+      _id: false,
+      batchId: { type: Schema.Types.ObjectId, ref: 'Batch' },
+      batchNumber: String,
+      expiryDate: Date,
+      manufacturingDate: Date,
+      unitCostCents: Number,
+      quantity: Number,
+    }],
   },
   { _id: false }
 );

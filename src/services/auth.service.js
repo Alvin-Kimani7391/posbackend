@@ -8,9 +8,10 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
 const billing = require('./billing.service');
+const { resolveFeatures } = require('../constants/businessFeatures');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
 
-async function registerBusinessOwner({ businessName, ownerName, phone, email, password }) {
+async function registerBusinessOwner({ businessName, businessType = 'general_shop', ownerName, phone, email, password }) {
   const session = await mongoose.startSession();
   try {
     let business;
@@ -23,7 +24,10 @@ async function registerBusinessOwner({ businessName, ownerName, phone, email, pa
       }
 
       business = (
-        await Business.create([{ name: businessName, phone, email }], { session })
+        await Business.create(
+          [{ name: businessName, businessType, featureSettings: resolveFeatures(businessType), phone, email }],
+          { session }
+        )
       )[0];
 
       const mainBranch = (

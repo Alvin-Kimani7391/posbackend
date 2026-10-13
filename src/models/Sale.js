@@ -24,7 +24,15 @@ const saleItemSchema = new Schema(
 
     refundedQuantity: { type: Number, default: 0 }, // running total already refunded - never let refunds exceed (quantity - refundedQuantity)
 
-    batchId: { type: Schema.Types.ObjectId, ref: 'Batch' },
+    batchId: { type: Schema.Types.ObjectId, ref: 'Batch' }, // first allocated batch (kept for older clients/reports)
+    // Every batch this line was taken from (FEFO can span several). Used for recall tracing and cancel/refund.
+    batchAllocations: [{
+      _id: false,
+      batchId: { type: Schema.Types.ObjectId, ref: 'Batch' },
+      batchNumber: String,
+      expiryDate: Date,
+      quantity: Number,
+    }],
     serialNumbers: [{ type: String }],
   },
   { _id: false }

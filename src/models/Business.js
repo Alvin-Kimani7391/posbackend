@@ -1,15 +1,19 @@
 const { Schema, model } = require('mongoose');
 
-const BUSINESS_TYPES = [
-  'supermarket', 'electronics', 'clothing', 'hardware', 'cosmetics',
-  'restaurant', 'general_shop', 'wholesale', 'other',
-];
+const { BUSINESS_TYPES, FEATURE_KEYS } = require('../constants/businessFeatures');
+
+const featureSettingsSchema = new Schema(
+  Object.fromEntries(FEATURE_KEYS.map((k) => [k, { type: Boolean, default: false }])),
+  { _id: false }
+);
 
 const businessSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
     legalName: { type: String, trim: true },
     businessType: { type: String, enum: BUSINESS_TYPES, default: 'general_shop' },
+    businessSubtype: { type: String, trim: true, maxlength: 60 }, // e.g. mini-supermarket, cafe
+    featureSettings: { type: featureSettingsSchema, default: () => ({}) },
     phone: { type: String, required: true, trim: true },
     email: { type: String, trim: true, lowercase: true },
     address: { type: String, trim: true },

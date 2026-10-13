@@ -208,15 +208,17 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
         referenceType: 'ManualReceive', referenceId: null, reason, performedBy: userId, session,
       });
 
-      if (product.trackBatch && batchNumber) {
-        await Batch.findOneAndUpdate(
-          { businessId, branchId, productId, batchNumber },
-          {
-            $inc: { quantity: Math.abs(quantity) },
-            $setOnInsert: { variantId: variantId || null, costPrice: costPrice ?? product.costPrice, manufacturingDate, expiryDate },
-          },
-          { upsert: true, session }
-        );
+      if (product.trackBatch) {
+        const biz = await Business.findById(businessId).select('featureSettings').session(session);
+        if (batchNumber) {
+          const batchService = require('./batch.service'); // lazy: batch.service requires this module
+          await batchService.receiveIntoBatch({
+            businessId, branchId, product, variantId: variantId || null, quantity: Math.abs(quantity),
+            batchNumber, expiryDate, manufacturingDate, costPrice, session,
+          });
+        } else if (biz?.featureSettings?.batchTracking) {
+          throw ApiError.badRequest(`${product.name} is batch-tracked: a batch number${product.trackExpiry ? ' and expiry date are' : ' is'} required`, 'BATCH_DETAILS_REQUIRED');
+        }
       }
 
       await AuditLog.create(
