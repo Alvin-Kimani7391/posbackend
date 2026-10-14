@@ -35,6 +35,9 @@ const productSchema = new Schema(
 
     trackInventory: { type: Boolean, default: true },
     trackSerialNumber: { type: Boolean, default: false },
+    serialKind: { type: String, enum: ['serial', 'imei'], default: 'serial' }, // imei = 15-digit Luhn-checked
+    warrantyMonths: { type: Number, default: 0, min: 0, max: 120 },          // shop warranty given to the customer
+    supplierWarrantyMonths: { type: Number, default: 0, min: 0, max: 120 },  // warranty the supplier gives the shop
     trackBatch: { type: Boolean, default: false },
     trackExpiry: { type: Boolean, default: false },
 

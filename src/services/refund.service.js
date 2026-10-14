@@ -11,6 +11,9 @@ const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange } = require('./inventory.service');
 const batchService = require('./batch.service');
+const serialService = require('./serial.service');
+const SerialNumber = require('../models/SerialNumber');
+const { normalizeSerial } = require('../utils/imei');
 const User = require('../models/User');
 const notificationService = require('./notification.service');
 
@@ -26,16 +29,18 @@ async function requestRefund(businessId, branchId, user, { saleId, items, reason
   const sale = await Sale.findOne({ _id: saleId, businessId });
   if (!sale) throw ApiError.notFound('Sale not found');
   if (sale.saleStatus !== 'COMPLETED') throw ApiError.conflict('Only a completed sale can be refunded', 'INVALID_SALE_STATE');
+  if (sale.source === 'REPAIR') throw ApiError.conflict('This is a repair invoice. Refund the customer from the repair job instead.', 'REPAIR_SALE');
+  if (sale.source === 'GARAGE') throw ApiError.conflict('This is a garage invoice. Refund the customer from the job card instead.', 'GARAGE_SALE');
 
   const business = await Business.findById(businessId);
 
-  const products = await Product.find({ _id: { $in: items.map((i) => i.productId) }, businessId }).select('trackBatch trackInventory name');
+  const products = await Product.find({ _id: { $in: items.map((i) => i.productId) }, businessId }).select('trackBatch trackInventory trackSerialNumber name');
   const productById = new Map(products.map((pr) => [String(pr._id), pr]));
   // Regulated businesses (pharmacy, cosmetics): returned batch-tracked goods never go straight back on the
   // shelf. They are quarantined by default, and only a manager-level user may choose RESTOCK.
   const strictReturns = !!business?.featureSettings?.quarantineManagement;
 
-  const builtItems = items.map((raw) => {
+  const builtItems = await Promise.all(items.map(async (raw) => {
     const saleItem = sale.items.find((si) => si.productId.toString() === raw.productId.toString() && (si.variantId ? si.variantId.toString() : null) === (raw.variantId || null));
     if (!saleItem) throw ApiError.badRequest('This item was not part of the original sale', 'ITEM_NOT_IN_SALE');
 
@@ -51,15 +56,29 @@ async function requestRefund(businessId, branchId, user, { saleId, items, reason
     const product = productById.get(String(saleItem.productId));
     const batched = !!(product?.trackBatch || saleItem.batchId || saleItem.batchAllocations?.length);
     let disposition = raw.disposition || (strictReturns && batched ? 'QUARANTINE' : 'RESTOCK');
-    if (disposition === 'QUARANTINE' && !batched) {
+    if (disposition === 'QUARANTINE' && !batched && !product?.trackSerialNumber) {
       throw ApiError.badRequest(`${saleItem.nameSnapshot} is not batch-tracked, so it cannot be quarantined. Choose RESTOCK or DISPOSE.`, 'INVALID_DISPOSITION');
     }
     if (disposition === 'RESTOCK' && strictReturns && batched && !userCanApprove(user)) {
       throw ApiError.forbidden(`${saleItem.nameSnapshot}: returned stock must be quarantined or disposed; only a manager can restock it`, 'RESTOCK_NOT_ALLOWED');
     }
 
-    return { productId: saleItem.productId, variantId: saleItem.variantId, nameSnapshot: saleItem.nameSnapshot, quantity: raw.quantity, amount, disposition };
-  });
+    // Serial-tracked products: the exact units coming back must be named, must be on this sale, and still be with the customer.
+    let serialNumbers;
+    if (product?.trackSerialNumber) {
+      serialNumbers = (raw.serialNumbers || []).map(normalizeSerial);
+      if (serialNumbers.length !== raw.quantity || new Set(serialNumbers).size !== serialNumbers.length) {
+        throw ApiError.badRequest(`${saleItem.nameSnapshot}: give exactly ${raw.quantity} different serial number(s) being returned`, 'SERIAL_COUNT_MISMATCH');
+      }
+      if (serialNumbers.some((sn) => !(saleItem.serialNumbers || []).includes(sn))) {
+        throw ApiError.badRequest(`${saleItem.nameSnapshot}: a serial number given was not sold on this sale`, 'SERIAL_NOT_IN_SALE');
+      }
+      const stillSold = await SerialNumber.countDocuments({ businessId, serialNumber: { $in: serialNumbers }, saleId: sale._id, status: 'sold' });
+      if (stillSold !== serialNumbers.length) throw ApiError.conflict(`${saleItem.nameSnapshot}: a unit has already been returned or replaced`, 'SERIAL_NOT_RETURNABLE');
+    }
+
+    return { productId: saleItem.productId, variantId: saleItem.variantId, nameSnapshot: saleItem.nameSnapshot, quantity: raw.quantity, amount, disposition, serialNumbers };
+  }));
 
   const totalAmount = builtItems.reduce((s, i) => s + i.amount, 0);
   const seq = await nextSequence(businessId, 'refund:business', undefined);
@@ -153,7 +172,12 @@ async function completeRefund(businessId, userId, refundId) {
         const disposition = rItem.disposition || 'RESTOCK';
         const batched = !!(product?.trackBatch || saleItem.batchId || saleItem.batchAllocations?.length);
 
-        if (disposition === 'RESTOCK') {
+        if (product?.trackSerialNumber) {
+          // Returned units are held as `returned` (not sellable, not in stock) until inspected; stock is added back on inspection.
+          await serialService.markReturned({
+            businessId, saleId: sale._id, serials: rItem.serialNumbers || [], userId, refundId: refund._id, damaged: disposition === 'DISPOSE', session,
+          });
+        } else if (disposition === 'RESTOCK') {
           if (product?.trackInventory) {
             await applyStockChange({
               businessId, branchId: refund.branchId, productId: rItem.productId, variantId: rItem.variantId || null,

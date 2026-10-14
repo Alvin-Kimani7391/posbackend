@@ -6,6 +6,7 @@ const refundItemSchema = z.object({
   variantId: objectId.optional(),
   quantity: z.coerce.number().positive(),
   disposition: z.enum(['RESTOCK', 'QUARANTINE', 'DISPOSE']).optional(),
+  serialNumbers: z.array(z.string().trim().min(3).max(64)).max(1000).optional(),
 });
 
 const createRefundSchema = z.object({

@@ -10,6 +10,8 @@ const paymentSchema = new Schema(
     branchId: { type: Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', index: true },
     shiftId: { type: Schema.Types.ObjectId, ref: 'CashShift', index: true }, // lets shift close reconcile cash without joining through Sale
+    jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard', index: true }, // deposit / payment / refund taken on a garage job card
+    repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob', index: true }, // deposit / payment / refund taken on a repair job
     refundId: { type: Schema.Types.ObjectId, ref: 'Refund' }, // set when this Payment record represents money paid OUT as a refund
     customerId: { type: Schema.Types.ObjectId, ref: 'Customer' },
 

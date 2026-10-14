@@ -64,7 +64,9 @@ const saleSchema = new Schema(
     paymentStatus: { type: String, enum: ['PAID', 'PARTIAL', 'UNPAID', 'CREDIT'], default: 'PAID' },
     saleStatus: { type: String, enum: ['COMPLETED', 'CANCELLED'], default: 'COMPLETED' },
 
-    source: { type: String, enum: ['POS', 'ONLINE', 'SYNC'], default: 'POS' },
+    source: { type: String, enum: ['POS', 'ONLINE', 'SYNC', 'REPAIR', 'GARAGE'], default: 'POS' },
+    jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard' }, // set on the invoice created when a garage job card is collected
+    repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob' }, // set on the invoice created when a repair is collected
     notes: { type: String },
 
     // Offline-sync dedup fields (full sync engine is a later phase, but the

@@ -10,6 +10,7 @@ const refundItemSchema = new Schema(
     amount: { type: Number, required: true }, // integer cents - computed server-side, proportional to what was actually charged
     // What happens to the returned units: RESTOCK = back to sellable stock, QUARANTINE = held for inspection
     // (never sellable until released), DISPOSE = destroyed / not restocked.
+    serialNumbers: [{ type: String }], // the exact units returned (required for serial-tracked products)
     disposition: { type: String, enum: ['RESTOCK', 'QUARANTINE', 'DISPOSE'], default: 'RESTOCK' },
   },
   { _id: false }

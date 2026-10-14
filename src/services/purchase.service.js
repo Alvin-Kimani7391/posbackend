@@ -5,6 +5,7 @@ const ProductVariant = require('../models/ProductVariant');
 const Supplier = require('../models/Supplier');
 const Business = require('../models/Business');
 const batchService = require('./batch.service');
+const serialService = require('./serial.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
@@ -221,7 +222,7 @@ async function listPurchases(businessId, { branchId, supplierId, receivedStatus,
  * (and batches, where the product tracks them) for every line still owed,
  * and adds the payable amount to the supplier's balance. Fully atomic.
  */
-async function receivePurchase(businessId, userId, id, batchLines = []) {
+async function receivePurchase(businessId, userId, id, batchLines = [], serialLines = []) {
   const session = await mongoose.startSession();
   try {
     let result;
@@ -245,6 +246,20 @@ async function receivePurchase(businessId, userId, id, batchLines = []) {
             businessId, branchId: purchase.branchId, productId: item.productId, variantId: item.variantId || null,
             quantityDelta: outstanding, type: 'PURCHASE', referenceType: 'Purchase', referenceId: purchase._id,
             reason: `Purchase ${purchase.purchaseNumber} received`, performedBy: userId, session,
+          });
+        }
+
+        // Serialised products (phones, laptops...): every unit must be registered with its serial / IMEI on receipt,
+        // otherwise it could never be sold or traced.
+        if (product?.trackSerialNumber) {
+          const entries = (serialLines || []).filter((l) => String(l.productId) === String(item.productId)
+            && String(l.variantId || '') === String(item.variantId || ''));
+          const serials = entries.flatMap((e) => e.serialNumbers || []);
+          if (!serials.length) throw ApiError.badRequest(`${product.name}: serial number(s) / IMEI(s) are required to receive this line`, 'SERIAL_DETAILS_REQUIRED');
+          await serialService.registerSerials({
+            businessId, branchId: purchase.branchId, userId, product, variantId: item.variantId || null, quantity: outstanding,
+            serials, purchaseId: purchase._id, supplierId: purchase.supplierId, costPrice: item.unitCost,
+            condition: entries[0]?.condition || 'new', session,
           });
         }
 

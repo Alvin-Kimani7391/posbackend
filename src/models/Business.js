@@ -93,6 +93,24 @@ const businessSchema = new Schema(
 
     },
 
+    // Automatic SMS to customers. Everything is OFF until the owner switches it on (each text costs SMS credits).
+    smsAlerts: {
+      senderId: { type: String, trim: true },             // must be one of the business's approved sender IDs; blank = first approved
+      quietHours: {
+        enabled: { type: Boolean, default: true },        // hold texts outside these hours (Nairobi time) until morning
+        startHour: { type: Number, default: 8, min: 0, max: 23 },
+        endHour: { type: Number, default: 20, min: 1, max: 24 },
+      },
+      ready: { enabled: { type: Boolean, default: false }, template: { type: String, maxlength: 320 } },
+      readyReminder: { enabled: { type: Boolean, default: false }, afterDays: { type: [Number], default: () => [3, 7, 14] }, template: { type: String, maxlength: 320 } },
+      serviceDue: {
+        enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 7, min: 0, max: 60 }, kmWindow: { type: Number, default: 500, min: 0, max: 10000 },
+        template: { type: String, maxlength: 320 }, overdueTemplate: { type: String, maxlength: 320 },
+      },
+      warrantyExpiring: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 14, min: 1, max: 90 }, template: { type: String, maxlength: 320 } },
+      insuranceExpiring: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 14, min: 1, max: 90 }, template: { type: String, maxlength: 320 } },
+    },
+
     subscriptionPlan: { type: String, default: 'trial' },
     subscriptionStatus: {
       type: String,

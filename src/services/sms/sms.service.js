@@ -434,7 +434,7 @@ async function processQueue() {
       }
       if (!batch.length) break;
       await Promise.all(batch.map(async (m) => {
-        touched.add(String(m.campaignId));
+        if (m.campaignId) touched.add(String(m.campaignId)); // automatic alerts belong to no campaign
         const r = await provider.sendSms({ to: m.phone, senderId: m.senderId, message: m.text });
         if (r.ok) {
           await M.SmsMessage.updateOne({ _id: m._id }, { $set: { status: 'sent', providerMessageId: r.providerMessageId, sentAt: new Date() } });
@@ -453,7 +453,7 @@ async function processQueue() {
 
 async function refundMessage(m) {
   const ok = await creditWallet(m.businessId, m.segments, { type: 'CAMPAIGN_REFUND', reference: `msg:${m._id}`, note: 'Message failed' });
-  if (ok) await M.SmsCampaign.updateOne({ _id: m.campaignId }, { $inc: { refundedCredits: m.segments } });
+  if (ok && m.campaignId) await M.SmsCampaign.updateOne({ _id: m.campaignId }, { $inc: { refundedCredits: m.segments } });
 }
 async function finalizeIfDone(campaignId) {
   const open = await M.SmsMessage.countDocuments({ campaignId, status: { $in: ['held', 'queued', 'sending'] } });
@@ -484,6 +484,7 @@ async function reconcilePayments() {
 }
 
 module.exports = {
+  segmentsOf, creditWallet,
   PLACEHOLDERS, getSettings, updateSettings, activeOffers, getWallet, adminAdjust,
   feeQuote, saveApplication, setNetworkStatus, readDocument,
   createPayment, settlePayment, refreshPayment, rejectPayment,

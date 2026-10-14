@@ -16,7 +16,8 @@ const Receipt = require('../models/Receipt');
 const Business = require('../models/Business');
 const Branch = require('../models/Branch');
 const CashShift = require('../models/CashShift');
-const SerialNumber = require('../models/SerialNumber');
+const serialService = require('./serial.service');
+const { normalizeSerial } = require('../utils/imei');
 const batchService = require('./batch.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
@@ -135,6 +136,8 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       if (!rawItem.serialNumbers || rawItem.serialNumbers.length !== rawItem.quantity) {
         throw ApiError.badRequest(`${product.name} requires exactly ${rawItem.quantity} serial number(s)`, 'SERIAL_COUNT_MISMATCH');
       }
+      const normalized = rawItem.serialNumbers.map(normalizeSerial);
+      if (new Set(normalized).size !== normalized.length) throw ApiError.badRequest(`${product.name}: the same serial number was entered twice`, 'DUPLICATE_SERIAL');
     }
 
     builtItems.push({
@@ -152,7 +155,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       total: computed.lineTotal,
       refundedQuantity: 0,
       batchId: rawItem.batchId || undefined,
-      serialNumbers: rawItem.serialNumbers || [],
+      serialNumbers: (rawItem.serialNumbers || []).map(normalizeSerial),
       _meta: { product, variant, quantity: rawItem.quantity, grossLineTotal: computed.grossLineTotal, discountApplied: discount },
     });
   }
@@ -257,14 +260,11 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         }
 
         if (product.trackSerialNumber && item.serialNumbers?.length) {
-          for (const sn of item.serialNumbers) {
-            const updated = await SerialNumber.findOneAndUpdate(
-              { businessId, serialNumber: sn, status: 'in_stock' },
-              { status: 'sold', saleId: sale._id },
-              { session, new: true }
-            );
-            if (!updated) throw ApiError.badRequest(`Serial number ${sn} is not available`, 'SERIAL_NOT_AVAILABLE');
-          }
+          // Each serial must be in stock, at THIS branch and belong to THIS product; the shop warranty starts now.
+          await serialService.markSold({
+            businessId, branchId, product, serials: item.serialNumbers, saleId: sale._id,
+            customerId: customer?._id, soldAt: new Date(), userId: cashierUser._id, session,
+          });
         }
 
         // Batch-tracked products ALWAYS sell from a valid batch: the cashier's pick if given (must be in date,
@@ -496,6 +496,8 @@ async function cancelSale(businessId, userId, id, reason) {
       const sale = await Sale.findOne({ _id: id, businessId }).session(session);
       if (!sale) throw ApiError.notFound('Sale not found');
       if (sale.saleStatus !== 'COMPLETED') throw ApiError.conflict('Only a completed sale can be cancelled', 'INVALID_SALE_STATE');
+      if (sale.source === 'GARAGE') throw ApiError.conflict('This is a garage invoice. Parts were used on the job, so it cannot be cancelled here. Refund the customer from the job card instead.', 'GARAGE_SALE');
+      if (sale.source === 'REPAIR') throw ApiError.conflict('This is a repair invoice. Parts were used on the job, so it cannot be cancelled here. Refund the customer from the repair job instead.', 'REPAIR_SALE');
 
       for (const item of sale.items) {
         const product = await Product.findOne({ _id: item.productId, businessId }).session(session);
@@ -507,11 +509,8 @@ async function cancelSale(businessId, userId, id, reason) {
           });
         }
         if (item.serialNumbers?.length) {
-          await SerialNumber.updateMany(
-            { businessId, serialNumber: { $in: item.serialNumbers }, saleId: sale._id },
-            { status: 'in_stock', $unset: { saleId: 1 } },
-            { session }
-          );
+          // Only units still sold on this sale go back (a unit already returned/replaced is left alone).
+          await serialService.releaseFromSale({ businessId, saleId: sale._id, serials: item.serialNumbers, userId, session });
         }
         if (item.batchId || item.batchAllocations?.length) {
           const notSellable = await batchService.restoreAllocations(businessId, item, session);

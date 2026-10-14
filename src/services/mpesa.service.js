@@ -648,9 +648,21 @@ async function consumeForSale(businessId, reference, expectedAmountCents, saleId
   const txn = await MpesaTransaction.findOne({ businessId, reference }).session(session);
   if (!txn) throw ApiError.badRequest('M-PESA reference not recognized', 'MPESA_REFERENCE_NOT_FOUND');
   if (txn.status !== 'SUCCESS') throw ApiError.badRequest('This M-PESA payment has not been confirmed as successful yet', 'MPESA_NOT_CONFIRMED');
-  if (txn.saleId) throw ApiError.conflict('This M-PESA payment has already been used on another sale', 'MPESA_ALREADY_CONSUMED');
+  if (txn.saleId || txn.repairJobId || txn.jobCardId) throw ApiError.conflict('This M-PESA payment has already been used', 'MPESA_ALREADY_CONSUMED');
   if (txn.amount !== expectedAmountCents) throw ApiError.badRequest('The M-PESA amount confirmed does not match this sale', 'MPESA_AMOUNT_MISMATCH');
   txn.saleId = saleId;
+  await txn.save({ session });
+  return { externalTransactionId: txn.mpesaReceiptNumber, checkoutRequestId: txn.checkoutRequestId, channel: txn.channel || 'STK' };
+}
+
+/** Same checks as consumeForSale, for a deposit / payment on a repair job. A code can only ever be used once, by a sale OR a repair. */
+async function consumeForRepair(businessId, reference, expectedAmountCents, repairJobId, session, field = 'repairJobId') {
+  const txn = await MpesaTransaction.findOne({ businessId, reference }).session(session);
+  if (!txn) throw ApiError.badRequest('M-PESA reference not recognized', 'MPESA_REFERENCE_NOT_FOUND');
+  if (txn.status !== 'SUCCESS') throw ApiError.badRequest('This M-PESA payment has not been confirmed as successful yet', 'MPESA_NOT_CONFIRMED');
+  if (txn.saleId || txn.repairJobId || txn.jobCardId) throw ApiError.conflict('This M-PESA payment has already been used', 'MPESA_ALREADY_CONSUMED');
+  if (txn.amount !== expectedAmountCents) throw ApiError.badRequest('The M-PESA amount confirmed does not match this payment', 'MPESA_AMOUNT_MISMATCH');
+  txn[field] = repairJobId; // 'repairJobId' (repairs) or 'jobCardId' (garage)
   await txn.save({ session });
   return { externalTransactionId: txn.mpesaReceiptNumber, checkoutRequestId: txn.checkoutRequestId, channel: txn.channel || 'STK' };
 }
@@ -754,7 +766,10 @@ async function backfillMissingReceipts() {
   return pending.length;
 }
 
-module.exports = {
+/** Garage job card deposit / payment: same checks, recorded against the job card. */
+const consumeForJobCard = (businessId, reference, amount, jobCardId, session) => consumeForRepair(businessId, reference, amount, jobCardId, session, 'jobCardId');
+
+module.exports = { consumeForRepair, consumeForJobCard,
   initiateStk, getStatus, handleCallback, consumeForSale, reapAbandoned, backfillMissingReceipts,
   initiateManual, cancelManual, claimByCode, ingestInboundPayment, getManualSetup, updateManualSetup,
 };

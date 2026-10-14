@@ -14,6 +14,13 @@ const receivePurchaseSchema = z.object({
     expiryDate: z.coerce.date().optional(),
     manufacturingDate: z.coerce.date().optional(),
   })).optional(),
+  // Serial numbers / IMEIs of received units, per serial-tracked line.
+  serials: z.array(z.object({
+    productId: objectId,
+    variantId: objectId.optional(),
+    serialNumbers: z.array(z.string().trim().min(3).max(64)).min(1).max(1000),
+    condition: z.enum(['new', 'used', 'refurbished']).optional(),
+  })).optional(),
 }).default({});
 
 const purchaseItemSchema = z

@@ -141,8 +141,14 @@ const smsMessageSchema = new Schema({
   nextAttemptAt: { type: Date, default: () => new Date() },
   providerMessageId: { type: String, index: true },
   error: String, sentAt: Date, deliveredAt: Date,
+  // Automatic alerts (ready for collection, service due ...). Campaign messages leave these unset.
+  purpose: { type: String, enum: ['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING'], index: true, sparse: true },
+  dedupeKey: { type: String },   // one alert per (business, key): a re-run of the reminder job can never text twice
+  refType: String, refId: ObjectId,
 }, { timestamps: true });
 smsMessageSchema.index({ status: 1, nextAttemptAt: 1 });
+smsMessageSchema.index({ businessId: 1, dedupeKey: 1 }, { unique: true, partialFilterExpression: { dedupeKey: { $type: 'string' } } });
+smsMessageSchema.index({ businessId: 1, purpose: 1, createdAt: -1 }, { partialFilterExpression: { purpose: { $type: 'string' } } });
 const SmsMessage = model('SmsMessage', smsMessageSchema);
 
 module.exports = { SmsSettings, SmsOffer, SmsPayment, SmsSenderIdApplication, SmsSenderId, SmsWallet, SmsLedger, SmsTemplate, SmsCampaign, SmsMessage };

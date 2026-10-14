@@ -13,6 +13,11 @@ router.use('/inventory', require('../inventory.routes'));
 router.use('/transfers', require('../transfer.routes'));
 router.use('/batches', require('../batch.routes'));
 router.use('/stocktakes', require('../stocktake.routes'));
+router.use('/serials', require('../serial.routes'));
+router.use('/warranty-claims', require('../warranty.routes'));
+router.use('/repairs', require('../repair.routes'));
+router.use('/vehicles', require('../vehicle.routes'));
+router.use('/job-cards', require('../jobcard.routes'));
 router.use('/sales', require('../sale.routes'));
 router.use('/customers', require('../customer.routes'));
 router.use('/crm', require('../crm.routes'));
@@ -38,6 +43,7 @@ router.use('/admin', require('../admin.routes'));
 
 router.use('/sms', require('../sms.routes'));
 router.use('/sms-hooks', require('../sms.webhook.routes'));
+router.use('/sms-alerts', require('../smsAlerts.routes'));
 
 router.use('/devices', require('../device.routes'));
 

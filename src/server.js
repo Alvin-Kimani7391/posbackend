@@ -19,6 +19,7 @@ async function start() {
   require('./jobs/billing.job').start();
   require('./jobs/crmSync.job').start();
     require('./jobs/smsQueue.job').start();
+  require('./jobs/smsAlerts.job').start();
       require('./jobs/offlineWatch.job').start();
 }
 

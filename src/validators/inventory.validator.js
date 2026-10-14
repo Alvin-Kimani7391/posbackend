@@ -36,6 +36,8 @@ const receiveStockSchema = z.object({
   batchNumber: z.string().trim().optional(),
   manufacturingDate: z.coerce.date().optional(),
   expiryDate: z.coerce.date().optional(),
+  serials: z.array(z.string().trim().min(3).max(64)).max(1000).optional(),
+  condition: z.enum(['new', 'used', 'refurbished']).optional(),
   reason: z.string().trim().optional(),
 });
 

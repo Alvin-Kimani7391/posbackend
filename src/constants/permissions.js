@@ -7,6 +7,11 @@ const PERMISSIONS = Object.freeze([
   'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer',
   'batches.view', 'batches.manage', // view batches/expiry; quarantine, release, dispose, recall
   'stocktake.view', 'stocktake.count', 'stocktake.manage', 'stocktake.approve', // count / start+cancel / approve variances
+  'serials.view', 'serials.manage',                       // look up units; inspect returned units
+  'warranty.view', 'warranty.manage', 'warranty.decide',  // view / open claims / decide (repair, replace, reject, goodwill)
+  'repairs.view', 'repairs.manage', 'repairs.approve',    // view / run jobs / refunds + waivers
+  'vehicles.view', 'vehicles.manage',                     // garage: vehicle register
+  'jobcards.view', 'jobcards.manage', 'jobcards.work', 'jobcards.approve', // view / run cards + payments / mechanic work + QC / refunds, waivers, free comebacks
   'sales.create', 'sales.view', 'sales.cancel', 'sales.price_override',
   'refunds.view', 'refunds.create', 'refunds.approve',
   'expenses.create', 'expenses.view', 'expenses.approve',
@@ -41,6 +46,8 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer',
     'batches.view', 'batches.manage',
     'stocktake.view', 'stocktake.count', 'stocktake.manage', 'stocktake.approve',
+    'serials.view', 'serials.manage', 'warranty.view', 'warranty.manage', 'warranty.decide', 'repairs.view', 'repairs.manage', 'repairs.approve',
+    'vehicles.view', 'vehicles.manage', 'jobcards.view', 'jobcards.manage', 'jobcards.work', 'jobcards.approve',
     'sales.create', 'sales.view', 'sales.cancel', 'sales.price_override',
     'refunds.view', 'refunds.create', 'refunds.approve',
     'expenses.create', 'expenses.view', 'expenses.approve',
@@ -66,6 +73,8 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'products.view',
     'inventory.view',
     'batches.view',
+    'serials.view', 'warranty.view', 'warranty.manage', 'repairs.view', 'repairs.manage',
+    'vehicles.view', 'vehicles.manage', 'jobcards.view', 'jobcards.manage',
     'sales.create', 'sales.view',
     'refunds.view', 'refunds.create',
     'payments.view',
@@ -81,13 +90,14 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'products.view', 'products.create', 'products.update',
     'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer',
     'batches.view', 'stocktake.view', 'stocktake.count',
+    'serials.view', 'serials.manage',
     'suppliers.view', 'suppliers.create',
     'purchases.view', 'purchases.create', 'purchases.receive',
     'tickets.view', 'tickets.create',
   ],
   [ROLES.ACCOUNTANT]: [
     'categories.view', 'products.view',
-    'stocktake.view',
+    'stocktake.view', 'warranty.view', 'repairs.view', 'vehicles.view', 'jobcards.view',
     'reports.view', 'reports.profit',
     'expenses.view', 'expenses.approve',
     'payments.view',

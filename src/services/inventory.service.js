@@ -195,7 +195,7 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
  * purchase.service and calls applyStockChange directly within its own
  * transaction so it can also update the supplier balance atomically.
  */
-async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, costPrice, batchNumber, expiryDate, manufacturingDate, reason }) {
+async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition }) {
   const product = await assertItemExists(businessId, productId, variantId);
 
   const session = await mongoose.startSession();
@@ -207,6 +207,15 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
         quantityDelta: Math.abs(quantity), type: 'OPENING_STOCK',
         referenceType: 'ManualReceive', referenceId: null, reason, performedBy: userId, session,
       });
+
+      if (product.trackSerialNumber) {
+        const serialService = require('./serial.service'); // lazy: serial.service requires this module
+        if (!serials?.length) throw ApiError.badRequest(`${product.name} is serial-tracked: give the serial number(s) / IMEI(s) of the units received`, 'SERIAL_DETAILS_REQUIRED');
+        await serialService.registerSerials({
+          businessId, branchId, userId, product, variantId: variantId || null, quantity: Math.abs(quantity),
+          serials, costPrice: costPrice ?? product.costPrice, condition: condition || 'new', session,
+        });
+      }
 
       if (product.trackBatch) {
         const biz = await Business.findById(businessId).select('featureSettings').session(session);
