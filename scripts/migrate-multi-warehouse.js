@@ -7,17 +7,20 @@
  *
  * Database:
  *   Defaults to "test".
- *   Override with MIGRATION_DB_NAME in .env or the environment.
+ *   Override using MIGRATION_DB_NAME.
  *
  * Operations:
- *   1. Drop the legacy warehouse inventory unique index.
- *   2. Ensure a default warehouse exists for each business/branch
- *      that has warehouse inventory.
- *   3. Attach legacy warehouse ledger entries to that warehouse.
+ *   1. Drop the legacy unique warehouse inventory index.
+ *   2. Ensure a default warehouse exists for every business/branch
+ *      with warehouse inventory.
+ *   3. Attach legacy WAREHOUSE ledger records to their default
+ *      warehouse using native MongoDB updates. This bypasses
+ *      Mongoose immutability middleware for this migration only.
  *   4. Populate missing location-transfer kinds.
- *   5. Synchronize indexes for the relevant models.
+ *   5. Synchronize indexes for Warehouse, WarehouseInventory,
+ *      LocationTransfer and SupplierPayment.
  *
- * Does not intentionally change stock quantities.
+ * Stock quantities are not intentionally changed.
  */
 
 require('dotenv').config();
@@ -35,8 +38,7 @@ async function main() {
     );
   }
 
-  // This project uses the "test" database by default, not the
-  // Atlas cluster name. All subsequently loaded models use this connection.
+  // This project uses "test" by default.
   const dbName = process.env.MIGRATION_DB_NAME || 'test';
 
   await mongoose.connect(uri, { dbName });
@@ -49,22 +51,29 @@ async function main() {
     const WarehouseInventory = require('../src/models/WarehouseInventory');
     const LocationTransfer = require('../src/models/LocationTransfer');
     const SupplierPayment = require('../src/models/SupplierPayment');
-    const InventoryMovement = require('../src/models/InventoryMovement');
+
     const { ensureDefaultWarehouse } = require(
       '../src/services/warehouse.resolver'
     );
+
+    const db = mongoose.connection.db;
+
+    if (!db) {
+      throw new Error('MongoDB database connection is unavailable.');
+    }
 
     // ---------------------------------------------------------
     // 1. Remove the legacy unique warehouse inventory index.
     // ---------------------------------------------------------
     const inventoryCollection =
-      mongoose.connection.db.collection('warehouseinventories');
+      db.collection('warehouseinventories');
 
     try {
       const indexes = await inventoryCollection.indexes();
 
       for (const index of indexes) {
         const keys = Object.keys(index.key || {});
+
         const isLegacyUniqueIndex =
           index.unique === true &&
           keys.join(',') ===
@@ -89,8 +98,8 @@ async function main() {
     }
 
     // ---------------------------------------------------------
-    // 2. Create/ensure a default warehouse for each business
-    //    and branch that has warehouse inventory.
+    // 2. Ensure a default warehouse for each business/branch
+    //    that currently has warehouse inventory.
     // ---------------------------------------------------------
     const branchPairs = await WarehouseInventory.aggregate([
       {
@@ -144,14 +153,23 @@ async function main() {
     );
 
     // ---------------------------------------------------------
-    // 3. Attach legacy WAREHOUSE ledger entries to their default
-    //    warehouse. Use original IDs to avoid ObjectId/string
-    //    mismatches and scope each update to its business.
+    // 3. Backfill legacy WAREHOUSE inventory ledger records.
+    //
+    // InventoryMovement.js prevents Mongoose updates to
+    // immutable records. Use the native MongoDB collection
+    // for this targeted, one-time metadata backfill.
+    //
+    // Scope updates by businessId and branchId. Only records
+    // with a missing or null warehouseId are modified.
+    // Stock quantities are not changed.
     // ---------------------------------------------------------
+    const movementCollection =
+      db.collection('inventorymovements');
+
     let tagged = 0;
 
     for (const entry of branchWarehouses) {
-      const result = await InventoryMovement.updateMany(
+      const result = await movementCollection.updateMany(
         {
           businessId: entry.businessId,
           branchId: entry.branchId,
@@ -162,7 +180,9 @@ async function main() {
           ]
         },
         {
-          $set: { warehouseId: entry.warehouseId }
+          $set: {
+            warehouseId: entry.warehouseId
+          }
         }
       );
 
@@ -172,7 +192,7 @@ async function main() {
     console.log(`3. Tagged ${tagged} warehouse ledger row(s).`);
 
     // ---------------------------------------------------------
-    // 4. Backfill missing transfer kinds.
+    // 4. Populate missing location-transfer kinds.
     // ---------------------------------------------------------
     const toRetail = await LocationTransfer.updateMany(
       {
@@ -200,12 +220,15 @@ async function main() {
       (toRetail.modifiedCount || 0) +
       (toWarehouse.modifiedCount || 0);
 
-    console.log(`4. Set transfer kind on ${transferCount} document(s).`);
+    console.log(
+      `4. Set transfer kind on ${transferCount} document(s).`
+    );
 
     // ---------------------------------------------------------
-    // 5. Synchronize indexes defined by the current schemas.
-    // WARNING: syncIndexes() can drop database indexes that
-    // are not present in the corresponding Mongoose schema.
+    // 5. Synchronize indexes from the current model schemas.
+    //
+    // WARNING: syncIndexes() may drop database indexes that
+    // are not defined in the corresponding Mongoose schemas.
     // ---------------------------------------------------------
     const models = [
       Warehouse,
@@ -216,7 +239,9 @@ async function main() {
 
     for (const model of models) {
       await model.syncIndexes();
-      console.log(`5. Indexes synchronized: ${model.modelName}`);
+      console.log(
+        `5. Indexes synchronized: ${model.modelName}`
+      );
     }
 
     console.log(
