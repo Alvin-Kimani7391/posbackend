@@ -2,10 +2,24 @@ const { z } = require('zod');
 const { objectId, paginationQuery } = require('./common');
 const { toCents } = require('../utils/money');
 const Product = require('../models/Product');
+const { wholesaleConfigIssues } = require('../utils/wholesale');
 
 // Decimal KES from the client (e.g. 1250.50) -> integer cents for storage.
 // See utils/money.js for the full rationale.
 const moneyInput = z.coerce.number().nonnegative('Must be zero or greater').transform(toCents);
+
+// Wholesale inputs: '', null and 0 mean "not set" -> null (so an emptied field never becomes a free price).
+// Absent stays undefined (partial update leaves the saved value alone); null on update clears it.
+const optionalWholesalePrice = z
+  .preprocess((v) => (v === '' ? null : v), z.coerce.number().nonnegative('Must be zero or greater'))
+  .transform((n) => { const c = toCents(n); return c > 0 ? c : null; })
+  .optional();
+const optionalMoq = z
+  .preprocess((v) => (v === '' ? null : v), z.coerce.number().nonnegative('Must be zero or greater').max(1000000, 'MOQ is too large'))
+  .transform((n) => (n > 0 ? n : null))
+  .optional();
+// z.coerce.boolean() reads the string "false" as true; wholesaleEnabled must not flip silently.
+const strictBoolean = z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean());
 
 const attributesInput = z.record(z.string()).optional();
 
@@ -15,6 +29,7 @@ const variantInput = z.object({
   attributes: attributesInput,
   costPrice: moneyInput.optional().default(0),
   sellingPrice: moneyInput,
+  wholesalePrice: optionalWholesalePrice, // falls back to the product's wholesalePrice when empty
   lowStockThreshold: z.coerce.number().int().min(0).optional(),
 });
 
@@ -31,7 +46,10 @@ const productBase = z.object({
   productType: z.enum(Product.PRODUCT_TYPES).optional(),
   costPrice: moneyInput.optional().default(0),
   sellingPrice: moneyInput,
-  wholesalePrice: moneyInput.optional(),
+  // Sold at wholesalePrice (per unit) once a sale holds at least `moq` of this product. See utils/wholesale.js.
+  wholesaleEnabled: strictBoolean.optional(),
+  moq: optionalMoq,
+  wholesalePrice: optionalWholesalePrice,
   // Standing per-unit discount, auto-applied at the till. 0 = none.
   defaultDiscount: moneyInput.optional().default(0),
   taxRate: z.coerce.number().min(0).max(100).optional(),
@@ -58,6 +76,13 @@ const createProductSchema = productBase.superRefine((data, ctx) => {
       path: ['defaultDiscount'],
       message: 'Discount cannot be more than the selling price',
     });
+  }
+
+  for (const issue of wholesaleConfigIssues({
+    wholesaleEnabled: data.wholesaleEnabled, moq: data.moq, wholesalePrice: data.wholesalePrice,
+    sellingPrice: data.sellingPrice, hasVariants, variants: data.variants || [],
+  })) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: issue.path, message: issue.message });
   }
 });
 

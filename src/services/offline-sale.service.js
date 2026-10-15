@@ -32,6 +32,7 @@ const { verifyOfflineGrant } = require('../utils/offlineGrant');
 const { getPolicy } = require('../utils/offlinePolicy');
 const { applyStockChange } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals } = require('./sale-pricing.util');
+const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
 const etimsService = require('./etims.service');
 const offlineMpesa = require('./offline-mpesa.service');
 const notificationService = require('./notification.service');
@@ -148,6 +149,9 @@ async function ingestOfflineSale(ctx) {
 
   const taxInclusive = !!(business.taxSettings && business.taxSettings.taxInclusive);
   const maxDiscountPercent = caps.maxDiscountPercent == null ? 0 : caps.maxDiscountPercent;
+  // Wholesale: recompute which price SHOULD have applied (same rule as online) and compare with what the till charged.
+  const wholesaleFeatureOn = !!(business.featureSettings && business.featureSettings.wholesalePricing === true);
+  const qtyByProduct = sumQuantityByProduct(s.items);
   const built = [];
   const mismatches = [];
 
@@ -162,14 +166,21 @@ async function ingestOfflineSale(ctx) {
     }
 
     const lastChange = Math.max(product.updatedAt ? product.updatedAt.getTime() : 0, variant && variant.updatedAt ? variant.updatedAt.getTime() : 0);
-    const currentPrice = variant ? variant.sellingPrice : product.sellingPrice;
+    const resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(it.productId) });
+    const currentPrice = resolved.unitPrice; // retail, or wholesale when the sale's quantity reaches the MOQ
     if (it.unitPriceCents !== currentPrice) {
-      flags.push(
-        lastChange > soldAtMs
-          ? flag('PRICE_CHANGED_SINCE', 'INFO', `${product.name}: sold at ${it.unitPriceCents}c, catalog now ${currentPrice}c`)
-          : flag('PRICE_MISMATCH', 'HIGH', `${product.name}: device charged ${it.unitPriceCents}c but the catalog price was ${currentPrice}c`)
-      );
+      if (lastChange > soldAtMs) {
+        flags.push(flag('PRICE_CHANGED_SINCE', 'INFO', `${product.name}: sold at ${it.unitPriceCents}c, catalog now ${currentPrice}c`));
+      } else if (resolved.priceType === PRICE_TYPES.WHOLESALE && it.unitPriceCents === resolved.retailPrice) {
+        // Charged retail although wholesale applied: no revenue lost, warning only.
+        flags.push(flag('WHOLESALE_NOT_APPLIED', 'WARN', `${product.name}: quantity reached the MOQ (${resolved.moq}) so wholesale ${currentPrice}c applied, but the till charged retail ${it.unitPriceCents}c`));
+      } else {
+        flags.push(flag('PRICE_MISMATCH', 'HIGH', `${product.name}: device charged ${it.unitPriceCents}c but the catalog price was ${currentPrice}c`));
+      }
     }
+    // Tills cannot override prices: a line is WHOLESALE only when the till charged exactly the wholesale price.
+    const priceType = resolved.wholesalePrice !== null && it.unitPriceCents === resolved.wholesalePrice && it.unitPriceCents !== resolved.retailPrice
+      ? PRICE_TYPES.WHOLESALE : PRICE_TYPES.RETAIL;
     const catalogTax = product.taxRate || 0;
     if (it.taxRate !== catalogTax) {
       flags.push(
@@ -202,6 +213,7 @@ async function ingestOfflineSale(ctx) {
       barcodeSnapshot: variant ? variant.barcode : product.barcode,
       quantity: it.quantity,
       unitPrice: it.unitPriceCents,
+      priceType,
       costPriceSnapshot: variant ? variant.costPrice : product.costPrice, // cost at SYNC time (the device never holds cost)
       discount: it.discountCents,
       taxRate: it.taxRate,
@@ -386,7 +398,7 @@ async function ingestOfflineSale(ctx) {
             branch: { name: branch.name, phone: branch.phone },
             cashier: { name: cashier.name },
             customer: customer ? { name: customer.name, phone: customer.phone } : null,
-            items: built.map((i) => ({ name: i.nameSnapshot, sku: i.skuSnapshot, quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, taxAmount: i.taxAmount, total: i.total })),
+            items: built.map((i) => ({ name: i.nameSnapshot, sku: i.skuSnapshot, quantity: i.quantity, unitPrice: i.unitPrice, priceType: i.priceType, discount: i.discount, taxRate: i.taxRate, taxAmount: i.taxAmount, total: i.total })),
             subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
             payments: paymentDocs.map((p) => ({ method: p.method, amount: p.amount, reference: p.reference, externalTransactionId: p.method === 'MPESA' ? p.reference : p.externalTransactionId })),
             amountTendered: paymentDocs.filter((p) => p.method === 'CASH').reduce((a, p) => a + (p.amountTendered || 0), 0),

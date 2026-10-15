@@ -1,8 +1,10 @@
 const Product = require('../models/Product');
 const ProductVariant = require('../models/ProductVariant');
 const Category = require('../models/Category');
+const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
+const { wholesaleConfigIssues } = require('../utils/wholesale');
 
 /** Escapes user text so it is matched literally inside a RegExp (e.g. "TV (43") never throws). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -11,6 +13,19 @@ async function assertCategoryBelongsToBusiness(businessId, categoryId) {
   if (!categoryId) return;
   const category = await Category.findOne({ _id: categoryId, businessId });
   if (!category) throw ApiError.badRequest('Category not found', 'INVALID_CATEGORY');
+}
+
+/** Wholesale can only be switched on when the business has the `wholesalePricing` feature. */
+async function assertWholesaleFeatureOn(businessId) {
+  const business = await Business.findById(businessId).select('featureSettings').lean();
+  if (!business?.featureSettings?.wholesalePricing) {
+    throw ApiError.forbidden('Wholesale pricing is not enabled for your business. Turn on "Wholesale pricing" in business settings first.', 'FEATURE_DISABLED');
+  }
+}
+
+function assertWholesaleConfig(issues) {
+  if (!issues.length) return;
+  throw ApiError.badRequest(issues[0].message, 'INVALID_WHOLESALE_CONFIG', issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
 }
 
 async function attachVariants(businessId, products) {
@@ -56,7 +71,17 @@ async function getProduct(businessId, id) {
 async function createProduct(businessId, userId, data) {
   await assertCategoryBelongsToBusiness(businessId, data.categoryId);
 
-  const { variants, ...productData } = data;
+  const { variants: rawVariants, ...rawProductData } = data;
+  // null (= "not set") is only meaningful on UPDATE; on create just omit it.
+  const productData = { ...rawProductData };
+  if (productData.wholesalePrice == null) delete productData.wholesalePrice;
+  if (productData.moq == null) delete productData.moq;
+  const variants = rawVariants && rawVariants.map((v) => {
+    const { wholesalePrice, ...rest } = v;
+    return wholesalePrice == null ? rest : { ...rest, wholesalePrice };
+  });
+
+  if (productData.wholesaleEnabled) await assertWholesaleFeatureOn(businessId);
 
   let product;
   try {
@@ -102,6 +127,9 @@ async function createProduct(businessId, userId, data) {
       name: product.name,
       sku: product.sku,
       defaultDiscount: product.defaultDiscount,
+      wholesaleEnabled: product.wholesaleEnabled,
+      moq: product.moq,
+      wholesalePrice: product.wholesalePrice,
       variantCount: createdVariants.length,
     },
   });
@@ -117,10 +145,14 @@ async function updateProduct(businessId, userId, id, updates) {
 
   await assertCategoryBelongsToBusiness(businessId, updates.categoryId);
 
+  const wasWholesale = !!product.wholesaleEnabled;
   const oldValue = {
     sellingPrice: product.sellingPrice,
     costPrice: product.costPrice,
     defaultDiscount: product.defaultDiscount,
+    wholesaleEnabled: product.wholesaleEnabled,
+    moq: product.moq,
+    wholesalePrice: product.wholesalePrice,
     status: product.status,
   };
 
@@ -136,6 +168,19 @@ async function updateProduct(businessId, userId, id, updates) {
   // line total at sale time instead.)
   if (!product.hasVariants && (product.defaultDiscount || 0) > (product.sellingPrice || 0)) {
     throw ApiError.badRequest('Discount cannot be more than the selling price', 'INVALID_DISCOUNT');
+  }
+
+  // Wholesale: turning it ON needs the business feature; the set-up is re-checked on MERGED values, but only when this
+  // request touches a wholesale-related field (so a rename is never blocked by an older price change).
+  if (product.wholesaleEnabled && !wasWholesale) await assertWholesaleFeatureOn(businessId);
+  if (product.wholesaleEnabled && ['wholesaleEnabled', 'moq', 'wholesalePrice', 'sellingPrice'].some((k) => k in cleaned)) {
+    const activeVariants = product.hasVariants
+      ? await ProductVariant.find({ businessId, productId: product._id, status: 'active' }).lean()
+      : [];
+    assertWholesaleConfig(wholesaleConfigIssues({
+      wholesaleEnabled: true, moq: product.moq, wholesalePrice: product.wholesalePrice,
+      sellingPrice: product.sellingPrice, hasVariants: product.hasVariants, variants: activeVariants,
+    }));
   }
 
   try {
@@ -158,6 +203,9 @@ async function updateProduct(businessId, userId, id, updates) {
       sellingPrice: product.sellingPrice,
       costPrice: product.costPrice,
       defaultDiscount: product.defaultDiscount,
+      wholesaleEnabled: product.wholesaleEnabled,
+      moq: product.moq,
+      wholesalePrice: product.wholesalePrice,
       status: product.status,
     },
   });
@@ -183,9 +231,20 @@ async function addVariant(businessId, userId, productId, data) {
   const product = await Product.findOne({ _id: productId, businessId });
   if (!product) throw ApiError.notFound('Product not found');
 
+  const { wholesalePrice, ...restOfData } = data;
+  const variantData = wholesalePrice == null ? restOfData : { ...restOfData, wholesalePrice };
+
+  if (product.wholesaleEnabled) {
+    const existing = await ProductVariant.find({ businessId, productId, status: 'active' }).lean();
+    assertWholesaleConfig(wholesaleConfigIssues({
+      wholesaleEnabled: true, moq: product.moq, wholesalePrice: product.wholesalePrice,
+      sellingPrice: product.sellingPrice, hasVariants: true, variants: [...existing, variantData],
+    }));
+  }
+
   let variant;
   try {
-    variant = await ProductVariant.create({ ...data, businessId, productId });
+    variant = await ProductVariant.create({ ...variantData, businessId, productId });
   } catch (err) {
     if (err.code === 11000) throw ApiError.conflict('A variant with this SKU or barcode already exists', 'DUPLICATE_VARIANT');
     throw err;
@@ -204,9 +263,20 @@ async function updateVariant(businessId, userId, productId, variantId, updates) 
   const variant = await ProductVariant.findOne({ _id: variantId, businessId, productId });
   if (!variant) throw ApiError.notFound('Variant not found');
 
-  const oldValue = { sellingPrice: variant.sellingPrice, costPrice: variant.costPrice, status: variant.status };
+  const oldValue = { sellingPrice: variant.sellingPrice, costPrice: variant.costPrice, wholesalePrice: variant.wholesalePrice, status: variant.status };
   const cleaned = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
-  Object.assign(variant, cleaned);
+  Object.assign(variant, cleaned); // wholesalePrice: null clears the variant's own price (falls back to the product's)
+
+  if ('wholesalePrice' in cleaned || 'sellingPrice' in cleaned) {
+    const parent = await Product.findOne({ _id: productId, businessId });
+    if (parent?.wholesaleEnabled) {
+      const others = await ProductVariant.find({ businessId, productId, status: 'active', _id: { $ne: variant._id } }).lean();
+      assertWholesaleConfig(wholesaleConfigIssues({
+        wholesaleEnabled: true, moq: parent.moq, wholesalePrice: parent.wholesalePrice, sellingPrice: parent.sellingPrice,
+        hasVariants: true, variants: [...others, { sku: variant.sku, sellingPrice: variant.sellingPrice, wholesalePrice: variant.wholesalePrice }],
+      }));
+    }
+  }
 
   try {
     await variant.save();
@@ -215,7 +285,7 @@ async function updateVariant(businessId, userId, productId, variantId, updates) 
     throw err;
   }
 
-  await AuditLog.create({ businessId, userId, action: 'product.variant.update', entityType: 'ProductVariant', entityId: variant._id, oldValue, newValue: { sellingPrice: variant.sellingPrice, costPrice: variant.costPrice, status: variant.status } });
+  await AuditLog.create({ businessId, userId, action: 'product.variant.update', entityType: 'ProductVariant', entityId: variant._id, oldValue, newValue: { sellingPrice: variant.sellingPrice, costPrice: variant.costPrice, wholesalePrice: variant.wholesalePrice, status: variant.status } });
   return variant;
 }
 

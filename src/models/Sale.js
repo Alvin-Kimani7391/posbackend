@@ -15,6 +15,8 @@ const saleItemSchema = new Schema(
 
     quantity: { type: Number, required: true, min: 0.001 },
     unitPrice: { type: Number, required: true },        // integer cents, authoritative price at sale time
+    // Which price produced unitPrice. RETAIL = default (all older/garage/repair lines); WHOLESALE = MOQ reached; OVERRIDE = manual.
+    priceType: { type: String, enum: ['RETAIL', 'WHOLESALE', 'OVERRIDE'], default: 'RETAIL' },
     costPriceSnapshot: { type: Number, required: true }, // integer cents, for profit calculation
 
     discount: { type: Number, default: 0 },   // integer cents, this line's share of item-level discount

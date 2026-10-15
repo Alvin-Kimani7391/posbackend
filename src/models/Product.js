@@ -20,7 +20,11 @@ const productSchema = new Schema(
     // --- money fields: stored as integer CENTS, see moneySchemaPlugin ---
     costPrice: { type: Number, required: true, default: 0, min: 0 },
     sellingPrice: { type: Number, required: true, min: 0 },
+    // WHOLESALE (rule lives in utils/wholesale.js). wholesalePrice = per-unit price (cents) once a sale holds >= moq.
+    // wholesaleEnabled=false (default) keeps the product retail-only; any old wholesalePrice stays dormant.
     wholesalePrice: { type: Number, min: 0 },
+    wholesaleEnabled: { type: Boolean, default: false },
+    moq: { type: Number, min: 0 }, // minimum order quantity, in this product's unit (fractional allowed)
 
     // Standing discount PER UNIT (integer cents). The POS pre-fills a sale
     // line with (defaultDiscount x quantity) when this product is scanned or
@@ -66,6 +70,14 @@ productSchema.index({ businessId: 1, barcode: 1 }, { unique: true, sparse: true 
 productSchema.index({ businessId: 1, name: 'text', brand: 'text' });
 productSchema.index({ businessId: 1, categoryId: 1 });
 productSchema.index({ businessId: 1, status: 1 });
+
+// Safety net: validators/service return a clear 400 first; this stops any other code path saving an unusable set-up.
+productSchema.pre('validate', function enforceWholesaleConfig(next) {
+  if (!this.wholesaleEnabled) return next();
+  if (!(this.moq > 0)) return next(new Error('MOQ is required when wholesale is enabled'));
+  if (!this.hasVariants && !(this.wholesalePrice > 0)) return next(new Error('Wholesale price is required when wholesale is enabled'));
+  return next();
+});
 
 moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defaultDiscount']);
 

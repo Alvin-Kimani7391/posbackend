@@ -15,6 +15,8 @@ const productVariantSchema = new Schema(
     // --- money fields: stored as integer CENTS ---
     costPrice: { type: Number, required: true, default: 0, min: 0 },
     sellingPrice: { type: Number, required: true, min: 0 },
+    // Optional per-variant wholesale price (cents); falls back to the product's wholesalePrice. MOQ lives on the product.
+    wholesalePrice: { type: Number, min: 0 },
 
     lowStockThreshold: { type: Number, default: 5, min: 0 },
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
@@ -26,6 +28,6 @@ productVariantSchema.index({ businessId: 1, sku: 1 }, { unique: true });
 productVariantSchema.index({ businessId: 1, barcode: 1 }, { unique: true, sparse: true });
 productVariantSchema.index({ businessId: 1, productId: 1 });
 
-moneyFields(productVariantSchema, ['costPrice', 'sellingPrice']);
+moneyFields(productVariantSchema, ['costPrice', 'sellingPrice', 'wholesalePrice']);
 
 module.exports = model('ProductVariant', productVariantSchema);

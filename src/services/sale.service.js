@@ -24,6 +24,7 @@ const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange, getStockLevel } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice } = require('./sale-pricing.util');
+const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
 
 /** Escapes user text so it is matched literally inside a RegExp. */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -37,6 +38,11 @@ const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * Money in `payload` arrives already converted to integer cents by the
  * validator layer (see validators/sale.validator.js) - this function never
  * does decimal/float math.
+ *
+ * RETAIL vs WHOLESALE: lines are priced by utils/wholesale.js#resolveUnitPrice. With the wholesalePricing feature on,
+ * when the TOTAL quantity of a wholesale-enabled product in the sale reaches its MOQ, its lines are charged the
+ * wholesale unit price (priceType WHOLESALE); otherwise retail. The client never sends the price; a permitted
+ * overridePrice still wins and is recorded as OVERRIDE.
  *
  * PRODUCT DEFAULT DISCOUNT: a product may carry a standing per-unit discount
  * (Product.defaultDiscount, cents). The POS pre-fills the line discount with
@@ -84,6 +90,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
   // productId/variantId/quantity(/discount/overridePrice); unitPrice and
   // costPrice always come from the authoritative Product/ProductVariant
   // record fetched here, never from the request body. ---
+  const wholesaleFeatureOn = business.featureSettings?.wholesalePricing === true;
+  const qtyByProduct = sumQuantityByProduct(payload.items); // MOQ counted per product across the whole sale
+
   const builtItems = [];
   for (const rawItem of payload.items) {
     const product = await Product.findOne({ _id: rawItem.productId, businessId, status: 'active' });
@@ -97,7 +106,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       throw ApiError.badRequest(`${product.name} requires a variant to be selected`, 'VARIANT_REQUIRED');
     }
 
-    let unitPrice = variant ? variant.sellingPrice : product.sellingPrice;
+    const resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(String(rawItem.productId)) });
+    let unitPrice = resolved.unitPrice;
+    let priceType = resolved.priceType;
     const costPriceSnapshot = variant ? variant.costPrice : product.costPrice;
 
     if (rawItem.overridePrice !== undefined && rawItem.overridePrice !== null) {
@@ -105,6 +116,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         throw ApiError.forbidden('You are not allowed to override prices', 'PRICE_OVERRIDE_DENIED');
       }
       unitPrice = rawItem.overridePrice;
+      priceType = PRICE_TYPES.OVERRIDE;
     }
 
     const discount = rawItem.discount || 0;
@@ -148,6 +160,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       barcodeSnapshot: variant ? variant.barcode : product.barcode,
       quantity: rawItem.quantity,
       unitPrice,
+      priceType,
       costPriceSnapshot,
       discount,
       taxRate: product.taxRate || 0,
@@ -373,7 +386,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
             branch: { name: branch?.name, phone: branch?.phone },
             cashier: { name: cashierUser.name },
             customer: customer ? { name: customer.name, phone: customer.phone } : null,
-            items: builtItems.map((i) => ({ name: i.nameSnapshot, sku: i.skuSnapshot, quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, taxAmount: i.taxAmount, total: i.total })),
+            items: builtItems.map((i) => ({ name: i.nameSnapshot, sku: i.skuSnapshot, quantity: i.quantity, unitPrice: i.unitPrice, priceType: i.priceType, discount: i.discount, taxRate: i.taxRate, taxAmount: i.taxAmount, total: i.total })),
             subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
             payments: paymentDocsInput.map((p) => ({ method: p.method, amount: p.amount, reference: p.reference, externalTransactionId: p.externalTransactionId })),
             amountTendered: paymentDocsInput.filter((p) => p.method === 'CASH').reduce((s, p) => s + (p.amountTendered || 0), 0),

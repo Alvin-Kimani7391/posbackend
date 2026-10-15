@@ -36,6 +36,7 @@ const receiptSchema = new Schema(
       customer: { name: String, phone: String },
       items: [{
         name: String, sku: String, quantity: Number, unitPrice: Number,
+        priceType: String, // RETAIL | WHOLESALE | OVERRIDE
         discount: Number, taxRate: Number, taxAmount: Number, total: Number,
       }],
       subtotal: Number,
