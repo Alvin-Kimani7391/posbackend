@@ -16,6 +16,7 @@ const movementsQuery = paginationQuery.extend({
   productId: objectId.optional(),
   variantId: objectId.optional(),
   type: z.enum(MOVEMENT_TYPES).optional(),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
 });
 
 const adjustStockSchema = z.object({
@@ -25,6 +26,7 @@ const adjustStockSchema = z.object({
   quantity: z.coerce.number().positive(),
   type: z.enum(['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'DAMAGE', 'EXPIRED', 'LOST']),
   reason: z.string().trim().min(1),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).default('RETAIL'),
 });
 
 const receiveStockSchema = z.object({
@@ -39,6 +41,7 @@ const receiveStockSchema = z.object({
   serials: z.array(z.string().trim().min(3).max(64)).max(1000).optional(),
   condition: z.enum(['new', 'used', 'refurbished']).optional(),
   reason: z.string().trim().optional(),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).default('RETAIL'), // where the received goods go
 });
 
 // ---- Transfers ----

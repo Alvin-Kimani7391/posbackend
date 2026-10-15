@@ -12,7 +12,15 @@ const { applyStockChange } = require('./inventory.service');
  *   - an `active` batch's quantity is inside BranchInventory.quantity
  *   - a `quarantined` / `recalled` batch's quantity is NOT (it is moved out when quarantined, back in when released)
  * Every function that mutates stock takes the caller's mongoose session so it commits or rolls back with it.
+ *
+ * LOCATIONS: a batch lives either in RETAIL (sellable shop floor, default) or in the WAREHOUSE (wholesale store).
+ * The invariant holds per pool: an active batch's quantity is inside that pool's inventory quantity
+ * (BranchInventory for RETAIL, WarehouseInventory for WAREHOUSE). Sales only ever allocate from RETAIL batches.
  */
+
+/** Query value for Batch.location. Documents created before warehouse stock existed have no value = RETAIL. */
+const locQuery = (location = 'RETAIL') => (location === 'WAREHOUSE' ? 'WAREHOUSE' : { $ne: 'WAREHOUSE' });
+const locOf = (batch) => (batch?.location === 'WAREHOUSE' ? 'WAREHOUSE' : 'RETAIL');
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
@@ -23,9 +31,9 @@ function startOfToday(now = new Date()) {
 const sameDay = (a, b) => startOfToday(new Date(a)).getTime() === startOfToday(new Date(b)).getTime();
 const isExpired = (batch, now = new Date()) => !!batch.expiryDate && new Date(batch.expiryDate) < startOfToday(now);
 
-function eligibleFilter({ businessId, branchId, productId, variantId = null }, now = new Date()) {
+function eligibleFilter({ businessId, branchId, productId, variantId = null, location = 'RETAIL' }, now = new Date()) {
   return {
-    businessId, branchId, productId, variantId: variantId || null,
+    businessId, branchId, productId, variantId: variantId || null, location: locQuery(location),
     status: 'active',
     quantity: { $gt: 0 },
     $or: [{ expiryDate: null }, { expiryDate: { $exists: false } }, { expiryDate: { $gte: startOfToday(now) } }],
@@ -42,6 +50,7 @@ function ineligibleReason(batch, scope) {
   if (!batch) return 'Batch not found';
   if (String(batch.businessId) !== String(scope.businessId)) return 'Batch not found';
   if (String(batch.branchId) !== String(scope.branchId)) return 'Batch belongs to another branch';
+  if (locOf(batch) !== (scope.location || 'RETAIL')) return `Batch is in the ${locOf(batch).toLowerCase()} stock, not the ${(scope.location || 'RETAIL').toLowerCase()} stock`;
   if (String(batch.productId) !== String(scope.productId)) return 'Batch belongs to another product';
   if (String(batch.variantId || '') !== String(scope.variantId || '')) return 'Batch belongs to another variant';
   if (batch.status !== 'active') return `Batch is ${batch.status}`;
@@ -62,10 +71,10 @@ function ineligibleReason(batch, scope) {
  */
 async function allocateForSale({
   businessId, branchId, productId, variantId = null, quantity, requestedBatchId = null,
-  allowUnbatchedRemainder = false, productName = 'product', session,
+  allowUnbatchedRemainder = false, productName = 'product', session, location = 'RETAIL',
 }) {
   if (!session) throw new Error('allocateForSale requires a session');
-  const scope = { businessId, branchId, productId, variantId };
+  const scope = { businessId, branchId, productId, variantId, location };
   let remaining = round3(quantity);
   const allocations = [];
 
@@ -111,7 +120,7 @@ async function allocateForSale({
 
   if (remaining > 0) {
     if (allowUnbatchedRemainder) return allocations; // the rest is legacy un-batched stock
-    const anyBatch = await Batch.exists({ businessId, branchId, productId, variantId: variantId || null }).session(session);
+    const anyBatch = await Batch.exists({ businessId, branchId, productId, variantId: variantId || null, location: locQuery(location) }).session(session);
     throw ApiError.badRequest(
       anyBatch
         ? `${productName}: not enough in-date, sellable batch stock (short by ${remaining}). Expired, quarantined or recalled batches cannot be sold.`
@@ -152,7 +161,7 @@ async function restoreAllocations(businessId, saleItem, session, quantity = null
  */
 async function receiveIntoBatch({
   businessId, branchId, product, variantId = null, quantity, batchNumber, expiryDate, manufacturingDate,
-  costPrice, supplierId, purchaseId, session, legacy = false, allowExpired = false,
+  costPrice, supplierId, purchaseId, session, legacy = false, allowExpired = false, location = 'RETAIL',
 }) {
   if (!batchNumber || !String(batchNumber).trim()) throw ApiError.badRequest(`${product.name}: batch number is required`, 'BATCH_NUMBER_REQUIRED');
   batchNumber = String(batchNumber).trim();
@@ -165,10 +174,11 @@ async function receiveIntoBatch({
   if (mfg && expiry && mfg > expiry) throw ApiError.badRequest(`${product.name}: manufacturing date is after expiry`, 'INVALID_BATCH_DATES');
 
   const batch = await Batch.findOneAndUpdate(
-    { businessId, branchId, productId: product._id, batchNumber },
+    { businessId, branchId, productId: product._id, batchNumber, location: locQuery(location) },
     {
       $inc: { quantity },
       $setOnInsert: {
+        location: location === 'WAREHOUSE' ? 'WAREHOUSE' : 'RETAIL',
         variantId: variantId || null, costPrice: costPrice ?? product.costPrice ?? 0,
         manufacturingDate: mfg || undefined, expiryDate: expiry || undefined,
         supplierId: supplierId || undefined, purchaseId: purchaseId || undefined, receivedAt: new Date(),
@@ -223,7 +233,7 @@ async function quarantineWithin(businessId, userId, id, { reason, recall }, sess
     await applyStockChange({
       businessId, branchId: batch.branchId, productId: batch.productId, variantId: batch.variantId || null,
       quantityDelta: -batch.quantity, type: 'ADJUSTMENT_OUT', referenceType: 'Batch', referenceId: batch._id,
-      reason: `${recall ? 'Recall' : 'Quarantine'} batch ${batch.batchNumber}: ${reason}`, performedBy: userId, session, allowNegative: true,
+      reason: `${recall ? 'Recall' : 'Quarantine'} batch ${batch.batchNumber}: ${reason}`, performedBy: userId, session, allowNegative: true, location: locOf(batch),
     });
   }
   batch.status = recall ? 'recalled' : 'quarantined';
@@ -246,7 +256,7 @@ async function releaseBatch(businessId, userId, id, { reason }) {
       await applyStockChange({
         businessId, branchId: batch.branchId, productId: batch.productId, variantId: batch.variantId || null,
         quantityDelta: batch.quantity, type: 'ADJUSTMENT_IN', referenceType: 'Batch', referenceId: batch._id,
-        reason: `Release batch ${batch.batchNumber}: ${reason}`, performedBy: userId, session,
+        reason: `Release batch ${batch.batchNumber}: ${reason}`, performedBy: userId, session, location: locOf(batch),
       });
     }
     batch.status = 'active'; batch.statusReason = reason; batch.statusChangedAt = new Date(); batch.statusChangedBy = userId;
@@ -269,7 +279,7 @@ async function disposeBatch(businessId, userId, id, { reason, type = 'EXPIRED' }
       await applyStockChange({
         businessId, branchId: batch.branchId, productId: batch.productId, variantId: batch.variantId || null,
         quantityDelta: -qty, type, referenceType: 'Batch', referenceId: batch._id,
-        reason: `Dispose batch ${batch.batchNumber}: ${reason}`, performedBy: userId, session, allowNegative: true,
+        reason: `Dispose batch ${batch.batchNumber}: ${reason}`, performedBy: userId, session, allowNegative: true, location: locOf(batch),
       });
     }
     batch.quantity = 0; batch.status = type === 'EXPIRED' ? 'expired' : 'depleted';
@@ -333,10 +343,11 @@ async function quarantineReturn({ businessId, branchId, userId, saleItem, quanti
   for (const { orig, qty } of targets) {
     const batchNumber = orig ? `${orig.batchNumber}-RTN` : `RTN-${receiptNumber || refundNumber}`;
     const rb = await Batch.findOneAndUpdate(
-      { businessId, branchId, productId: saleItem.productId, batchNumber },
+      { businessId, branchId, productId: saleItem.productId, batchNumber, location: locQuery('RETAIL') },
       {
         $inc: { quantity: qty },
         $setOnInsert: {
+          location: 'RETAIL',
           variantId: saleItem.variantId || null, costPrice: orig?.costPrice || 0,
           expiryDate: orig?.expiryDate, manufacturingDate: orig?.manufacturingDate,
           parentBatchId: orig?._id, receivedAt: new Date(),
@@ -349,10 +360,35 @@ async function quarantineReturn({ businessId, branchId, userId, saleItem, quanti
   }
 }
 
+/**
+ * Move `quantity` units of a batch-tracked product from one pool to the other (warehouse <-> retail).
+ * Takes from the source pool's batches (the picked batch, else FEFO; in-date and active only) and recreates the
+ * same batches (same number, expiry, cost) in the destination pool. The caller moves the inventory quantities
+ * (applyStockChange) - this only maintains the batches. Returns the allocations for the transfer record.
+ */
+async function moveBetweenLocations({
+  businessId, branchId, product, variantId = null, quantity, from, to, requestedBatchId = null,
+  allowUnbatchedRemainder = false, session,
+}) {
+  const allocations = await allocateForSale({
+    businessId, branchId, productId: product._id, variantId, quantity, requestedBatchId,
+    allowUnbatchedRemainder, productName: product.name, session, location: from,
+  });
+  for (const a of allocations) {
+    await receiveIntoBatch({
+      businessId, branchId, product, variantId, quantity: a.quantity, batchNumber: a.batchNumber,
+      expiryDate: a.expiryDate, manufacturingDate: a.manufacturingDate, costPrice: a.unitCostCents,
+      session, legacy: true, allowExpired: true, location: to,
+    });
+  }
+  return allocations;
+}
+
 // ---------------------------------------------------------------- queries
 
-async function listBatches(businessId, { branchId, productId, status, search, page = 1, limit = 50 }) {
+async function listBatches(businessId, { branchId, productId, status, search, location, page = 1, limit = 50 }) {
   const filter = { businessId };
+  if (location) filter.location = locQuery(location);
   if (branchId) filter.branchId = branchId;
   if (productId) filter.productId = productId;
   if (status) filter.status = status;
@@ -365,11 +401,12 @@ async function listBatches(businessId, { branchId, productId, status, search, pa
 }
 
 /** Batches with stock that expire within `days` (default 30), plus already-expired batches still holding stock. */
-async function listExpiring(businessId, { branchId, days = 30 }) {
+async function listExpiring(businessId, { branchId, days = 30, location }) {
   const now = new Date();
   const limitDate = new Date(startOfToday(now).getTime() + days * 86400000);
   const base = { businessId, quantity: { $gt: 0 }, status: 'active', expiryDate: { $ne: null } };
   if (branchId) base.branchId = branchId;
+  if (location) base.location = locQuery(location);
   const [expired, expiring] = await Promise.all([
     Batch.find({ ...base, expiryDate: { $lt: startOfToday(now) } }).populate('productId', 'name sku').sort({ expiryDate: 1 }).limit(500).lean(),
     Batch.find({ ...base, expiryDate: { $gte: startOfToday(now), $lte: limitDate } }).populate('productId', 'name sku').sort({ expiryDate: 1 }).limit(500).lean(),
@@ -380,7 +417,7 @@ async function listExpiring(businessId, { branchId, days = 30 }) {
 
 module.exports = {
   startOfToday, isExpired, eligibleFilter,
-  allocateForSale, restoreAllocations, receiveIntoBatch, quarantineReturn,
+  allocateForSale, restoreAllocations, receiveIntoBatch, quarantineReturn, moveBetweenLocations, locQuery, locOf,
   quarantineBatch, releaseBatch, disposeBatch, recallByBatchNumber, tracedSales,
   listBatches, listExpiring,
 };

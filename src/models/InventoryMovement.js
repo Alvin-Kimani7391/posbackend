@@ -14,6 +14,9 @@ const inventoryMovementSchema = new Schema(
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant', default: null },
 
+    // Stock pool of this row. Rows written before warehouse stock existed have no value = RETAIL.
+    location: { type: String, enum: ['RETAIL', 'WAREHOUSE'], default: 'RETAIL' },
+
     type: { type: String, enum: MOVEMENT_TYPES, required: true },
     quantity: { type: Number, required: true }, // signed: positive = stock in, negative = stock out
     previousStock: { type: Number, required: true },
@@ -31,6 +34,7 @@ const inventoryMovementSchema = new Schema(
 
 inventoryMovementSchema.index({ businessId: 1, branchId: 1, productId: 1, variantId: 1, createdAt: -1 });
 inventoryMovementSchema.index({ businessId: 1, referenceType: 1, referenceId: 1 });
+inventoryMovementSchema.index({ businessId: 1, branchId: 1, location: 1, createdAt: -1 });
 
 // Append-only: never editable or deletable once written.
 inventoryMovementSchema.pre(['updateOne', 'findOneAndUpdate', 'updateMany'], function blockUpdate(next) {

@@ -11,6 +11,7 @@ router.use('/categories', require('../category.routes'));
 router.use('/products', require('../product.routes'));
 router.use('/inventory', require('../inventory.routes'));
 router.use('/transfers', require('../transfer.routes'));
+router.use('/warehouse', require('../warehouse.routes'));
 router.use('/batches', require('../batch.routes'));
 router.use('/stocktakes', require('../stocktake.routes'));
 router.use('/serials', require('../serial.routes'));

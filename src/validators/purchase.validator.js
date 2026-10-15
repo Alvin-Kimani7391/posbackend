@@ -21,6 +21,13 @@ const receivePurchaseSchema = z.object({
     serialNumbers: z.array(z.string().trim().min(3).max(64)).min(1).max(1000),
     condition: z.enum(['new', 'used', 'refurbished']).optional(),
   })).optional(),
+  // Where the goods go: whole receipt (default RETAIL), optionally overridden per line.
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
+  lineLocations: z.array(z.object({
+    productId: objectId,
+    variantId: objectId.optional(),
+    location: z.enum(['RETAIL', 'WAREHOUSE']),
+  })).optional(),
 }).default({});
 
 const purchaseItemSchema = z

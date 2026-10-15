@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const BranchInventory = require('../models/BranchInventory');
+const WarehouseInventory = require('../models/WarehouseInventory');
 const InventoryMovement = require('../models/InventoryMovement');
 const Batch = require('../models/Batch');
 const Product = require('../models/Product');
@@ -8,6 +9,9 @@ const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const notificationService = require('./notification.service');
+
+const LOCATIONS = ['RETAIL', 'WAREHOUSE'];
+const inventoryModel = (location) => (location === 'WAREHOUSE' ? WarehouseInventory : BranchInventory);
 
 /**
  * applyStockChange - THE single place that ever mutates BranchInventory.quantity.
@@ -23,6 +27,10 @@ const notificationService = require('./notification.service');
  * is rejected with INSUFFICIENT_STOCK. This is what prevents the
  * "Cashier A and B both sell the last unit" race from spec section 62.
  *
+ * `location` picks the stock pool: 'RETAIL' (default = BranchInventory, everything that existed before) or
+ * 'WAREHOUSE' (WarehouseInventory). Both use this one code path and write the same ledger, tagged with the
+ * location, so every unit in either pool is traceable.
+ *
  * MUST be called with an active mongoose session (the caller's transaction)
  * so the inventory update and its movement record commit or roll back
  * together, and so it participates correctly in a larger transaction (e.g.
@@ -31,34 +39,35 @@ const notificationService = require('./notification.service');
 async function applyStockChange({
   businessId, branchId, productId, variantId = null,
   quantityDelta, type, referenceType, referenceId, reason, performedBy,
-  session, allowNegative = false,occurredAt = undefined,
-
+  session, allowNegative = false, occurredAt = undefined, location = 'RETAIL',
 }) {
   if (!session) throw new Error('applyStockChange requires an active mongoose session');
   if (!quantityDelta) throw new Error('applyStockChange requires a non-zero quantityDelta');
 
+  if (!LOCATIONS.includes(location)) throw new Error(`Unknown stock location: ${location}`);
+  const Inventory = inventoryModel(location);
   const filter = { businessId, branchId, productId, variantId };
   let updated;
 
   if (quantityDelta > 0 || allowNegative) {
-    updated = await BranchInventory.findOneAndUpdate(
+    updated = await Inventory.findOneAndUpdate(
       filter,
       { $inc: { quantity: quantityDelta } },
       { upsert: true, new: true, session, setDefaultsOnInsert: true }
     );
   } else {
     // Atomic conditional decrement - see concurrency note above.
-    updated = await BranchInventory.findOneAndUpdate(
+    updated = await Inventory.findOneAndUpdate(
       { ...filter, quantity: { $gte: -quantityDelta } },
       { $inc: { quantity: quantityDelta } },
       { new: true, session }
     );
 
     if (!updated) {
-      const existing = await BranchInventory.findOne(filter).session(session);
+      const existing = await Inventory.findOne(filter).session(session);
       const available = existing ? existing.quantity - existing.reservedQuantity : 0;
       throw ApiError.badRequest(
-        `Insufficient stock (available: ${available}, requested: ${-quantityDelta})`,
+        `Insufficient ${location === 'WAREHOUSE' ? 'warehouse' : 'retail'} stock (available: ${available}, requested: ${-quantityDelta})`,
         'INSUFFICIENT_STOCK'
       );
     }
@@ -67,7 +76,7 @@ async function applyStockChange({
   const previousStock = updated.quantity - quantityDelta;
 
     const [movement] = await InventoryMovement.create(
-    [{ businessId, branchId, productId, variantId, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy, }],
+    [{ businessId, branchId, productId, variantId, location, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy, }],
     { session }
   );
 
@@ -78,7 +87,7 @@ async function applyStockChange({
   // choke point every stock mutation goes through - the trade-off is that
   // a notification could theoretically fire for a change that's later
   // rolled back, which is an acceptable risk for a non-critical alert.
-  if (quantityDelta < 0) {
+  if (quantityDelta < 0 && location === 'RETAIL') { // low-stock alerts are about the shop floor
     const threshold = updated.lowStockThreshold ?? 5;
     const wasPositive = previousStock > 0;
     const wasAboveThreshold = previousStock > threshold;
@@ -99,8 +108,8 @@ async function applyStockChange({
 }
 
 /** Fetches (without creating) the current stock row - used for pre-flight checks before a transaction starts. */
-async function getStockLevel(businessId, branchId, productId, variantId = null) {
-  const row = await BranchInventory.findOne({ businessId, branchId, productId, variantId });
+async function getStockLevel(businessId, branchId, productId, variantId = null, location = 'RETAIL') {
+  const row = await inventoryModel(location).findOne({ businessId, branchId, productId, variantId });
   return { quantity: row?.quantity || 0, reservedQuantity: row?.reservedQuantity || 0, availableQuantity: (row?.quantity || 0) - (row?.reservedQuantity || 0) };
 }
 
@@ -136,12 +145,15 @@ async function getLowStockAlerts(businessId, branchId) {
   return { lowStock: low, outOfStock: out, lowStockCount: low.length, outOfStockCount: out.length };
 }
 
-async function getMovements(businessId, { branchId, productId, variantId, type, page, limit }) {
+async function getMovements(businessId, { branchId, productId, variantId, type, location, page, limit }) {
   const filter = { businessId };
   if (branchId) filter.branchId = branchId;
   if (productId) filter.productId = productId;
   if (variantId) filter.variantId = variantId;
   if (type) filter.type = type;
+  // Old rows have no location = RETAIL.
+  if (location === 'RETAIL') filter.location = { $ne: 'WAREHOUSE' };
+  else if (location === 'WAREHOUSE') filter.location = 'WAREHOUSE';
 
   const [items, total] = await Promise.all([
     InventoryMovement.find(filter)
@@ -157,8 +169,9 @@ async function getMovements(businessId, { branchId, productId, variantId, type, 
 }
 
 /** Manual stock adjustment (storekeeper correcting a count, marking damage/loss, etc). Runs its own transaction. */
-async function adjustStock(businessId, branchId, userId, { productId, variantId, quantity, reason, type }) {
+async function adjustStock(businessId, branchId, userId, { productId, variantId, quantity, reason, type, location = 'RETAIL' }) {
   await assertItemExists(businessId, productId, variantId);
+  if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId);
   const business = await Business.findById(businessId);
   const allowNegative = !!business?.settings?.allowNegativeStock;
 
@@ -175,11 +188,11 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
       result = await applyStockChange({
         businessId, branchId, productId, variantId: variantId || null,
         quantityDelta, type, referenceType: 'ManualAdjustment', referenceId: null,
-        reason, performedBy: userId, session, allowNegative,
+        reason, performedBy: userId, session, allowNegative, location,
       });
 
       await AuditLog.create(
-        [{ businessId, branchId, userId, action: 'inventory.adjust', entityType: 'BranchInventory', entityId: result.branchInventory._id, newValue: { type, quantityDelta, reason } }],
+        [{ businessId, branchId, userId, action: 'inventory.adjust', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { type, quantityDelta, reason, location } }],
         { session }
       );
     });
@@ -195,8 +208,9 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
  * purchase.service and calls applyStockChange directly within its own
  * transaction so it can also update the supplier balance atomically.
  */
-async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition }) {
+async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL' }) {
   const product = await assertItemExists(businessId, productId, variantId);
+  if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId);
 
   const session = await mongoose.startSession();
   try {
@@ -205,7 +219,7 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
       result = await applyStockChange({
         businessId, branchId, productId, variantId: variantId || null,
         quantityDelta: Math.abs(quantity), type: 'OPENING_STOCK',
-        referenceType: 'ManualReceive', referenceId: null, reason, performedBy: userId, session,
+        referenceType: 'ManualReceive', referenceId: null, reason, performedBy: userId, session, location,
       });
 
       if (product.trackSerialNumber) {
@@ -213,7 +227,7 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
         if (!serials?.length) throw ApiError.badRequest(`${product.name} is serial-tracked: give the serial number(s) / IMEI(s) of the units received`, 'SERIAL_DETAILS_REQUIRED');
         await serialService.registerSerials({
           businessId, branchId, userId, product, variantId: variantId || null, quantity: Math.abs(quantity),
-          serials, costPrice: costPrice ?? product.costPrice, condition: condition || 'new', session,
+          serials, costPrice: costPrice ?? product.costPrice, condition: condition || 'new', session, location,
         });
       }
 
@@ -223,7 +237,7 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
           const batchService = require('./batch.service'); // lazy: batch.service requires this module
           await batchService.receiveIntoBatch({
             businessId, branchId, product, variantId: variantId || null, quantity: Math.abs(quantity),
-            batchNumber, expiryDate, manufacturingDate, costPrice, session,
+            batchNumber, expiryDate, manufacturingDate, costPrice, session, location,
           });
         } else if (biz?.featureSettings?.batchTracking) {
           throw ApiError.badRequest(`${product.name} is batch-tracked: a batch number${product.trackExpiry ? ' and expiry date are' : ' is'} required`, 'BATCH_DETAILS_REQUIRED');
@@ -231,13 +245,22 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
       }
 
       await AuditLog.create(
-        [{ businessId, branchId, userId, action: 'inventory.receive', entityType: 'BranchInventory', entityId: result.branchInventory._id, newValue: { quantity } }],
+        [{ businessId, branchId, userId, action: 'inventory.receive', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { quantity, location } }],
         { session }
       );
     });
     return result;
   } finally {
     session.endSession();
+  }
+}
+
+/** Warehouse stock is a business option (feature flag `multiWarehouse`, on by default for wholesale shops). */
+async function assertWarehouseEnabled(businessId, session = null) {
+  const q = Business.findById(businessId).select('featureSettings');
+  const biz = await (session ? q.session(session) : q);
+  if (!biz?.featureSettings?.multiWarehouse) {
+    throw ApiError.forbidden('Warehouse stock is not enabled for your business (multiWarehouse)', 'FEATURE_DISABLED');
   }
 }
 
@@ -252,6 +275,9 @@ async function assertItemExists(businessId, productId, variantId) {
 }
 
 module.exports = {
+  LOCATIONS,
+  inventoryModel,
+  assertWarehouseEnabled,
   applyStockChange,
   getStockLevel,
   listBranchInventory,

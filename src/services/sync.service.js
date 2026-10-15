@@ -171,6 +171,7 @@ async function getContext(businessId, user, deviceId, secret) {
         customLines: rs.customLines || [], receiptPrefix: rs.receiptPrefix, invoicePrefix: rs.invoicePrefix,
       },
       taxInclusive: !!(business.taxSettings && business.taxSettings.taxInclusive),
+      wholesalePricing: !!(business.featureSettings && business.featureSettings.wholesalePricing),
       requireShift: !!s.requireShift,
       allowNegativeStock: !!s.allowNegativeStock,
       enableCustomerCredit: !!s.enableCustomerCredit,
@@ -188,12 +189,15 @@ async function getContext(businessId, user, deviceId, secret) {
 
 const mapProduct = (p) => ({
   id: String(p._id), name: p.name, sku: p.sku, barcode: p.barcode, categoryId: p.categoryId ? String(p.categoryId) : null,
-  sellingPriceCents: p.sellingPrice, defaultDiscountCents: p.defaultDiscount || 0, // cost and wholesale prices are NEVER sent to a till
+  sellingPriceCents: p.sellingPrice, defaultDiscountCents: p.defaultDiscount || 0, // cost price is NEVER sent to a till
+  // Wholesale is sent only for wholesale-enabled products (the till applies it when quantity >= moq).
+  wholesaleEnabled: !!p.wholesaleEnabled && p.moq > 0, moq: p.wholesaleEnabled ? p.moq || null : null,
+  wholesalePriceCents: p.wholesaleEnabled ? p.wholesalePrice || null : null,
   taxRate: p.taxRate || 0, taxCategory: p.taxCategory, unit: p.unit, productType: p.productType,
   trackInventory: !!p.trackInventory, trackSerialNumber: !!p.trackSerialNumber, trackBatch: !!p.trackBatch, trackExpiry: !!p.trackExpiry,
   hasVariants: !!p.hasVariants, image: p.image, status: p.status, updatedAt: p.updatedAt,
 });
-const mapVariant = (v) => ({ id: String(v._id), productId: String(v.productId), sku: v.sku, barcode: v.barcode, attributes: v.attributes || {}, sellingPriceCents: v.sellingPrice, status: v.status, updatedAt: v.updatedAt });
+const mapVariant = (v) => ({ id: String(v._id), productId: String(v.productId), sku: v.sku, barcode: v.barcode, attributes: v.attributes || {}, sellingPriceCents: v.sellingPrice, wholesalePriceCents: v.wholesalePrice || null, status: v.status, updatedAt: v.updatedAt });
 const mapCategory = (c) => ({ id: String(c._id), name: c.name, parentId: c.parentId || c.parent ? String(c.parentId || c.parent) : null, status: c.status });
 const mapStock = (r) => ({ id: String(r._id), productId: String(r.productId), variantId: r.variantId ? String(r.variantId) : null, quantity: r.quantity, reservedQuantity: r.reservedQuantity || 0, lowStockThreshold: r.lowStockThreshold, updatedAt: r.updatedAt });
 const mapBatch = (b) => ({ id: String(b._id), productId: String(b.productId), variantId: b.variantId ? String(b.variantId) : null, batchNumber: b.batchNumber, quantity: b.quantity, expiryDate: b.expiryDate, manufacturingDate: b.manufacturingDate });

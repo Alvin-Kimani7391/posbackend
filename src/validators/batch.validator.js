@@ -5,11 +5,13 @@ const listBatchesQuery = paginationQuery.extend({
   branchId: objectId.optional(),
   productId: objectId.optional(),
   status: z.enum(['active', 'quarantined', 'recalled', 'expired', 'depleted']).optional(),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
 });
 
 const expiringQuery = z.object({
   branchId: objectId.optional(),
   days: z.coerce.number().int().min(1).max(365).default(30),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
 });
 
 const reasonBody = z.object({ reason: z.string().trim().min(3, 'Give a reason') });

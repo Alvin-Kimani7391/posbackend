@@ -36,7 +36,7 @@ function cleanSerials(product, serials) {
  * Register received units. The count must equal the quantity received and no serial may already exist
  * anywhere in this business. Runs inside the caller's transaction.
  */
-async function registerSerials({ businessId, branchId, userId, product, variantId = null, quantity, serials, purchaseId, supplierId, costPrice = 0, condition = 'new', session }) {
+async function registerSerials({ businessId, branchId, userId, product, variantId = null, quantity, serials, purchaseId, supplierId, costPrice = 0, condition = 'new', session, location = 'RETAIL' }) {
   const list = cleanSerials(product, serials);
   if (list.length !== quantity) {
     throw ApiError.badRequest(`${product.name}: ${quantity} unit(s) received but ${list.length} serial number(s) given`, 'SERIAL_COUNT_MISMATCH');
@@ -47,16 +47,36 @@ async function registerSerials({ businessId, branchId, userId, product, variantI
   }
   const now = new Date();
   const docs = list.map((serialNumber) => ({
-    businessId, branchId, productId: product._id, variantId: variantId || null, serialNumber, status: 'in_stock', condition,
+    businessId, branchId, location, productId: product._id, variantId: variantId || null, serialNumber, status: 'in_stock', condition,
     purchaseId, supplierId, costPrice, receivedAt: now,
     supplierWarrantyEnd: product.supplierWarrantyMonths ? addMonths(now, product.supplierWarrantyMonths) : undefined,
-    history: [event('RECEIVED', { by: userId, refType: purchaseId ? 'Purchase' : 'ManualReceive', refId: purchaseId })],
+    history: [event('RECEIVED', { by: userId, refType: purchaseId ? 'Purchase' : 'ManualReceive', refId: purchaseId, note: location === 'WAREHOUSE' ? 'received into warehouse' : undefined })],
   }));
   try {
     await SerialNumber.insertMany(docs, { session });
   } catch (e) {
     if (e.code === 11000) throw ApiError.conflict('One of these serial numbers is already registered', 'SERIAL_EXISTS');
     throw e;
+  }
+  return list;
+}
+
+/**
+ * Move specific units between the warehouse and the retail floor (inside the caller's transaction). Every unit must
+ * be in stock, in this branch, of this product and currently in `from`; the move is appended to its own history.
+ * Returns the normalised serial list.
+ */
+async function moveLocation({ businessId, branchId, product, variantId = null, serials, quantity, from, to, userId, refId, session }) {
+  const list = cleanSerials(product, serials);
+  if (list.length !== quantity) throw ApiError.badRequest(`${product.name}: ${quantity} unit(s) to move but ${list.length} serial number(s) given`, 'SERIAL_COUNT_MISMATCH');
+  const fromQuery = from === 'WAREHOUSE' ? 'WAREHOUSE' : { $ne: 'WAREHOUSE' };
+  for (const sn of list) {
+    const unit = await SerialNumber.findOneAndUpdate(
+      { businessId, branchId, serialNumber: sn, productId: product._id, variantId: variantId || null, status: 'in_stock', location: fromQuery },
+      { $set: { location: to }, $push: { history: event('MOVED_LOCATION', { by: userId, refType: 'LocationTransfer', refId, note: `${from.toLowerCase()} -> ${to.toLowerCase()}` }) } },
+      { new: true, session }
+    );
+    if (!unit) throw ApiError.badRequest(`${product.name}: unit ${sn} is not in stock in the ${from.toLowerCase()} of this branch`, 'SERIAL_NOT_IN_LOCATION');
   }
   return list;
 }
@@ -73,7 +93,7 @@ async function markSold({ businessId, branchId, product, serials, saleId, custom
     if (customerId) set.customerId = customerId;
     if (product.warrantyMonths) { set.warrantyStart = soldAt; set.warrantyEnd = addMonths(soldAt, product.warrantyMonths); }
     const updated = await SerialNumber.findOneAndUpdate(
-      { businessId, serialNumber: sn, productId: product._id, ...(lenient ? {} : { branchId }), status: 'in_stock' },
+      { businessId, serialNumber: sn, productId: product._id, ...(lenient ? {} : { branchId }), status: 'in_stock', location: { $ne: 'WAREHOUSE' } }, // warehouse units must be moved to retail first
       { $set: set, $push: { history: event('SOLD', { by: userId, refType: 'Sale', refId: saleId }) } },
       { session, new: true }
     );
@@ -158,8 +178,9 @@ async function lookup(businessId, serial) {
   };
 }
 
-async function listSerials(businessId, { branchId, productId, status, search, page = 1, limit = 50 }) {
+async function listSerials(businessId, { branchId, productId, status, search, location, page = 1, limit = 50 }) {
   const filter = { businessId };
+  if (location) filter.location = location === 'WAREHOUSE' ? 'WAREHOUSE' : { $ne: 'WAREHOUSE' };
   if (branchId) filter.branchId = branchId;
   if (productId) filter.productId = productId;
   if (status) filter.status = status;
@@ -179,4 +200,4 @@ async function warrantiesExpiring(businessId, { days = 30, branchId }) {
   return SerialNumber.find(filter).select('serialNumber warrantyEnd customerId productId').populate('productId', 'name').populate('customerId', 'name phone').sort({ warrantyEnd: 1 }).limit(500);
 }
 
-module.exports = { addMonths, event, cleanSerials, registerSerials, markSold, releaseFromSale, markReturned, inspectReturned, lookup, listSerials, warrantiesExpiring, warrantyState };
+module.exports = { addMonths, event, cleanSerials, registerSerials, moveLocation, markSold, releaseFromSale, markReturned, inspectReturned, lookup, listSerials, warrantiesExpiring, warrantyState };

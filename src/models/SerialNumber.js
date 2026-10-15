@@ -25,6 +25,9 @@ const serialNumberSchema = new Schema(
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant', default: null },
 
+    // Where the unit physically is: RETAIL (sellable) or WAREHOUSE (must be moved to retail before it can be sold).
+    location: { type: String, enum: ['RETAIL', 'WAREHOUSE'], default: 'RETAIL' },
+
     serialNumber: { type: String, required: true, trim: true, uppercase: true },
     status: { type: String, enum: ['in_stock', 'sold', 'damaged', 'returned'], default: 'in_stock' },
     condition: { type: String, enum: ['new', 'used', 'refurbished'], default: 'new' },

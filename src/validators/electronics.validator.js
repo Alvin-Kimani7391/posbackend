@@ -11,6 +11,7 @@ const reason = z.string().trim().min(3, 'Give a reason');
 const serialListQuery = paginationQuery.extend({
   branchId: objectId.optional(), productId: objectId.optional(),
   status: z.enum(['in_stock', 'sold', 'damaged', 'returned']).optional(),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
 });
 const serialLookupQuery = z.object({ serial: z.string().trim().min(3).max(64) });
 const inspectSchema = z.object({ outcome: z.enum(['RESTOCK', 'DAMAGED']), note: z.string().trim().max(300).optional() });

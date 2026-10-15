@@ -8,6 +8,9 @@ const batchSchema = new Schema(
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant', default: null },
 
+    // Stock pool: RETAIL (sellable shop floor, default) or WAREHOUSE (wholesale store; never sold directly).
+    location: { type: String, enum: ['RETAIL', 'WAREHOUSE'], default: 'RETAIL' },
+
     batchNumber: { type: String, required: true, trim: true },
     quantity: { type: Number, required: true, min: 0 }, // remaining quantity in this batch
     costPrice: { type: Number, default: 0 }, // integer cents, cost at time of receiving this batch
@@ -32,7 +35,8 @@ const batchSchema = new Schema(
   { timestamps: true }
 );
 
-batchSchema.index({ businessId: 1, branchId: 1, productId: 1, batchNumber: 1 }, { unique: true });
+// Same batch number may exist once in the warehouse AND once in retail (run scripts/migrate-warehouse.js to replace the old index).
+batchSchema.index({ businessId: 1, branchId: 1, productId: 1, batchNumber: 1, location: 1 }, { unique: true });
 batchSchema.index({ businessId: 1, expiryDate: 1 });
 batchSchema.index({ businessId: 1, branchId: 1, productId: 1, status: 1, expiryDate: 1 });
 

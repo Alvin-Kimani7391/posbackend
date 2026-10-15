@@ -221,8 +221,15 @@ async function listPurchases(businessId, { branchId, supplierId, receivedStatus,
  * receivePurchase - goods physically arrive. Increments branch inventory
  * (and batches, where the product tracks them) for every line still owed,
  * and adds the payable amount to the supplier's balance. Fully atomic.
+ *
+ * WHERE the goods go: `location` is the default pool for the whole receipt ('RETAIL' = shop floor, the original
+ * behaviour, or 'WAREHOUSE' = wholesale store). `lineLocations` overrides it per line, e.g.
+ * [{ productId, variantId?, location: 'WAREHOUSE' }]. Stock, batches and serials of a line all land in the SAME
+ * pool, and the pool is stored on the purchase line, the ledger rows and the batch/serial records.
+ * To split one line between warehouse and retail: receive it into the warehouse, then move part to retail with
+ * warehouse.service#transferBetweenLocations (both steps are fully traced).
  */
-async function receivePurchase(businessId, userId, id, batchLines = [], serialLines = []) {
+async function receivePurchase(businessId, userId, id, batchLines = [], serialLines = [], { location = 'RETAIL', lineLocations = [] } = {}) {
   const session = await mongoose.startSession();
   try {
     let result;
@@ -235,17 +242,24 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
       // product tracks it) for every batch-tracked line. Others keep the old behaviour (batch = purchase number).
       const biz = await Business.findById(businessId).select('featureSettings').session(session);
       const strictBatches = !!biz?.featureSettings?.batchTracking;
+      const wantsWarehouse = location === 'WAREHOUSE' || (lineLocations || []).some((l) => l.location === 'WAREHOUSE');
+      if (wantsWarehouse && !biz?.featureSettings?.multiWarehouse) {
+        throw ApiError.forbidden('Warehouse stock is not enabled for your business (multiWarehouse)', 'FEATURE_DISABLED');
+      }
 
       for (const item of purchase.items) {
         const outstanding = item.quantity - item.receivedQuantity;
         if (outstanding <= 0) continue;
 
         const product = await Product.findOne({ _id: item.productId, businessId }).session(session);
+        const lineLoc = (lineLocations || []).find((l) => String(l.productId) === String(item.productId)
+          && String(l.variantId || '') === String(item.variantId || ''))?.location || location;
+        item.receivedLocation = lineLoc;
         if (product?.trackInventory) {
           await applyStockChange({
             businessId, branchId: purchase.branchId, productId: item.productId, variantId: item.variantId || null,
             quantityDelta: outstanding, type: 'PURCHASE', referenceType: 'Purchase', referenceId: purchase._id,
-            reason: `Purchase ${purchase.purchaseNumber} received`, performedBy: userId, session,
+            reason: `Purchase ${purchase.purchaseNumber} received${lineLoc === 'WAREHOUSE' ? ' (warehouse)' : ''}`, performedBy: userId, session, location: lineLoc,
           });
         }
 
@@ -259,7 +273,7 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
           await serialService.registerSerials({
             businessId, branchId: purchase.branchId, userId, product, variantId: item.variantId || null, quantity: outstanding,
             serials, purchaseId: purchase._id, supplierId: purchase.supplierId, costPrice: item.unitCost,
-            condition: entries[0]?.condition || 'new', session,
+            condition: entries[0]?.condition || 'new', session, location: lineLoc,
           });
         }
 
@@ -274,7 +288,7 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
             await batchService.receiveIntoBatch({
               businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: outstanding,
               batchNumber: purchase.purchaseNumber, costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id,
-              session, legacy: true,
+              session, legacy: true, location: lineLoc,
             });
           } else {
             const qtys = lines.map((l) => (l.quantity != null ? l.quantity : (lines.length === 1 ? outstanding : null)));
@@ -287,7 +301,7 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
               await batchService.receiveIntoBatch({
                 businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: qtys[i],
                 batchNumber: lines[i].batchNumber, expiryDate: lines[i].expiryDate, manufacturingDate: lines[i].manufacturingDate,
-                costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id, session,
+                costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id, session, location: lineLoc,
               });
             }
           }
@@ -297,6 +311,7 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
       }
 
       purchase.receivedStatus = 'RECEIVED';
+      purchase.markModified('items');
       await purchase.save({ session });
 
       await Supplier.updateOne({ _id: purchase.supplierId }, { $inc: { currentBalance: purchase.total - purchase.amountPaid } }, { session });

@@ -24,6 +24,7 @@ const purchaseItemSchema = new Schema(
     discount: { type: Number, default: 0 },
     total: { type: Number, required: true },
     receivedQuantity: { type: Number, default: 0 },
+    receivedLocation: { type: String, enum: ['RETAIL', 'WAREHOUSE'] }, // pool this line was received into
   },
   { _id: false }
 );
