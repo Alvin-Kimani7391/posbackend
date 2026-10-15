@@ -16,6 +16,7 @@ const inventoryMovementSchema = new Schema(
 
     // Stock pool of this row. Rows written before warehouse stock existed have no value = RETAIL.
     location: { type: String, enum: ['RETAIL', 'WAREHOUSE'], default: 'RETAIL' },
+    warehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse' }, // which warehouse (location = WAREHOUSE)
 
     type: { type: String, enum: MOVEMENT_TYPES, required: true },
     quantity: { type: Number, required: true }, // signed: positive = stock in, negative = stock out

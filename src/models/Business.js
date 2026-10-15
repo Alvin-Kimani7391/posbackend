@@ -54,6 +54,16 @@ const businessSchema = new Schema(
     timezone: { type: String, default: 'Africa/Nairobi' },
     logo: { type: String },
 
+    // Wholesale dashboard settings (warehouse.service#get/updateWholesaleSettings)
+    wholesaleSettings: {
+      defaultMode: { type: String, enum: ['RETAIL', 'WHOLESALE'], default: 'RETAIL' },
+      defaultWarehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse' },
+      requireCustomerForWholesale: { type: Boolean, default: false },
+      defaultPaymentTermsDays: { type: Number, min: 0, max: 365, default: 0 },
+      allowRetailFromWarehouse: { type: Boolean, default: true },
+      showUnitSwitcher: { type: Boolean, default: true },
+    },
+
     receiptSettings: {
       footerMessage: { type: String, default: 'Thank you for your business!' },
       headerMessage: { type: String, default: '' },

@@ -10,6 +10,10 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange } = require('./inventory.service');
+const { resolveWarehouse } = require('./warehouse.resolver');
+const { resolveUnit } = require('../utils/units');
+
+const round3 = (n) => Math.round(n * 1000) / 1000;
 
 /**
  * Unlike a Sale, a Purchase's unitCost IS legitimate direct input - it's
@@ -123,12 +127,14 @@ async function applyPriceUpdates({ businessId, branchId, userId, purchase, updat
 
 async function createPurchase(
   businessId, branchId, userId,
-  { supplierId, invoiceNumber, items, purchaseDate, notes, vatMode = 'NONE', vatRate = 0 },
+  { supplierId, invoiceNumber, invoiceDate, dueDate, warehouseId, items, purchaseDate, notes, vatMode = 'NONE', vatRate = 0 },
   files
 ) {
   const supplier = await Supplier.findOne({ _id: supplierId, businessId });
   if (!supplier) throw ApiError.badRequest('Supplier not found', 'INVALID_SUPPLIER');
 
+  const biz = await Business.findById(businessId).select('featureSettings');
+  if (warehouseId) await resolveWarehouse(businessId, { warehouseId }); // must exist and be active
   const products = await Product.find({ businessId, _id: { $in: items.map((i) => i.productId) } });
   const productById = new Map(products.map((p) => [p._id.toString(), p]));
 
@@ -141,6 +147,9 @@ async function createPurchase(
     const product = productById.get(raw.productId.toString());
     if (!product) throw ApiError.badRequest(`Product not found: ${raw.productId}`, 'PRODUCT_NOT_FOUND');
 
+    // Unit conversion: quantity and unitCost are per PURCHASE unit (10 bundles @ 1,200); stock gets quantity x factor base units.
+    const unit = resolveUnit(product, raw.unitId);
+    if (!unit.isBase && !biz?.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
     const line = computeLine(raw);
     subtotal += line.gross;
     discountTotal += raw.discount || 0;
@@ -148,7 +157,7 @@ async function createPurchase(
 
     if (raw.updatePrices) {
       // Real unit cost = what the line actually costs per unit incl. VAT.
-      const realUnitCost = Math.round(line.total / raw.quantity);
+      const realUnitCost = Math.round(line.total / (raw.quantity * unit.factor)); // cost per BASE unit
       priceUpdates.push({
         productId: raw.productId,
         variantId: raw.variantId,
@@ -160,7 +169,7 @@ async function createPurchase(
 
     return {
       productId: raw.productId, variantId: raw.variantId, nameSnapshot: product.name,
-      quantity: raw.quantity, unitCost: raw.unitCost, taxRate: raw.taxRate || 0, discount: raw.discount || 0,
+      quantity: raw.quantity, unitId: unit.id || undefined, unitName: unit.name, unitFactor: unit.factor, unitCost: raw.unitCost, taxRate: raw.taxRate || 0, discount: raw.discount || 0,
       total: line.total, receivedQuantity: 0,
     };
   });
@@ -173,7 +182,8 @@ async function createPurchase(
     let purchase;
     await session.withTransaction(async () => {
       [purchase] = await Purchase.create([{
-        businessId, branchId, supplierId, purchaseNumber, invoiceNumber,
+        businessId, branchId, supplierId, purchaseNumber, invoiceNumber, invoiceDate, warehouseId,
+        dueDate: dueDate || (supplier.paymentTermsDays ? new Date((invoiceDate ? new Date(invoiceDate).getTime() : Date.now()) + supplier.paymentTermsDays * 86400000) : undefined),
         vatMode, vatRate: vatMode === 'NONE' ? 0 : vatRate,
         attachments: toAttachments(files),
         items: builtItems, subtotal, discount: discountTotal, tax: total - subtotal + discountTotal, total,
@@ -229,7 +239,7 @@ async function listPurchases(businessId, { branchId, supplierId, receivedStatus,
  * To split one line between warehouse and retail: receive it into the warehouse, then move part to retail with
  * warehouse.service#transferBetweenLocations (both steps are fully traced).
  */
-async function receivePurchase(businessId, userId, id, batchLines = [], serialLines = [], { location = 'RETAIL', lineLocations = [] } = {}) {
+async function receivePurchase(businessId, userId, id, batchLines = [], serialLines = [], { location = 'RETAIL', lineLocations = [], warehouseId = null } = {}) {
   const session = await mongoose.startSession();
   try {
     let result;
@@ -252,13 +262,23 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
         if (outstanding <= 0) continue;
 
         const product = await Product.findOne({ _id: item.productId, businessId }).session(session);
-        const lineLoc = (lineLocations || []).find((l) => String(l.productId) === String(item.productId)
-          && String(l.variantId || '') === String(item.variantId || ''))?.location || location;
+        const lineCfg = (lineLocations || []).find((l) => String(l.productId) === String(item.productId)
+          && String(l.variantId || '') === String(item.variantId || ''));
+        const lineLoc = lineCfg?.location || location;
+        // which warehouse: the line's, else the receipt's, else the purchase's, else the branch's default
+        const lineWh = lineLoc === 'WAREHOUSE'
+          ? (await resolveWarehouse(businessId, { warehouseId: lineCfg?.warehouseId || warehouseId || purchase.warehouseId, branchId: purchase.branchId, userId, session }))
+          : null;
         item.receivedLocation = lineLoc;
+        item.receivedWarehouseId = lineWh?._id;
+        // unit conversion: stock moves in BASE units, cost per base unit
+        const factor = item.unitFactor || 1;
+        const baseOutstanding = round3(outstanding * factor);
+        const baseUnitCost = Math.round(item.unitCost / factor);
         if (product?.trackInventory) {
           await applyStockChange({
             businessId, branchId: purchase.branchId, productId: item.productId, variantId: item.variantId || null,
-            quantityDelta: outstanding, type: 'PURCHASE', referenceType: 'Purchase', referenceId: purchase._id,
+            quantityDelta: baseOutstanding, warehouseId: lineWh?._id || null, type: 'PURCHASE', referenceType: 'Purchase', referenceId: purchase._id,
             reason: `Purchase ${purchase.purchaseNumber} received${lineLoc === 'WAREHOUSE' ? ' (warehouse)' : ''}`, performedBy: userId, session, location: lineLoc,
           });
         }
@@ -271,8 +291,8 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
           const serials = entries.flatMap((e) => e.serialNumbers || []);
           if (!serials.length) throw ApiError.badRequest(`${product.name}: serial number(s) / IMEI(s) are required to receive this line`, 'SERIAL_DETAILS_REQUIRED');
           await serialService.registerSerials({
-            businessId, branchId: purchase.branchId, userId, product, variantId: item.variantId || null, quantity: outstanding,
-            serials, purchaseId: purchase._id, supplierId: purchase.supplierId, costPrice: item.unitCost,
+            businessId, branchId: purchase.branchId, userId, product, variantId: item.variantId || null, quantity: baseOutstanding,
+            serials, purchaseId: purchase._id, supplierId: purchase.supplierId, costPrice: baseUnitCost,
             condition: entries[0]?.condition || 'new', session, location: lineLoc,
           });
         }
@@ -286,8 +306,8 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
               throw ApiError.badRequest(`${product.name}: supplier batch number${product.trackExpiry ? ' and expiry date are' : ' is'} required to receive this line`, 'BATCH_DETAILS_REQUIRED');
             }
             await batchService.receiveIntoBatch({
-              businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: outstanding,
-              batchNumber: purchase.purchaseNumber, costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id,
+              businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: baseOutstanding,
+              batchNumber: purchase.purchaseNumber, costPrice: baseUnitCost, supplierId: purchase.supplierId, purchaseId: purchase._id,
               session, legacy: true, location: lineLoc,
             });
           } else {
@@ -299,9 +319,9 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
             }
             for (let i = 0; i < lines.length; i += 1) {
               await batchService.receiveIntoBatch({
-                businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: qtys[i],
+                businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: round3(qtys[i] * factor),
                 batchNumber: lines[i].batchNumber, expiryDate: lines[i].expiryDate, manufacturingDate: lines[i].manufacturingDate,
-                costPrice: item.unitCost, supplierId: purchase.supplierId, purchaseId: purchase._id, session, location: lineLoc,
+                costPrice: baseUnitCost, supplierId: purchase.supplierId, purchaseId: purchase._id, session, location: lineLoc,
               });
             }
           }

@@ -5,6 +5,7 @@ const PERMISSIONS = Object.freeze([
   'categories.view', 'categories.create', 'categories.update', 'categories.delete',
   'products.view', 'products.create', 'products.update', 'products.delete',
   'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer',
+  'warehouses.manage', // create / edit warehouses, wholesale dashboard settings
   'batches.view', 'batches.manage', // view batches/expiry; quarantine, release, dispose, recall
   'stocktake.view', 'stocktake.count', 'stocktake.manage', 'stocktake.approve', // count / start+cancel / approve variances
   'serials.view', 'serials.manage',                       // look up units; inspect returned units
@@ -43,7 +44,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   [ROLES.MANAGER]: [
     'categories.view', 'categories.create', 'categories.update',
     'products.view', 'products.create', 'products.update',
-    'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer',
+    'inventory.view', 'inventory.adjust', 'inventory.receive', 'inventory.transfer', 'warehouses.manage',
     'batches.view', 'batches.manage',
     'stocktake.view', 'stocktake.count', 'stocktake.manage', 'stocktake.approve',
     'serials.view', 'serials.manage', 'warranty.view', 'warranty.manage', 'warranty.decide', 'repairs.view', 'repairs.manage', 'repairs.approve',

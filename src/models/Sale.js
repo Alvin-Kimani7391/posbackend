@@ -13,7 +13,13 @@ const saleItemSchema = new Schema(
     skuSnapshot: { type: String, required: true },
     barcodeSnapshot: { type: String },
 
-    quantity: { type: Number, required: true, min: 0.001 },
+    quantity: { type: Number, required: true, min: 0.001 },  // in the SOLD unit (unitName); older lines = base units
+    // Unit conversion: sold in a bigger unit (3 bundles) -> unitPrice / costPriceSnapshot are per THAT unit and
+    // baseQuantity (36 packets) is what left stock. Older lines have none of these = base unit.
+    unitId: { type: Schema.Types.ObjectId },
+    unitName: { type: String },
+    unitFactor: { type: Number },
+    baseQuantity: { type: Number },
     unitPrice: { type: Number, required: true },        // integer cents, authoritative price at sale time
     // Which price produced unitPrice. RETAIL = default (all older/garage/repair lines); WHOLESALE = MOQ reached; OVERRIDE = manual.
     priceType: { type: String, enum: ['RETAIL', 'WHOLESALE', 'OVERRIDE'], default: 'RETAIL' },
@@ -47,6 +53,12 @@ const saleSchema = new Schema(
 
     receiptNumber: { type: String, required: true },
     invoiceNumber: { type: String },
+
+    // Sale mode. RETAIL (default, every older sale) sells shop-floor stock; WHOLESALE sells WAREHOUSE stock (warehouseId)
+    // at wholesale prices. Stock, cancels and refunds follow this.
+    channel: { type: String, enum: ['RETAIL', 'WHOLESALE'], default: 'RETAIL' },
+    warehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse' },
+    dueDate: { type: Date }, // credit / part-paid wholesale invoices: when the customer should pay
 
     customerId: { type: Schema.Types.ObjectId, ref: 'Customer' },
     cashierId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -104,6 +116,7 @@ const saleSchema = new Schema(
 saleSchema.index({ businessId: 1, branchId: 1, createdAt: -1 });
 saleSchema.index({ businessId: 1, receiptNumber: 1 }, { unique: true });
 saleSchema.index({ businessId: 1, customerId: 1 });
+saleSchema.index({ businessId: 1, channel: 1, soldAt: -1 });
 saleSchema.index({ businessId: 1, cashierId: 1 });
 // OLD - buggy, causes false duplicate-key collisions:
 // saleSchema.index({ businessId: 1, branchId: 1, deviceId: 1, clientTransactionId: 1 }, { unique: true, sparse: true });

@@ -11,6 +11,7 @@ const supplierSchema = new Schema(
     taxPin: { type: String, trim: true },
     contactPerson: { type: String, trim: true },
     paymentTerms: { type: String, trim: true }, // free text, e.g. "Net 30"
+    paymentTermsDays: { type: Number, min: 0, max: 365, default: 0 }, // used to work out each invoice's due date
 
     currentBalance: { type: Number, default: 0 }, // integer cents - what THIS BUSINESS owes the supplier (payable)
 

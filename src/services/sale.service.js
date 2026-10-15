@@ -25,6 +25,8 @@ const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange, getStockLevel } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice } = require('./sale-pricing.util');
 const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
+const { resolveWarehouse, saleStockTarget } = require('./warehouse.resolver');
+const { resolveUnit, wholesaleUnitPrice, retailUnitPrice, round3 } = require('../utils/units');
 
 /** Escapes user text so it is matched literally inside a RegExp. */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -83,6 +85,17 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     if (!customer) throw ApiError.badRequest('Customer not found', 'INVALID_CUSTOMER');
   }
 
+  // --- Sale mode: RETAIL sells the shop floor; WHOLESALE sells a WAREHOUSE's stock at wholesale prices ---
+  const channel = payload.channel === 'WHOLESALE' ? 'WHOLESALE' : 'RETAIL';
+  let warehouse = null;
+  if (channel === 'WHOLESALE') {
+    if (!business.featureSettings?.multiWarehouse) throw ApiError.forbidden('Wholesale selling needs the multiWarehouse feature', 'FEATURE_DISABLED');
+    if (business.wholesaleSettings?.requireCustomerForWholesale && !customer) throw ApiError.badRequest('Choose a customer for a wholesale sale', 'CUSTOMER_REQUIRED');
+    warehouse = await resolveWarehouse(businessId, { warehouseId: payload.warehouseId || business.wholesaleSettings?.defaultWarehouseId, branchId, userId: cashierUser._id, forSale: true });
+  }
+  const stockLocation = channel === 'WHOLESALE' ? 'WAREHOUSE' : 'RETAIL';
+  const stockBranchId = warehouse ? warehouse.branchId : branchId;
+
   const taxInclusive = !!business.taxSettings?.taxInclusive;
   const maxDiscountPercent = maxDiscountPercentForRole(cashierUser.role, business);
 
@@ -106,10 +119,21 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       throw ApiError.badRequest(`${product.name} requires a variant to be selected`, 'VARIANT_REQUIRED');
     }
 
-    const resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(String(rawItem.productId)) });
+    const unit = resolveUnit(product, rawItem.unitId);
+    if (!unit.isBase && !business.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
+    if (product.trackSerialNumber && (!unit.isBase || channel === 'WHOLESALE')) {
+      throw ApiError.badRequest(`${product.name} is serial-tracked: move it to retail and sell it there, one unit at a time`, 'SERIAL_RETAIL_ONLY');
+    }
+    const baseQuantity = round3(rawItem.quantity * unit.factor);
+
+    let resolved;
+    if (channel === 'WHOLESALE') resolved = { unitPrice: wholesaleUnitPrice(product, variant, unit), priceType: PRICE_TYPES.WHOLESALE };
+    else if (!unit.isBase) resolved = { unitPrice: retailUnitPrice(product, variant, unit), priceType: PRICE_TYPES.RETAIL };
+    else resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(String(rawItem.productId)) });
     let unitPrice = resolved.unitPrice;
     let priceType = resolved.priceType;
-    const costPriceSnapshot = variant ? variant.costPrice : product.costPrice;
+    // cost is per SOLD unit, so profit = price - cost works for a bundle exactly as for a single piece
+    const costPriceSnapshot = Math.round((variant ? variant.costPrice : product.costPrice) * unit.factor);
 
     if (rawItem.overridePrice !== undefined && rawItem.overridePrice !== null) {
       if (!canOverridePrice(cashierUser, business)) {
@@ -129,7 +153,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
     // Preset (owner-configured) part of the discount, recomputed from the
     // Product record - never taken from the client.
-    const presetLineDiscount = Math.min(Math.round((product.defaultDiscount || 0) * rawItem.quantity), grossForLimit);
+    const presetLineDiscount = Math.min(Math.round((product.defaultDiscount || 0) * unit.factor * rawItem.quantity), grossForLimit);
 
     // Whatever exceeds the preset was typed in by the cashier and is subject
     // to the role limit. The 1-cent tolerance absorbs rounding differences
@@ -159,6 +183,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       skuSnapshot: variant ? variant.sku : product.sku,
       barcodeSnapshot: variant ? variant.barcode : product.barcode,
       quantity: rawItem.quantity,
+      unitId: unit.id || undefined, unitName: unit.name, unitFactor: unit.factor, baseQuantity,
       unitPrice,
       priceType,
       costPriceSnapshot,
@@ -169,7 +194,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       refundedQuantity: 0,
       batchId: rawItem.batchId || undefined,
       serialNumbers: (rawItem.serialNumbers || []).map(normalizeSerial),
-      _meta: { product, variant, quantity: rawItem.quantity, grossLineTotal: computed.grossLineTotal, discountApplied: discount },
+      _meta: { product, variant, quantity: rawItem.quantity, baseQuantity, grossLineTotal: computed.grossLineTotal, discountApplied: discount },
     });
   }
 
@@ -214,8 +239,8 @@ async function createSale(businessId, branchId, cashierUser, payload) {
   // transaction for an obviously-doomed request). ---
   for (const item of builtItems) {
     if (item._meta.product.trackInventory && !business.settings.allowNegativeStock) {
-      const level = await getStockLevel(businessId, branchId, item.productId, item.variantId || null);
-      if (level.availableQuantity < item.quantity) {
+      const level = await getStockLevel(businessId, stockBranchId, item.productId, item.variantId || null, stockLocation, warehouse?._id || null);
+      if (level.availableQuantity < item._meta.baseQuantity) {
         throw ApiError.badRequest(`Insufficient stock for ${item.nameSnapshot} (available: ${level.availableQuantity})`, 'INSUFFICIENT_STOCK');
       }
     }
@@ -240,6 +265,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
           customerId: customer?._id, cashierId: cashierUser._id, shiftId: shift?._id,
           items: builtItems.map(({ _meta, ...rest }) => rest),
           subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
+          channel, warehouseId: warehouse?._id, dueDate: payload.dueDate || (channel === 'WHOLESALE' && balance > 0 && business.wholesaleSettings?.defaultPaymentTermsDays ? new Date(Date.now() + business.wholesaleSettings.defaultPaymentTermsDays * 86400000) : undefined),
           amountPaid: paidAmount, balance, paymentStatus, saleStatus: 'COMPLETED', source: 'POS',
           notes: payload.notes, clientTransactionId: payload.clientTransactionId, deviceId: payload.deviceId,
         }],
@@ -261,11 +287,11 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       // Inventory, serials, batches - one item at a time, same transaction.
       const allocByItem = new Map();
       for (const item of builtItems) {
-        const { product, quantity } = item._meta;
+        const { product, baseQuantity: quantity } = item._meta; // stock always moves in BASE units
 
         if (product.trackInventory) {
           await applyStockChange({
-            businessId, branchId, productId: item.productId, variantId: item.variantId || null,
+            businessId, branchId: stockBranchId, location: stockLocation, warehouseId: warehouse?._id || null, productId: item.productId, variantId: item.variantId || null,
             quantityDelta: -quantity, type: 'SALE', referenceType: 'Sale', referenceId: sale._id,
             reason: `Sale ${receiptNumber}`, performedBy: cashierUser._id, session,
             allowNegative: business.settings.allowNegativeStock,
@@ -286,7 +312,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         if (product.trackBatch || item.batchId) {
           const strict = !!business.featureSettings?.quarantineManagement;
           const allocations = await batchService.allocateForSale({
-            businessId, branchId, productId: item.productId, variantId: item.variantId || null, quantity,
+            businessId, branchId: stockBranchId, location: stockLocation, productId: item.productId, variantId: item.variantId || null, quantity,
             requestedBatchId: item.batchId || null, allowUnbatchedRemainder: !strict,
             productName: item.nameSnapshot, session,
           });
@@ -512,12 +538,14 @@ async function cancelSale(businessId, userId, id, reason) {
       if (sale.source === 'GARAGE') throw ApiError.conflict('This is a garage invoice. Parts were used on the job, so it cannot be cancelled here. Refund the customer from the job card instead.', 'GARAGE_SALE');
       if (sale.source === 'REPAIR') throw ApiError.conflict('This is a repair invoice. Parts were used on the job, so it cannot be cancelled here. Refund the customer from the repair job instead.', 'REPAIR_SALE');
 
+      const tgt = await saleStockTarget(businessId, sale, session);
       for (const item of sale.items) {
+        const baseQty = item.baseQuantity || item.quantity;
         const product = await Product.findOne({ _id: item.productId, businessId }).session(session);
         if (product?.trackInventory) {
           await applyStockChange({
-            businessId, branchId: sale.branchId, productId: item.productId, variantId: item.variantId || null,
-            quantityDelta: item.quantity, type: 'RETURN', referenceType: 'Sale', referenceId: sale._id,
+            businessId, branchId: tgt.branchId, location: tgt.location, warehouseId: tgt.warehouseId, productId: item.productId, variantId: item.variantId || null,
+            quantityDelta: baseQty, type: 'RETURN', referenceType: 'Sale', referenceId: sale._id,
             reason: `Sale ${sale.receiptNumber} cancelled`, performedBy: userId, session, allowNegative: true,
           });
         }
@@ -530,7 +558,7 @@ async function cancelSale(businessId, userId, id, reason) {
           // Units that went back into a held/expired batch must not count as sellable stock.
           if (notSellable > 0 && product?.trackInventory) {
             await applyStockChange({
-              businessId, branchId: sale.branchId, productId: item.productId, variantId: item.variantId || null,
+              businessId, branchId: tgt.branchId, location: tgt.location, warehouseId: tgt.warehouseId, productId: item.productId, variantId: item.variantId || null,
               quantityDelta: -notSellable, type: 'ADJUSTMENT_OUT', referenceType: 'Sale', referenceId: sale._id,
               reason: `Sale ${sale.receiptNumber} cancelled: units returned to a held or expired batch`, performedBy: userId, session, allowNegative: true,
             });

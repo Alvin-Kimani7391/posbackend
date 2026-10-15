@@ -10,6 +10,7 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange } = require('./inventory.service');
+const { saleStockTarget } = require('./warehouse.resolver');
 const batchService = require('./batch.service');
 const serialService = require('./serial.service');
 const SerialNumber = require('../models/SerialNumber');
@@ -167,6 +168,9 @@ async function completeRefund(businessId, userId, refundId) {
           throw ApiError.conflict(`${saleItem.nameSnapshot} no longer has enough refundable quantity remaining`, 'REFUND_EXCEEDS_SOLD_QUANTITY');
         }
         saleItem.refundedQuantity += rItem.quantity;
+        // wholesale / unit sales: stock moves in BASE units and goes back to the warehouse it came from
+        const tgt = await saleStockTarget(businessId, sale, session);
+        const baseQty = Math.round(rItem.quantity * (saleItem.unitFactor || 1) * 1000) / 1000;
 
         const product = await Product.findOne({ _id: rItem.productId, businessId }).session(session);
         const disposition = rItem.disposition || 'RESTOCK';
@@ -180,16 +184,16 @@ async function completeRefund(businessId, userId, refundId) {
         } else if (disposition === 'RESTOCK') {
           if (product?.trackInventory) {
             await applyStockChange({
-              businessId, branchId: refund.branchId, productId: rItem.productId, variantId: rItem.variantId || null,
-              quantityDelta: rItem.quantity, type: 'REFUND', referenceType: 'Refund', referenceId: refund._id,
+              businessId, branchId: tgt.branchId, location: tgt.location, warehouseId: tgt.warehouseId, productId: rItem.productId, variantId: rItem.variantId || null,
+              quantityDelta: baseQty, type: 'REFUND', referenceType: 'Refund', referenceId: refund._id,
               reason: `Refund ${refund.refundNumber}`, performedBy: userId, session, allowNegative: true,
             });
           }
           if (batched) {
-            const notSellable = await batchService.restoreAllocations(businessId, saleItem, session, rItem.quantity);
+            const notSellable = await batchService.restoreAllocations(businessId, saleItem, session, baseQty);
             if (notSellable > 0 && product?.trackInventory) {
               await applyStockChange({
-                businessId, branchId: refund.branchId, productId: rItem.productId, variantId: rItem.variantId || null,
+                businessId, branchId: tgt.branchId, location: tgt.location, warehouseId: tgt.warehouseId, productId: rItem.productId, variantId: rItem.variantId || null,
                 quantityDelta: -notSellable, type: 'ADJUSTMENT_OUT', referenceType: 'Refund', referenceId: refund._id,
                 reason: `Refund ${refund.refundNumber}: units belong to a held or expired batch`, performedBy: userId, session, allowNegative: true,
               });

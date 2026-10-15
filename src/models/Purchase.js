@@ -18,13 +18,18 @@ const purchaseItemSchema = new Schema(
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant' },
     nameSnapshot: { type: String, required: true },
-    quantity: { type: Number, required: true, min: 0.001 },
+    quantity: { type: Number, required: true, min: 0.001 },   // in the PURCHASE unit (unitName), e.g. 10 bundles
+    // Unit snapshot taken at purchase time: unitCost is per THAT unit; stock gets quantity x unitFactor base units.
+    unitId: { type: Schema.Types.ObjectId },
+    unitName: { type: String },
+    unitFactor: { type: Number, default: 1 },
     unitCost: { type: Number, required: true },
     taxRate: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
     total: { type: Number, required: true },
     receivedQuantity: { type: Number, default: 0 },
     receivedLocation: { type: String, enum: ['RETAIL', 'WAREHOUSE'] }, // pool this line was received into
+    receivedWarehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse' },
   },
   { _id: false }
 );
@@ -36,7 +41,17 @@ const purchaseSchema = new Schema(
     supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier', required: true },
 
     purchaseNumber: { type: String, required: true },
-    invoiceNumber: { type: String, trim: true },
+    invoiceNumber: { type: String, trim: true },          // the SUPPLIER's invoice number
+    invoiceDate: { type: Date },
+    dueDate: { type: Date },                              // when the supplier must be paid
+    warehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse' }, // default warehouse for receiving
+    // Supplier-invoice matching: what the supplier's invoice says vs what we ordered
+    supplierInvoiceTotal: { type: Number },
+    invoiceVariance: { type: Number, default: 0 },        // supplierInvoiceTotal - total
+    invoiceMatchStatus: { type: String, enum: ['NOT_RECORDED', 'MATCHED', 'VARIANCE', 'VARIANCE_APPROVED'], default: 'NOT_RECORDED' },
+    invoiceMatchNote: { type: String },
+    invoiceRecordedAt: { type: Date },
+    invoiceRecordedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 
     vatMode: { type: String, enum: ['NONE', 'INCLUSIVE', 'EXCLUSIVE'], default: 'NONE' },
     vatRate: { type: Number, default: 0 },
@@ -67,7 +82,7 @@ purchaseSchema.index({ businessId: 1, branchId: 1, createdAt: -1 });
 
 moneyFields(
   purchaseSchema,
-  ['subtotal', 'discount', 'tax', 'total', 'amountPaid', 'balance'],
+  ['subtotal', 'discount', 'tax', 'total', 'amountPaid', 'balance', 'supplierInvoiceTotal', 'invoiceVariance'],
   { items: ['unitCost', 'discount', 'total'] }
 );
 

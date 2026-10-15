@@ -9,6 +9,7 @@ const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const notificationService = require('./notification.service');
+const { resolveWarehouse } = require('./warehouse.resolver');
 
 const LOCATIONS = ['RETAIL', 'WAREHOUSE'];
 const inventoryModel = (location) => (location === 'WAREHOUSE' ? WarehouseInventory : BranchInventory);
@@ -29,7 +30,9 @@ const inventoryModel = (location) => (location === 'WAREHOUSE' ? WarehouseInvent
  *
  * `location` picks the stock pool: 'RETAIL' (default = BranchInventory, everything that existed before) or
  * 'WAREHOUSE' (WarehouseInventory). Both use this one code path and write the same ledger, tagged with the
- * location, so every unit in either pool is traceable.
+ * location, so every unit in either pool is traceable. A business can have SEVERAL warehouses: for
+ * location 'WAREHOUSE' pass `warehouseId`; without it the branch's default warehouse is used.
+ * quantityDelta is always in the product's BASE unit (see utils/units.js).
  *
  * MUST be called with an active mongoose session (the caller's transaction)
  * so the inventory update and its movement record commit or roll back
@@ -39,20 +42,27 @@ const inventoryModel = (location) => (location === 'WAREHOUSE' ? WarehouseInvent
 async function applyStockChange({
   businessId, branchId, productId, variantId = null,
   quantityDelta, type, referenceType, referenceId, reason, performedBy,
-  session, allowNegative = false, occurredAt = undefined, location = 'RETAIL',
+  session, allowNegative = false, occurredAt = undefined, location = 'RETAIL', warehouseId = null,
 }) {
   if (!session) throw new Error('applyStockChange requires an active mongoose session');
   if (!quantityDelta) throw new Error('applyStockChange requires a non-zero quantityDelta');
 
   if (!LOCATIONS.includes(location)) throw new Error(`Unknown stock location: ${location}`);
   const Inventory = inventoryModel(location);
-  const filter = { businessId, branchId, productId, variantId };
+  let filter = { businessId, branchId, productId, variantId };
+  // Warehouse stock is kept per WAREHOUSE (a branch may have several): rows are found by warehouseId.
+  let insertOnly = null;
+  if (location === 'WAREHOUSE') {
+    if (!warehouseId) warehouseId = (await resolveWarehouse(businessId, { branchId, session }))._id;
+    filter = { businessId, warehouseId, productId, variantId };
+    insertOnly = { branchId };
+  }
   let updated;
 
   if (quantityDelta > 0 || allowNegative) {
     updated = await Inventory.findOneAndUpdate(
       filter,
-      { $inc: { quantity: quantityDelta } },
+      { $inc: { quantity: quantityDelta }, ...(insertOnly ? { $setOnInsert: insertOnly } : {}) },
       { upsert: true, new: true, session, setDefaultsOnInsert: true }
     );
   } else {
@@ -76,7 +86,7 @@ async function applyStockChange({
   const previousStock = updated.quantity - quantityDelta;
 
     const [movement] = await InventoryMovement.create(
-    [{ businessId, branchId, productId, variantId, location, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy, }],
+    [{ businessId, branchId, productId, variantId, location, warehouseId: location === 'WAREHOUSE' ? warehouseId : undefined, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy, }],
     { session }
   );
 
@@ -107,9 +117,20 @@ async function applyStockChange({
   return { branchInventory: updated, movement };
 }
 
-/** Fetches (without creating) the current stock row - used for pre-flight checks before a transaction starts. */
-async function getStockLevel(businessId, branchId, productId, variantId = null, location = 'RETAIL') {
-  const row = await inventoryModel(location).findOne({ businessId, branchId, productId, variantId });
+/**
+ * Fetches (without creating) the current stock - pre-flight checks before a transaction starts.
+ * For location 'WAREHOUSE' pass warehouseId to read ONE warehouse; without it the branch's warehouses are summed.
+ * Quantities are in BASE units.
+ */
+async function getStockLevel(businessId, branchId, productId, variantId = null, location = 'RETAIL', warehouseId = null) {
+  if (location === 'WAREHOUSE') {
+    const filter = warehouseId ? { businessId, warehouseId, productId, variantId } : { businessId, branchId, productId, variantId };
+    const rows = await WarehouseInventory.find(filter);
+    const quantity = rows.reduce((s, r) => s + r.quantity, 0);
+    const reservedQuantity = rows.reduce((s, r) => s + r.reservedQuantity, 0);
+    return { quantity, reservedQuantity, availableQuantity: quantity - reservedQuantity };
+  }
+  const row = await BranchInventory.findOne({ businessId, branchId, productId, variantId });
   return { quantity: row?.quantity || 0, reservedQuantity: row?.reservedQuantity || 0, availableQuantity: (row?.quantity || 0) - (row?.reservedQuantity || 0) };
 }
 

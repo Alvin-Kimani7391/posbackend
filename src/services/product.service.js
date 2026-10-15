@@ -5,6 +5,18 @@ const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { wholesaleConfigIssues } = require('../utils/wholesale');
+const { unitConfigIssues } = require('../utils/units');
+
+/** Units (bundle, carton...) need the unitConversions feature and a sane set-up (unique names, factor > 0). */
+async function assertUnitsAllowed(businessId, units, baseUnit) {
+  if (!units || !units.length) return;
+  const business = await Business.findById(businessId).select('featureSettings').lean();
+  if (!business?.featureSettings?.unitConversions) {
+    throw ApiError.forbidden('Unit conversion is not enabled for your business. Turn on "Unit conversions" in business settings first.', 'FEATURE_DISABLED');
+  }
+  const issues = unitConfigIssues(units, baseUnit);
+  if (issues.length) throw ApiError.badRequest(issues[0].message, 'INVALID_UNITS', issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
+}
 
 /** Escapes user text so it is matched literally inside a RegExp (e.g. "TV (43") never throws). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -70,6 +82,7 @@ async function getProduct(businessId, id) {
 
 async function createProduct(businessId, userId, data) {
   await assertCategoryBelongsToBusiness(businessId, data.categoryId);
+  await assertUnitsAllowed(businessId, data.units, data.unit);
 
   const { variants: rawVariants, ...rawProductData } = data;
   // null (= "not set") is only meaningful on UPDATE; on create just omit it.
@@ -144,6 +157,7 @@ async function updateProduct(businessId, userId, id, updates) {
   if (!product) throw ApiError.notFound('Product not found');
 
   await assertCategoryBelongsToBusiness(businessId, updates.categoryId);
+  await assertUnitsAllowed(businessId, updates.units, updates.unit || product.unit);
 
   const wasWholesale = !!product.wholesaleEnabled;
   const oldValue = {

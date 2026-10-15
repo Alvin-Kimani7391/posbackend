@@ -23,10 +23,12 @@ const receivePurchaseSchema = z.object({
   })).optional(),
   // Where the goods go: whole receipt (default RETAIL), optionally overridden per line.
   location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
+  warehouseId: objectId.optional(), // which warehouse (default: purchase's warehouse, else the branch's default)
   lineLocations: z.array(z.object({
     productId: objectId,
     variantId: objectId.optional(),
     location: z.enum(['RETAIL', 'WAREHOUSE']),
+    warehouseId: objectId.optional(),
   })).optional(),
 }).default({});
 
@@ -34,7 +36,8 @@ const purchaseItemSchema = z
   .object({
     productId: objectId,
     variantId: objectId.optional(),
-    quantity: z.coerce.number().positive(),
+    quantity: z.coerce.number().positive(),   // in the purchase unit (unitId) - default: the base unit
+    unitId: objectId.optional(),              // buy in a bigger unit (bundle, carton...); unitCost is per that unit
     unitCost: moneyInput,
     taxRate: z.coerce.number().min(0).max(100).optional().default(0),
     discount: moneyInput.optional().default(0),
@@ -66,7 +69,10 @@ const purchaseItemSchema = z
 const createPurchaseSchema = z.object({
   branchId: objectId,
   supplierId: objectId,
-  invoiceNumber: z.string().trim().optional(),
+  invoiceNumber: z.string().trim().optional(), // the SUPPLIER's invoice number
+  invoiceDate: z.coerce.date().optional(),
+  dueDate: z.coerce.date().optional(),         // default: invoice date + supplier payment terms
+  warehouseId: objectId.optional(),            // warehouse the goods are meant for
   vatMode: z.enum(['NONE', 'INCLUSIVE', 'EXCLUSIVE']).default('NONE'),
   vatRate: z.coerce.number().min(0).max(100).default(0),
   items: z.array(purchaseItemSchema).min(1),

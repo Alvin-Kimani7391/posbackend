@@ -23,6 +23,19 @@ const strictBoolean = z.preprocess((v) => (v === 'true' ? true : v === 'false' ?
 
 const attributesInput = z.record(z.string()).optional();
 
+// Other units of the product (bundle = 24 packets...). factor = base units per 1 of this unit; prices are for ONE unit.
+const unitInput = z.object({
+  _id: z.string().optional(), // keep the id when editing so old sales/purchases still point at the same unit
+  name: z.string().trim().min(1).max(30),
+  code: z.string().trim().max(12).optional(),
+  factor: z.coerce.number().positive(),
+  barcode: z.string().trim().optional(),
+  wholesalePrice: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.coerce.number().nonnegative().transform(toCents).optional()),
+  retailPrice: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.coerce.number().nonnegative().transform(toCents).optional()),
+  isWholesaleDefault: z.coerce.boolean().optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+});
+
 const variantInput = z.object({
   sku: z.string().trim().min(1),
   barcode: z.string().trim().optional(),
@@ -54,7 +67,8 @@ const productBase = z.object({
   defaultDiscount: moneyInput.optional().default(0),
   taxRate: z.coerce.number().min(0).max(100).optional(),
   taxCategory: z.string().trim().optional(),
-  unit: z.enum(Product.UNITS).optional(),
+  unit: z.enum(Product.UNITS).optional(), // BASE unit
+  units: z.array(unitInput).max(10).optional(),
   trackInventory: z.coerce.boolean().optional(),
   trackSerialNumber: z.coerce.boolean().optional(),
   serialKind: z.enum(['serial', 'imei']).optional(),

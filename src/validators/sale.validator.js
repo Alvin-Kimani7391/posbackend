@@ -8,6 +8,7 @@ const saleItemSchema = z.object({
   productId: objectId,
   variantId: objectId.optional(),
   quantity: z.coerce.number().positive(),
+  unitId: objectId.optional(), // sell in another unit of the product (bundle, carton...); quantity is in that unit
   discount: moneyInput.optional().default(0),
   overridePrice: moneyInput.optional(),
   batchId: objectId.optional(),
@@ -26,6 +27,9 @@ const paymentInputSchema = z.object({
 
 const createSaleSchema = z.object({
   branchId: objectId,
+  channel: z.enum(['RETAIL', 'WHOLESALE']).default('RETAIL'), // sale-dashboard switch
+  warehouseId: objectId.optional(),                          // WHOLESALE: which warehouse to sell from (default: branch's default)
+  dueDate: z.coerce.date().optional(),                       // credit invoices: when payment is due
   customerId: objectId.optional(),
   items: z.array(saleItemSchema).min(1),
   payments: z.array(paymentInputSchema).default([]),

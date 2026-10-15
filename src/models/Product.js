@@ -2,7 +2,23 @@ const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
 const PRODUCT_TYPES = ['physical', 'service', 'weighted', 'digital'];
-const UNITS = ['piece', 'kg', 'g', 'litre', 'ml', 'metre', 'box', 'packet', 'service'];
+const UNITS = [
+  'piece', 'kg', 'g', 'litre', 'ml', 'metre', 'box', 'packet', 'service',
+  'bundle', 'carton', 'dozen', 'pack', 'bag', 'sack', 'bottle', 'tin', 'sachet', 'roll', 'pair', 'set', 'tray', 'crate', 'pallet', 'tablet', 'strip',
+];
+
+// Other ways to buy / move / sell the same stock (utils/units.js). Stock is ALWAYS kept in the base unit (Product.unit);
+// factor = BASE units in one of these. Prices are for ONE such unit (integer cents).
+const productUnitSchema = new Schema({
+  name: { type: String, required: true, trim: true, maxlength: 30 }, // bundle, carton, dozen, 2kg bag...
+  code: { type: String, trim: true, maxlength: 12 },
+  factor: { type: Number, required: true, min: 0.001 },
+  barcode: { type: String, trim: true },
+  wholesalePrice: { type: Number, min: 0 }, // price of one such unit in the WHOLESALE sale mode
+  retailPrice: { type: Number, min: 0 },    // price of one such unit in the RETAIL sale mode
+  isWholesaleDefault: { type: Boolean, default: false },
+  status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+});
 
 const productSchema = new Schema(
   {
@@ -35,7 +51,8 @@ const productSchema = new Schema(
     taxRate: { type: Number, default: 0, min: 0, max: 100 }, // percent
     taxCategory: { type: String, default: 'standard' }, // e.g. standard, zero-rated, exempt
 
-    unit: { type: String, enum: UNITS, default: 'piece' },
+    unit: { type: String, enum: UNITS, default: 'piece' }, // BASE unit: stock, batches and the ledger are counted in it
+    units: { type: [productUnitSchema], default: [] },     // bigger/other units that convert to the base unit (feature: unitConversions)
 
     trackInventory: { type: Boolean, default: true },
     trackSerialNumber: { type: Boolean, default: false },
@@ -79,7 +96,7 @@ productSchema.pre('validate', function enforceWholesaleConfig(next) {
   return next();
 });
 
-moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defaultDiscount']);
+moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defaultDiscount'], { units: ['wholesalePrice', 'retailPrice'] });
 
 module.exports = model('Product', productSchema);
 module.exports.PRODUCT_TYPES = PRODUCT_TYPES;

@@ -13,6 +13,8 @@ const warehouseInventorySchema = new Schema(
   {
     businessId: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
     branchId: { type: Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
+    // WHICH warehouse holds this stock (a business can have many). Older rows get the branch's default warehouse (migration script).
+    warehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse', index: true },
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     variantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant', default: null },
 
@@ -23,7 +25,8 @@ const warehouseInventorySchema = new Schema(
   { timestamps: true }
 );
 
-warehouseInventorySchema.index({ businessId: 1, branchId: 1, productId: 1, variantId: 1 }, { unique: true });
+warehouseInventorySchema.index({ businessId: 1, warehouseId: 1, productId: 1, variantId: 1 }, { unique: true });
+warehouseInventorySchema.index({ businessId: 1, branchId: 1, productId: 1, variantId: 1 }); // non-unique: a branch may have several warehouses
 warehouseInventorySchema.index({ businessId: 1, branchId: 1, quantity: 1 });
 
 warehouseInventorySchema.virtual('availableQuantity').get(function availableQuantity() {
