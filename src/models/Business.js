@@ -1,9 +1,35 @@
 const { Schema, model } = require('mongoose');
 
 const { BUSINESS_TYPES, FEATURE_KEYS } = require('../constants/businessFeatures');
+const { ONBOARDING_STEP_KEYS, ONBOARDING_STEP_STATUSES } = require('../constants/onboarding');
 
 const featureSettingsSchema = new Schema(
   Object.fromEntries(FEATURE_KEYS.map((k) => [k, { type: Boolean, default: false }])),
+  { _id: false }
+);
+
+// Setup guide progress. Only the owner's MANUAL choices are stored (steps that can be detected
+// from real data are detected by the frontend). Existing businesses have typeConfirmed=false,
+// which is what makes the app offer the "choose your business type" pop-up once.
+const onboardingSchema = new Schema(
+  {
+    typeConfirmed: { type: Boolean, default: false },
+    typeConfirmedAt: { type: Date },
+    typePromptSnoozedUntil: { type: Date },
+    steps: {
+      type: [new Schema(
+        {
+          key: { type: String, enum: ONBOARDING_STEP_KEYS, required: true },
+          status: { type: String, enum: ONBOARDING_STEP_STATUSES, required: true },
+          at: { type: Date, default: Date.now },
+        },
+        { _id: false }
+      )],
+      default: [],
+    },
+    dismissedAt: { type: Date },   // owner chose "leave the guide, I will resume later"
+    completedAt: { type: Date },
+  },
   { _id: false }
 );
 
@@ -14,6 +40,7 @@ const businessSchema = new Schema(
     businessType: { type: String, enum: BUSINESS_TYPES, default: 'general_shop' },
     businessSubtype: { type: String, trim: true, maxlength: 60 }, // e.g. mini-supermarket, cafe
     featureSettings: { type: featureSettingsSchema, default: () => ({}) },
+    onboarding: { type: onboardingSchema, default: () => ({}) },
     phone: { type: String, required: true, trim: true },
     email: { type: String, trim: true, lowercase: true },
     address: { type: String, trim: true },

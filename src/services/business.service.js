@@ -1,7 +1,7 @@
 const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
-const { resolveFeatures } = require('../constants/businessFeatures');
+const { resolveFeatures, BUSINESS_TYPES, FEATURE_KEYS, BUSINESS_FEATURE_DEFAULTS, LOCKED_ON, defaultsFor } = require('../constants/businessFeatures');
 
 // Fields an ADMIN/OWNER may edit. Never allow status/subscription fields to be
 // set from this route - those are controlled by billing/admin processes.
@@ -70,4 +70,96 @@ async function updateOwnBusiness(businessId, userId, updates) {
   return business;
 }
 
-module.exports = { getOwnBusiness, updateOwnBusiness };
+/**
+ * What EVERY signed-in user may know about the business: its type and which feature flags are on.
+ * The frontend uses this to personalise the menu for all roles (a cashier has no settings.view, so
+ * they cannot call GET /business). Nothing sensitive here - no tax pins, no payment settings.
+ */
+async function getProfile(businessId) {
+  const b = await Business.findById(businessId)
+    .select('name businessType businessSubtype featureSettings currency onboarding.typeConfirmed')
+    .lean();
+  if (!b) throw ApiError.notFound('Business not found');
+  const fs = b.featureSettings || {};
+  return {
+    id: b._id,
+    name: b.name,
+    businessType: b.businessType || 'general_shop',
+    businessSubtype: b.businessSubtype || '',
+    currency: b.currency || 'KES',
+    typeConfirmed: !!(b.onboarding && b.onboarding.typeConfirmed),
+    featureSettings: Object.fromEntries(FEATURE_KEYS.map((k) => [k, fs[k] === true])),
+  };
+}
+
+/** The backend's own type list + feature defaults + locked-on rules, so the UI never drifts from it. */
+function getTypeCatalogue() {
+  return {
+    types: BUSINESS_TYPES.map((key) => ({
+      key,
+      defaults: defaultsFor(key),
+      lockedOn: LOCKED_ON[key] || [],
+      hasPreset: Object.prototype.hasOwnProperty.call(BUSINESS_FEATURE_DEFAULTS, key),
+    })),
+    featureKeys: FEATURE_KEYS,
+  };
+}
+
+function serialiseOnboarding(business) {
+  const o = business.onboarding || {};
+  return {
+    businessType: business.businessType || 'general_shop',
+    typeConfirmed: !!o.typeConfirmed,
+    typeConfirmedAt: o.typeConfirmedAt || null,
+    typePromptSnoozedUntil: o.typePromptSnoozedUntil || null,
+    steps: (o.steps || []).map((s) => ({ key: s.key, status: s.status, at: s.at })),
+    dismissedAt: o.dismissedAt || null,
+    completedAt: o.completedAt || null,
+  };
+}
+
+async function getOnboarding(businessId) {
+  const business = await Business.findById(businessId).select('businessType onboarding');
+  if (!business) throw ApiError.notFound('Business not found');
+  return serialiseOnboarding(business);
+}
+
+const SNOOZE_DAYS = 3;
+
+async function updateOnboarding(businessId, userId, input) {
+  const business = await Business.findById(businessId).select('businessType onboarding');
+  if (!business) throw ApiError.notFound('Business not found');
+  if (!business.onboarding) business.onboarding = {};
+  const o = business.onboarding;
+
+  if (input.typeConfirmed === true) {
+    o.typeConfirmed = true;
+    o.typeConfirmedAt = new Date();
+    o.typePromptSnoozedUntil = undefined;
+  }
+  if (input.snoozeTypePrompt === true) {
+    o.typePromptSnoozedUntil = new Date(Date.now() + SNOOZE_DAYS * 86400000);
+  }
+  if (input.step) {
+    const { key, status } = input.step;
+    const rest = (o.steps || []).filter((s) => s.key !== key);
+    o.steps = status === 'pending' ? rest : [...rest, { key, status, at: new Date() }];
+    // Re-opening any step means the guide is no longer finished.
+    if (status === 'pending') o.completedAt = undefined;
+  }
+  if (input.dismissed === true) o.dismissedAt = new Date();
+  if (input.dismissed === false) o.dismissedAt = undefined; // "resume setup guide"
+  if (input.completed === true) { o.completedAt = new Date(); o.dismissedAt = undefined; }
+  if (input.completed === false) o.completedAt = undefined;
+
+  business.markModified('onboarding');
+  await business.save();
+
+  await AuditLog.create({
+    businessId, userId, action: 'business.onboarding.update', entityType: 'Business', entityId: business._id,
+    newValue: { input },
+  });
+  return serialiseOnboarding(business);
+}
+
+module.exports = { getOwnBusiness, updateOwnBusiness, getProfile, getTypeCatalogue, getOnboarding, updateOnboarding };

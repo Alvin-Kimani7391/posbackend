@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const { BUSINESS_TYPES, FEATURE_KEYS } = require('../constants/businessFeatures');
+const { ONBOARDING_STEP_KEYS } = require('../constants/onboarding');
 
 const receiptSettingsSchema = z
   .object({
@@ -81,4 +82,26 @@ const updateBusinessSchema = z
   })
   .strict();
 
-module.exports = { updateBusinessSchema };
+// Setup guide. One request can do several things; every field is optional.
+//   typeConfirmed: true            -> the owner has made a business-type decision (or kept the default)
+//   snoozeTypePrompt: true         -> "ask me later" for the pop-up (existing businesses)
+//   step: { key, status }          -> mark a step 'done' / 'skipped', or 'pending' to undo
+//   dismissed: true | false        -> leave the guide for now / resume it
+//   completed: true | false        -> the owner finished the whole guide
+const updateOnboardingSchema = z
+  .object({
+    typeConfirmed: z.boolean().optional(),
+    snoozeTypePrompt: z.boolean().optional(),
+    step: z
+      .object({
+        key: z.enum(ONBOARDING_STEP_KEYS),
+        status: z.enum(['done', 'skipped', 'pending']),
+      })
+      .strict()
+      .optional(),
+    dismissed: z.boolean().optional(),
+    completed: z.boolean().optional(),
+  })
+  .strict();
+
+module.exports = { updateBusinessSchema, updateOnboardingSchema };
