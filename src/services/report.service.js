@@ -7,6 +7,7 @@ const Customer = require('../models/Customer');
 const Supplier = require('../models/Supplier');
 const Business = require('../models/Business');
 const BranchInventory = require('../models/BranchInventory');
+const LocationTransfer = require('../models/LocationTransfer');
 const { fromCents } = require('../utils/money');
 const { getLowStockAlerts } = require('./inventory.service');
 
@@ -467,7 +468,137 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
   return result;
 }
 
+/**
+ * Wholesale / retail PROFIT report - answers "what do I really earn from the warehouse?".
+ *
+ *  channels      RETAIL vs WHOLESALE: sales, revenue (ex-VAT), cost of goods, profit, margin, units (BASE units), money still owed.
+ *  retailPremium For retail lines whose product has a wholesale price: the extra the owner earned by selling at the retail
+ *                price instead of the lower wholesale price = retail revenue - (wholesale value of the same units).
+ *                Also shows the profit those units would have made at wholesale, and the profit they actually made.
+ *  transfers     Stock moved warehouse -> retail in the period: cost value, wholesale value, retail value at the new price,
+ *                expected profit and uplift over wholesale (booked as real profit only when the goods are SOLD).
+ *  byProduct     Per product and channel, with units in the base unit, so bundles and single units compare properly.
+ *  trend         Profit per day per channel (business timezone).
+ * Refunded quantities are taken out of revenue, cost and units, so the numbers match what was really kept.
+ * Money in the response is KES (decimal); quantities are BASE units.
+ */
+async function getWholesaleReport(businessId, { branchId, from, to, warehouseId, top = 50 }) {
+  const match = saleMatch({ businessId, branchId, from, to });
+  if (warehouseId) match.warehouseId = toObjectId(warehouseId);
+  const biz = await Business.findById(businessId).select('timezone').lean();
+  const tz = biz?.timezone || 'Africa/Nairobi';
+
+  const lineStages = [
+    { $match: match },
+    { $unwind: '$items' },
+    { $addFields: { _q: { $subtract: ['$items.quantity', { $ifNull: ['$items.refundedQuantity', 0] }] } } },
+    { $addFields: { _rf: { $cond: [{ $gt: ['$items.quantity', 0] }, { $divide: ['$_q', '$items.quantity'] }, 0] } } },
+    { $project: {
+      channel: { $ifNull: ['$channel', 'RETAIL'] },
+      productId: '$items.productId', variantId: '$items.variantId', name: '$items.nameSnapshot', unitName: '$items.unitName',
+      day: { $dateToString: { format: '%Y-%m-%d', date: '$soldAt', timezone: tz } },
+      rev: { $multiply: [{ $subtract: ['$items.total', { $ifNull: ['$items.taxAmount', 0] }] }, '$_rf'] },
+      cogs: { $multiply: ['$items.costPriceSnapshot', '$_q'] },
+      baseQty: { $multiply: [{ $ifNull: ['$items.baseQuantity', '$items.quantity'] }, '$_rf'] },
+      wsv: { $multiply: [{ $ifNull: ['$items.wholesaleValueSnapshot', 0] }, '$_q'] },
+    } },
+    { $addFields: {
+      hasWs: { $cond: [{ $gt: ['$wsv', 0] }, 1, 0] },
+      cmpRev: { $cond: [{ $gt: ['$wsv', 0] }, '$rev', 0] },
+      cmpCogs: { $cond: [{ $gt: ['$wsv', 0] }, '$cogs', 0] },
+    } },
+  ];
+  const sums = { rev: { $sum: '$rev' }, cogs: { $sum: '$cogs' }, baseQty: { $sum: '$baseQty' }, wsv: { $sum: '$wsv' }, cmpRev: { $sum: '$cmpRev' }, cmpCogs: { $sum: '$cmpCogs' } };
+
+  const [byProductRaw, trendRaw, saleAgg] = await Promise.all([
+    Sale.aggregate([...lineStages, { $group: { _id: { productId: '$productId', channel: '$channel' }, name: { $first: '$name' }, ...sums } }]),
+    Sale.aggregate([...lineStages, { $group: { _id: { day: '$day', channel: '$channel' }, rev: sums.rev, cogs: sums.cogs } }, { $sort: { '_id.day': 1 } }]),
+    Sale.aggregate([{ $match: match }, { $group: { _id: { $ifNull: ['$channel', 'RETAIL'] }, sales: { $sum: 1 }, invoiced: { $sum: '$total' }, outstanding: { $sum: '$balance' } } }]),
+  ]);
+
+  const pct = (a, b) => (b > 0 ? Math.round((a / b) * 10000) / 100 : 0);
+  const blank = () => ({ rev: 0, cogs: 0, baseQty: 0, wsv: 0, cmpRev: 0, cmpCogs: 0 });
+  const add = (t, r) => { for (const k of Object.keys(t)) t[k] += r[k] || 0; };
+
+  const ch = { RETAIL: { ...blank(), sales: 0, invoiced: 0, outstanding: 0 }, WHOLESALE: { ...blank(), sales: 0, invoiced: 0, outstanding: 0 } };
+  const products = new Map();
+  for (const r of byProductRaw) {
+    const c = ch[r._id.channel] || (ch[r._id.channel] = { ...blank(), sales: 0, invoiced: 0, outstanding: 0 });
+    add(c, r);
+    const key = String(r._id.productId);
+    if (!products.has(key)) products.set(key, { productId: r._id.productId, name: r.name, RETAIL: blank(), WHOLESALE: blank() });
+    add((products.get(key)[r._id.channel] ||= blank()), r);
+  }
+  for (const r of saleAgg) { const c = ch[r._id] || (ch[r._id] = { ...blank(), sales: 0, invoiced: 0, outstanding: 0 }); c.sales = r.sales; c.invoiced = r.invoiced; c.outstanding = r.outstanding; }
+
+  const channelOut = (c) => ({
+    sales: c.sales, units: Math.round(c.baseQty * 1000) / 1000, revenue: fromCents(c.rev), costOfGoods: fromCents(c.cogs),
+    profit: fromCents(c.rev - c.cogs), marginPercent: pct(c.rev - c.cogs, c.rev), invoiced: fromCents(c.invoiced), outstanding: fromCents(c.outstanding),
+  });
+  const channels = Object.fromEntries(Object.entries(ch).map(([k, v]) => [k, channelOut(v)]));
+  const all = blank(); Object.values(ch).forEach((c) => add(all, c));
+  const totals = { revenue: fromCents(all.rev), costOfGoods: fromCents(all.cogs), profit: fromCents(all.rev - all.cogs), marginPercent: pct(all.rev - all.cogs, all.rev) };
+
+  // Retail lines that have a wholesale price: retail profit vs what the same units would have made at wholesale.
+  const r = ch.RETAIL;
+  const retailPremium = {
+    comparableRevenue: fromCents(r.cmpRev), wholesaleValueOfSameUnits: fromCents(r.wsv),
+    profitAtRetail: fromCents(r.cmpRev - r.cmpCogs), profitIfSoldAtWholesale: fromCents(r.wsv - r.cmpCogs),
+    extraProfitFromRetailPrice: fromCents(r.cmpRev - r.wsv), upliftPercentOverWholesale: pct(r.cmpRev - r.wsv, r.wsv),
+  };
+
+  const byProduct = [...products.values()].map((p) => {
+    const t = blank(); add(t, p.RETAIL); add(t, p.WHOLESALE);
+    const row = (c) => ({ units: Math.round(c.baseQty * 1000) / 1000, revenue: fromCents(c.rev), profit: fromCents(c.rev - c.cogs) });
+    return {
+      productId: p.productId, name: p.name, units: Math.round(t.baseQty * 1000) / 1000, revenue: fromCents(t.rev), costOfGoods: fromCents(t.cogs),
+      profit: fromCents(t.rev - t.cogs), marginPercent: pct(t.rev - t.cogs, t.rev), retail: row(p.RETAIL), wholesale: row(p.WHOLESALE),
+      retailPremium: fromCents(p.RETAIL.cmpRev - p.RETAIL.wsv),
+    };
+  }).sort((a, b) => b.profit - a.profit).slice(0, top);
+
+  const days = new Map();
+  for (const t of trendRaw) {
+    if (!days.has(t._id.day)) days.set(t._id.day, { date: t._id.day, retailProfit: 0, wholesaleProfit: 0, profit: 0 });
+    const d = days.get(t._id.day); const p = fromCents(t.rev - t.cogs);
+    if (t._id.channel === 'WHOLESALE') d.wholesaleProfit = Math.round((d.wholesaleProfit + p) * 100) / 100; else d.retailProfit = Math.round((d.retailProfit + p) * 100) / 100;
+    d.profit = Math.round((d.retailProfit + d.wholesaleProfit) * 100) / 100;
+  }
+
+  // Warehouse -> retail moves in the period (the owner "sells to himself" at the new retail price).
+  const tMatch = { businessId: toObjectId(businessId), kind: 'TO_RETAIL', createdAt: resolveDateRange(from, to) };
+  if (branchId) tMatch.branchId = toObjectId(branchId);
+  if (warehouseId) tMatch['from.warehouseId'] = toObjectId(warehouseId);
+  const trRaw = await LocationTransfer.aggregate([
+    { $match: tMatch }, { $unwind: '$items' },
+    { $project: {
+      productId: '$items.productId', name: '$items.nameSnapshot', baseUnit: '$items.baseUnitName', qty: '$items.quantity',
+      cost: { $multiply: [{ $ifNull: ['$items.unitCostCents', 0] }, '$items.quantity'] },
+      retail: { $multiply: [{ $ifNull: ['$items.retailPriceCents', 0] }, '$items.quantity'] },
+      hasW: { $cond: [{ $eq: ['$items.priceFloorKind', 'WHOLESALE'] }, 1, 0] },
+      wholesale: { $cond: [{ $eq: ['$items.priceFloorKind', 'WHOLESALE'] }, { $multiply: [{ $ifNull: ['$items.priceFloorCents', 0] }, '$items.quantity'] }, 0] },
+      retailKnownW: { $cond: [{ $eq: ['$items.priceFloorKind', 'WHOLESALE'] }, { $multiply: [{ $ifNull: ['$items.retailPriceCents', 0] }, '$items.quantity'] }, 0] },
+    } },
+    { $group: { _id: '$productId', name: { $first: '$name' }, baseUnit: { $first: '$baseUnit' }, units: { $sum: '$qty' }, cost: { $sum: '$cost' }, retail: { $sum: '$retail' }, wholesale: { $sum: '$wholesale' }, retailKnownW: { $sum: '$retailKnownW' } } },
+  ]);
+  const tt = trRaw.reduce((a, x) => ({ units: a.units + x.units, cost: a.cost + x.cost, retail: a.retail + x.retail, wholesale: a.wholesale + x.wholesale, retailKnownW: a.retailKnownW + x.retailKnownW }), { units: 0, cost: 0, retail: 0, wholesale: 0, retailKnownW: 0 });
+  const transfers = {
+    totals: {
+      units: Math.round(tt.units * 1000) / 1000, costValue: fromCents(tt.cost), wholesaleValue: fromCents(tt.wholesale), retailValue: fromCents(tt.retail),
+      expectedProfit: fromCents(tt.retail - tt.cost), upliftOverWholesale: fromCents(tt.retailKnownW - tt.wholesale),
+      note: 'Expected profit becomes real profit only when these goods are sold at the retail price.',
+    },
+    byProduct: trRaw.map((x) => ({
+      productId: x._id, name: x.name, baseUnit: x.baseUnit, units: Math.round(x.units * 1000) / 1000, costValue: fromCents(x.cost), wholesaleValue: fromCents(x.wholesale),
+      retailValue: fromCents(x.retail), expectedProfit: fromCents(x.retail - x.cost), upliftOverWholesale: fromCents(x.retailKnownW - x.wholesale),
+    })).sort((a, b) => b.expectedProfit - a.expectedProfit),
+  };
+
+  return { range: { from: match.soldAt.$gte, to: match.soldAt.$lte }, totals, channels, retailPremium, transfers, byProduct, trend: [...days.values()] };
+}
+
 module.exports = {
+  getWholesaleReport,
   getDashboard,
   getMyDashboard,
   getSalesReport,

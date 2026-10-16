@@ -9,6 +9,8 @@ const ProductVariant = require('../models/ProductVariant');
 const Category = require('../models/Category');
 const Customer = require('../models/Customer');
 const BranchInventory = require('../models/BranchInventory');
+const Warehouse = require('../models/Warehouse');
+const WarehouseInventory = require('../models/WarehouseInventory');
 const Batch = require('../models/Batch');
 const SerialNumber = require('../models/SerialNumber');
 const CashRegister = require('../models/CashRegister');
@@ -172,6 +174,14 @@ async function getContext(businessId, user, deviceId, secret) {
       },
       taxInclusive: !!(business.taxSettings && business.taxSettings.taxInclusive),
       wholesalePricing: !!(business.featureSettings && business.featureSettings.wholesalePricing),
+      multiWarehouse: !!(business.featureSettings && business.featureSettings.multiWarehouse),
+      unitConversions: !!(business.featureSettings && business.featureSettings.unitConversions),
+      wholesaleSettings: {
+        defaultMode: (business.wholesaleSettings && business.wholesaleSettings.defaultMode) || 'RETAIL',
+        defaultWarehouseId: business.wholesaleSettings && business.wholesaleSettings.defaultWarehouseId ? String(business.wholesaleSettings.defaultWarehouseId) : null,
+        requireCustomerForWholesale: !!(business.wholesaleSettings && business.wholesaleSettings.requireCustomerForWholesale),
+        defaultPaymentTermsDays: (business.wholesaleSettings && business.wholesaleSettings.defaultPaymentTermsDays) || 0,
+      },
       requireShift: !!s.requireShift,
       allowNegativeStock: !!s.allowNegativeStock,
       enableCustomerCredit: !!s.enableCustomerCredit,
@@ -193,6 +203,12 @@ const mapProduct = (p) => ({
   // Wholesale is sent only for wholesale-enabled products (the till applies it when quantity >= moq).
   wholesaleEnabled: !!p.wholesaleEnabled && p.moq > 0, moq: p.wholesaleEnabled ? p.moq || null : null,
   wholesalePriceCents: p.wholesaleEnabled ? p.wholesalePrice || null : null,
+  // Wholesale-mode price per BASE unit (used when the till sells from a warehouse) and the other units (bundle, carton...).
+  wholesaleBasePriceCents: p.wholesalePrice || null,
+  units: (p.units || []).filter((u) => u.status !== 'inactive').map((u) => ({
+    id: String(u._id), name: u.name, code: u.code || null, factor: u.factor, barcode: u.barcode || null,
+    retailPriceCents: u.retailPrice || null, wholesalePriceCents: u.wholesalePrice || null, isWholesaleDefault: !!u.isWholesaleDefault,
+  })),
   taxRate: p.taxRate || 0, taxCategory: p.taxCategory, unit: p.unit, productType: p.productType,
   trackInventory: !!p.trackInventory, trackSerialNumber: !!p.trackSerialNumber, trackBatch: !!p.trackBatch, trackExpiry: !!p.trackExpiry,
   hasVariants: !!p.hasVariants, image: p.image, status: p.status, updatedAt: p.updatedAt,
@@ -200,6 +216,8 @@ const mapProduct = (p) => ({
 const mapVariant = (v) => ({ id: String(v._id), productId: String(v.productId), sku: v.sku, barcode: v.barcode, attributes: v.attributes || {}, sellingPriceCents: v.sellingPrice, wholesalePriceCents: v.wholesalePrice || null, status: v.status, updatedAt: v.updatedAt });
 const mapCategory = (c) => ({ id: String(c._id), name: c.name, parentId: c.parentId || c.parent ? String(c.parentId || c.parent) : null, status: c.status });
 const mapStock = (r) => ({ id: String(r._id), productId: String(r.productId), variantId: r.variantId ? String(r.variantId) : null, quantity: r.quantity, reservedQuantity: r.reservedQuantity || 0, lowStockThreshold: r.lowStockThreshold, updatedAt: r.updatedAt });
+const mapWarehouse = (w) => ({ id: String(w._id), name: w.name, code: w.code, isDefault: !!w.isDefault, allowSales: w.allowSales !== false, status: w.status });
+const mapWarehouseStock = (r) => ({ id: String(r._id), warehouseId: r.warehouseId ? String(r.warehouseId) : null, productId: String(r.productId), variantId: r.variantId ? String(r.variantId) : null, quantity: r.quantity, reservedQuantity: r.reservedQuantity || 0, updatedAt: r.updatedAt });
 const mapBatch = (b) => ({ id: String(b._id), productId: String(b.productId), variantId: b.variantId ? String(b.variantId) : null, batchNumber: b.batchNumber, quantity: b.quantity, expiryDate: b.expiryDate, manufacturingDate: b.manufacturingDate });
 const mapSerial = (s) => ({ id: String(s._id), serialNumber: s.serialNumber, productId: s.productId ? String(s.productId) : null, variantId: s.variantId ? String(s.variantId) : null, status: s.status });
 const mapCustomer = (c) => ({ id: String(c._id), name: c.name, phone: c.phone, phoneNormalized: c.phoneNormalized, creditLimitCents: c.creditLimit || 0, outstandingBalanceCents: c.outstandingBalance || 0, loyaltyPoints: c.loyaltyPoints || 0, status: c.status, updatedAt: c.updatedAt });
@@ -212,6 +230,9 @@ const FEEDS = {
   products: { model: Product, map: mapProduct, key: 'updatedAt', active: { status: 'active' } },
   variants: { model: ProductVariant, map: mapVariant, key: 'updatedAt', active: { status: 'active' } },
   stock: { model: BranchInventory, map: mapStock, key: 'updatedAt', branch: true },
+  // Offline WHOLESALE: the branch's sellable warehouses and what is in them (BASE units).
+  warehouses: { model: Warehouse, map: mapWarehouse, key: 'id', branch: true, active: { status: 'active', allowSales: true } },
+  warehouseStock: { model: WarehouseInventory, map: mapWarehouseStock, key: 'updatedAt', branch: true },
   customers: { model: Customer, map: mapCustomer, key: 'updatedAt', active: { status: 'active' }, needs: 'syncCustomers' },
   categories: { model: Category, map: mapCategory, key: 'id' },
   batches: { model: Batch, map: mapBatch, key: 'id', branch: true, active: { quantity: { $gt: 0 } } },

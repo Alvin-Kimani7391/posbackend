@@ -23,6 +23,7 @@ router.get('/stock', requirePermission('inventory.view'), requireBranchAccess, v
 router.get('/reconcile', requirePermission('inventory.view'), requireBranchAccess, validate({ query: v.overviewQuery }), controller.reconcile);
 router.get('/transfers', requirePermission('inventory.view'), validate({ query: v.listLocationTransfersQuery }), controller.listTransfers);
 router.get('/transfers/:id', requirePermission('inventory.view'), validate({ params: v.idParamSchema }), controller.getTransfer);
+router.post('/transfers/preview', requirePermission('inventory.view'), validate({ body: v.locationTransferSchema }), controller.previewTransfer);
 router.post('/transfers', requirePermission('inventory.transfer'), validate({ body: v.locationTransferSchema }), controller.transfer);
 
 // Warehouses CRUD (several per business, any branch)

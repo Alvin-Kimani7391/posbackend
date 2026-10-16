@@ -41,4 +41,9 @@ const auditLogQuery = paginationQuery.extend({
   to: z.coerce.date().optional(),
 });
 
-module.exports = { reportQuery, inventoryReportQuery, auditLogQuery };
+const wholesaleReportQuery = reportQuery.extend({
+  warehouseId: objectId.optional(),
+  top: z.coerce.number().int().min(1).max(500).optional().default(50), // rows in the by-product table
+});
+
+module.exports = { reportQuery, reportDetailQuery, inventoryReportQuery, auditLogQuery, wholesaleReportQuery };

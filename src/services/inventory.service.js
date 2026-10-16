@@ -9,6 +9,18 @@ const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const notificationService = require('./notification.service');
+const { resolveUnit, round3, unitBreakdown } = require('../utils/units');
+
+/** Quantity entered in any unit of the product (2 bundles) -> BASE units (48 packets). Stock is always base units. */
+async function toBaseQuantity(businessId, product, quantity, unitId) {
+  const unit = resolveUnit(product, unitId);
+  if (!unit.isBase) {
+    const biz = await Business.findById(businessId).select('featureSettings').lean();
+    if (!biz?.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
+    if (product.trackSerialNumber) throw ApiError.badRequest(`${product.name} is serial-tracked: enter units one by one`, 'SERIAL_BASE_ONLY');
+  }
+  return { quantity: round3(quantity * unit.factor), factor: unit.factor, unit };
+}
 const { resolveWarehouse } = require('./warehouse.resolver');
 
 const LOCATIONS = ['RETAIL', 'WAREHOUSE'];
@@ -138,7 +150,7 @@ async function listBranchInventory(businessId, branchId, { page, limit, search, 
   const filter = { businessId, branchId };
   if (outOfStockOnly) filter.quantity = { $lte: 0 };
 
-  let rows = await BranchInventory.find(filter).populate('productId', 'name sku barcode image').sort({ updatedAt: -1 });
+  let rows = await BranchInventory.find(filter).populate('productId', 'name sku barcode image unit units').sort({ updatedAt: -1 });
 
   if (search) {
     const re = new RegExp(search, 'i');
@@ -153,7 +165,8 @@ async function listBranchInventory(businessId, branchId, { page, limit, search, 
 
   const total = rows.length;
   const paged = rows.slice((page - 1) * limit, (page - 1) * limit + limit);
-  return { items: paged, total, page, limit, pages: Math.ceil(total / limit) || 1 };
+  const items = paged.map((r) => { const o = r.toObject(); o.inUnits = unitBreakdown(r.productId, r.quantity); return o; }); // same stock also shown per bundle/carton
+  return { items, total, page, limit, pages: Math.ceil(total / limit) || 1 };
 }
 
 async function getLowStockAlerts(businessId, branchId) {
@@ -190,8 +203,9 @@ async function getMovements(businessId, { branchId, productId, variantId, type, 
 }
 
 /** Manual stock adjustment (storekeeper correcting a count, marking damage/loss, etc). Runs its own transaction. */
-async function adjustStock(businessId, branchId, userId, { productId, variantId, quantity, reason, type, location = 'RETAIL' }) {
-  await assertItemExists(businessId, productId, variantId);
+async function adjustStock(businessId, branchId, userId, { productId, variantId, quantity: rawQuantity, unitId, reason, type, location = 'RETAIL' }) {
+  const adjProduct = await assertItemExists(businessId, productId, variantId);
+  const { quantity } = await toBaseQuantity(businessId, adjProduct, rawQuantity, unitId);
   if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId);
   const business = await Business.findById(businessId);
   const allowNegative = !!business?.settings?.allowNegativeStock;
@@ -229,8 +243,13 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
  * purchase.service and calls applyStockChange directly within its own
  * transaction so it can also update the supplier balance atomically.
  */
-async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL' }) {
+async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, unitId, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL' }) {
   const product = await assertItemExists(businessId, productId, variantId);
+  { // unit conversion: 10 bundles @ 1,200 -> 240 packets @ 50
+    const c = await toBaseQuantity(businessId, product, quantity, unitId);
+    quantity = c.quantity;
+    if (costPrice != null && c.factor !== 1) costPrice = Math.round(costPrice / c.factor);
+  }
   if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId);
 
   const session = await mongoose.startSession();

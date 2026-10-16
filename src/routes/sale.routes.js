@@ -3,7 +3,7 @@ const controller = require('../controllers/sale.controller');
 const validate = require('../middleware/validate');
 const idempotent = require('../middleware/idempotency');
 const { authenticate, requirePermission, requireBranchAccess } = require('../middleware/auth');
-const { createSaleSchema, listSalesQuery, cancelSaleSchema, idParamSchema } = require('../validators/sale.validator');
+const { createSaleSchema, listSalesQuery, cancelSaleSchema, idParamSchema, invoiceQuery } = require('../validators/sale.validator');
 
 router.use(authenticate);
 
@@ -18,6 +18,7 @@ router.post(
 );
 router.get('/:id', requirePermission('sales.view'), validate({ params: idParamSchema }), controller.getOne);
 router.post('/:id/cancel', requirePermission('sales.cancel'), validate({ params: idParamSchema, body: cancelSaleSchema }), controller.cancel);
+router.get('/:id/invoice', requirePermission('sales.view'), validate({ params: idParamSchema, query: invoiceQuery }), controller.getInvoice);
 router.get('/:id/receipt', requirePermission('sales.view'), validate({ params: idParamSchema }), controller.getReceipt);
 router.post('/:id/receipt/print', requirePermission('sales.view'), validate({ params: idParamSchema }), controller.printReceipt);
 

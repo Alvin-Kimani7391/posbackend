@@ -26,7 +26,7 @@ const { applyStockChange, getStockLevel } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice } = require('./sale-pricing.util');
 const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
 const { resolveWarehouse, saleStockTarget } = require('./warehouse.resolver');
-const { resolveUnit, wholesaleUnitPrice, retailUnitPrice, round3 } = require('../utils/units');
+const { resolveUnit, wholesaleUnitPrice, retailUnitPrice, round3, wholesaleFloorPerBase } = require('../utils/units');
 
 /** Escapes user text so it is matched literally inside a RegExp. */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -134,6 +134,8 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     let priceType = resolved.priceType;
     // cost is per SOLD unit, so profit = price - cost works for a bundle exactly as for a single piece
     const costPriceSnapshot = Math.round((variant ? variant.costPrice : product.costPrice) * unit.factor);
+    const wsFloor = wholesaleFloorPerBase(product, variant);
+    const wholesaleValueSnapshot = wsFloor ? Math.round(wsFloor * unit.factor) : undefined; // what one sold unit is worth at wholesale
 
     if (rawItem.overridePrice !== undefined && rawItem.overridePrice !== null) {
       if (!canOverridePrice(cashierUser, business)) {
@@ -187,6 +189,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       unitPrice,
       priceType,
       costPriceSnapshot,
+      wholesaleValueSnapshot,
       discount,
       taxRate: product.taxRate || 0,
       taxAmount: computed.taxAmount,

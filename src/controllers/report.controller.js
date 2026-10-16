@@ -85,3 +85,7 @@ exports.suppliers = catchAsync(async (req, res) => {
   const result = await reportService.getSupplierBalanceReport(req.businessId);
   return sendSuccess(res, 200, 'Supplier balance report fetched', result);
 });
+exports.wholesale = catchAsync(async (req, res) => {
+  const result = await reportService.getWholesaleReport(req.businessId, req.query);
+  return sendSuccess(res, 200, 'Wholesale profit report fetched', result);
+});

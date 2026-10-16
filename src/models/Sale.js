@@ -24,6 +24,9 @@ const saleItemSchema = new Schema(
     // Which price produced unitPrice. RETAIL = default (all older/garage/repair lines); WHOLESALE = MOQ reached; OVERRIDE = manual.
     priceType: { type: String, enum: ['RETAIL', 'WHOLESALE', 'OVERRIDE'], default: 'RETAIL' },
     costPriceSnapshot: { type: Number, required: true }, // integer cents, for profit calculation
+    // Wholesale value of ONE sold unit (cents) at sale time, when a wholesale price exists. Lets reports show how much
+    // MORE a retail sale earned than the same goods would have earned at the wholesale price.
+    wholesaleValueSnapshot: { type: Number },
 
     discount: { type: Number, default: 0 },   // integer cents, this line's share of item-level discount
     taxRate: { type: Number, default: 0 },    // percent, snapshotted from the product at sale time
@@ -152,7 +155,7 @@ saleSchema.index(
 moneyFields(
   saleSchema,
   ['subtotal', 'itemDiscount', 'cartDiscount', 'tax', 'total', 'amountPaid', 'balance'],
-  { items: ['unitPrice', 'costPriceSnapshot', 'discount', 'taxAmount', 'total'] }
+  { items: ['unitPrice', 'costPriceSnapshot', 'wholesaleValueSnapshot', 'discount', 'taxAmount', 'total'] }
 );
 
 module.exports = model('Sale', saleSchema);

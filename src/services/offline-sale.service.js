@@ -33,6 +33,8 @@ const { getPolicy } = require('../utils/offlinePolicy');
 const { applyStockChange } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals } = require('./sale-pricing.util');
 const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
+const { resolveUnit, wholesaleUnitPrice, retailUnitPrice, wholesaleFloorPerBase, round3 } = require('../utils/units');
+const { resolveWarehouse } = require('./warehouse.resolver');
 const etimsService = require('./etims.service');
 const offlineMpesa = require('./offline-mpesa.service');
 const notificationService = require('./notification.service');
@@ -137,6 +139,22 @@ async function ingestOfflineSale(ctx) {
     );
   }
 
+  // ---- 3b. sale mode: RETAIL sells the shop floor, WHOLESALE sells a warehouse's stock (never rejected, only flagged) ----
+  let channel = s.channel === 'WHOLESALE' ? 'WHOLESALE' : 'RETAIL';
+  let warehouse = null;
+  if (channel === 'WHOLESALE') {
+    if (!(business.featureSettings && business.featureSettings.multiWarehouse)) flags.push(flag('WHOLESALE_NOT_ENABLED', 'HIGH', 'A wholesale sale was made but wholesale (multiWarehouse) is not enabled for this business'));
+    try {
+      warehouse = await resolveWarehouse(businessId, { warehouseId: s.warehouseId || (business.wholesaleSettings && business.wholesaleSettings.defaultWarehouseId) || undefined, branchId, userId: cashier._id });
+      if (!warehouse.allowSales) flags.push(flag('WAREHOUSE_NO_SALES', 'WARN', `${warehouse.name} is storage only but a wholesale sale was made from it`));
+    } catch (err) {
+      flags.push(flag('WAREHOUSE_UNAVAILABLE', 'HIGH', `Wholesale sale: ${err.message}. Stock was taken from the shop floor instead`));
+      channel = 'RETAIL'; // keeps stock, cancel and refund consistent: they follow where the stock really came from
+    }
+  }
+  const stockLocation = warehouse ? 'WAREHOUSE' : 'RETAIL';
+  const stockBranchId = warehouse ? warehouse.branchId : branchId;
+
   // ---- 4. lines: record the DEVICE's snapshot, recompute, compare ----
   const productIds = [...new Set(s.items.map((i) => i.productId))];
   const variantIds = [...new Set(s.items.filter((i) => i.variantId).map((i) => i.variantId))];
@@ -166,7 +184,28 @@ async function ingestOfflineSale(ctx) {
     }
 
     const lastChange = Math.max(product.updatedAt ? product.updatedAt.getTime() : 0, variant && variant.updatedAt ? variant.updatedAt.getTime() : 0);
-    const resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(it.productId) });
+    // Unit conversion: the line may be in a bigger unit (3 bundles); stock always moves in BASE units.
+    let unit;
+    try {
+      unit = resolveUnit(product, it.unitId);
+    } catch (err) {
+      if (!(it.unitFactor > 0)) throw new IngestRejection('UNIT_NOT_FOUND', `Line ${idx + 1}: the unit no longer exists on ${product.name}`, { releasable: false });
+      unit = { id: it.unitId, name: it.unitName || 'unit', factor: it.unitFactor, isBase: false, unit: null };
+      flags.push(flag('UNIT_NOT_FOUND', 'HIGH', `${product.name}: unit "${unit.name}" was removed; the till's factor ${unit.factor} was used`));
+    }
+    if (it.unitFactor > 0 && Math.abs(it.unitFactor - unit.factor) > 1e-9) flags.push(flag('UNIT_FACTOR_CHANGED', 'WARN', `${product.name}: till used ${it.unitFactor} per ${unit.name}, now ${unit.factor}`));
+    const baseQuantity = round3(it.quantity * unit.factor);
+
+    let resolved;
+    if (channel === 'WHOLESALE') {
+      const wp = wholesaleUnitPrice(product, variant, unit);
+      resolved = { unitPrice: wp, priceType: PRICE_TYPES.WHOLESALE, retailPrice: retailUnitPrice(product, variant, unit), wholesalePrice: wp, moq: null };
+    } else if (!unit.isBase) {
+      const rp = retailUnitPrice(product, variant, unit);
+      resolved = { unitPrice: rp, priceType: PRICE_TYPES.RETAIL, retailPrice: rp, wholesalePrice: null, moq: null };
+    } else {
+      resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(it.productId) });
+    }
     const currentPrice = resolved.unitPrice; // retail, or wholesale when the sale's quantity reaches the MOQ
     if (it.unitPriceCents !== currentPrice) {
       if (lastChange > soldAtMs) {
@@ -179,8 +218,8 @@ async function ingestOfflineSale(ctx) {
       }
     }
     // Tills cannot override prices: a line is WHOLESALE only when the till charged exactly the wholesale price.
-    const priceType = resolved.wholesalePrice !== null && it.unitPriceCents === resolved.wholesalePrice && it.unitPriceCents !== resolved.retailPrice
-      ? PRICE_TYPES.WHOLESALE : PRICE_TYPES.RETAIL;
+    const priceType = channel === 'WHOLESALE' ? PRICE_TYPES.WHOLESALE
+      : (resolved.wholesalePrice !== null && it.unitPriceCents === resolved.wholesalePrice && it.unitPriceCents !== resolved.retailPrice ? PRICE_TYPES.WHOLESALE : PRICE_TYPES.RETAIL);
     const catalogTax = product.taxRate || 0;
     if (it.taxRate !== catalogTax) {
       flags.push(
@@ -198,7 +237,7 @@ async function ingestOfflineSale(ctx) {
       mismatches.push(`Line ${idx + 1} (${product.name}): device total ${it.totalCents}c, recomputed ${computed.lineTotal}c`);
     }
 
-    const preset = Math.min(Math.round((product.defaultDiscount || 0) * it.quantity), computed.grossLineTotal);
+    const preset = Math.min(Math.round((product.defaultDiscount || 0) * unit.factor * it.quantity), computed.grossLineTotal);
     const manual = it.discountCents - preset;
     if (manual > 1 && maxDiscountPercent < 100) {
       const maxAllowed = Math.round((computed.grossLineTotal * maxDiscountPercent) / 100);
@@ -212,9 +251,11 @@ async function ingestOfflineSale(ctx) {
       skuSnapshot: variant ? variant.sku : product.sku,
       barcodeSnapshot: variant ? variant.barcode : product.barcode,
       quantity: it.quantity,
+      unitId: unit.id || undefined, unitName: unit.name, unitFactor: unit.factor, baseQuantity,
       unitPrice: it.unitPriceCents,
       priceType,
-      costPriceSnapshot: variant ? variant.costPrice : product.costPrice, // cost at SYNC time (the device never holds cost)
+      costPriceSnapshot: Math.round((variant ? variant.costPrice : product.costPrice) * unit.factor), // cost per SOLD unit at SYNC time (the device never holds cost)
+      wholesaleValueSnapshot: (() => { const f = wholesaleFloorPerBase(product, variant); return f ? Math.round(f * unit.factor) : undefined; })(),
       discount: it.discountCents,
       taxRate: it.taxRate,
       taxAmount: computed.taxAmount,
@@ -222,7 +263,7 @@ async function ingestOfflineSale(ctx) {
       refundedQuantity: 0,
       batchId: it.batchId || undefined,
       serialNumbers: it.serialNumbers || [],
-      _meta: { product, variant, quantity: it.quantity, gross: computed.grossLineTotal, discount: it.discountCents },
+      _meta: { product, variant, quantity: it.quantity, baseQuantity, gross: computed.grossLineTotal, discount: it.discountCents },
     });
   });
 
@@ -304,10 +345,10 @@ async function ingestOfflineSale(ctx) {
 
       // Stock, serials, batches. Negative stock is ACCEPTED (the goods are gone) and flagged.
       for (const item of built) {
-        const { product, quantity } = item._meta;
+        const { product, baseQuantity: quantity } = item._meta; // stock always moves in BASE units
         if (product.trackInventory) {
           const r = await applyStockChange({
-            businessId, branchId, productId: item.productId, variantId: item.variantId || null,
+            businessId, branchId: stockBranchId, location: stockLocation, warehouseId: warehouse ? warehouse._id : null, productId: item.productId, variantId: item.variantId || null,
             quantityDelta: -quantity, type: 'SALE', referenceType: 'Sale', referenceId: saleId,
             reason: `Offline sale ${receiptNumber}`, performedBy: cashier._id, session, allowNegative: true,
             occurredAt: soldAt,
@@ -419,6 +460,8 @@ async function ingestOfflineSale(ctx) {
           items: built.map(({ _meta, ...rest }) => rest),
           subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
           amountPaid: paidAmount, balance, paymentStatus, saleStatus: 'COMPLETED', source: 'SYNC', notes: s.notes,
+          channel, warehouseId: warehouse ? warehouse._id : undefined,
+          dueDate: s.dueDate || (channel === 'WHOLESALE' && balance > 0 && business.wholesaleSettings && business.wholesaleSettings.defaultPaymentTermsDays ? new Date(soldAt.getTime() + business.wholesaleSettings.defaultPaymentTermsDays * 86400000) : undefined),
           clientTransactionId: s.clientTransactionId, deviceId: device.deviceId,
           soldAt, syncedAt, isOffline: true, localSeq: s.localSeq, catalogVersion: s.catalogVersion, clockSkewMs: skewMs, grantId: claims.jti,
           reviewStatus, reviewFlags: allFlags,

@@ -26,6 +26,7 @@ const adjustStockSchema = z.object({
   quantity: z.coerce.number().positive(),
   type: z.enum(['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'DAMAGE', 'EXPIRED', 'LOST']),
   reason: z.string().trim().min(1),
+  unitId: objectId.optional(), // quantity is in this unit (default: the base unit)
   location: z.enum(['RETAIL', 'WAREHOUSE']).default('RETAIL'),
 });
 
@@ -41,6 +42,7 @@ const receiveStockSchema = z.object({
   serials: z.array(z.string().trim().min(3).max(64)).max(1000).optional(),
   condition: z.enum(['new', 'used', 'refurbished']).optional(),
   reason: z.string().trim().optional(),
+  unitId: objectId.optional(), // quantity / costPrice are per this unit (e.g. bundle); default: the base unit
   location: z.enum(['RETAIL', 'WAREHOUSE']).default('RETAIL'), // where the received goods go
 });
 

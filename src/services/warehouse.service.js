@@ -11,12 +11,12 @@ const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
-const { applyStockChange, assertWarehouseEnabled } = require('./inventory.service');
+const { applyStockChange, assertWarehouseEnabled, inventoryModel } = require('./inventory.service');
 const { resolveWarehouse, nextWarehouseCode } = require('./warehouse.resolver');
 const batchService = require('./batch.service');
 const serialService = require('./serial.service');
 const { assertBranchAccess } = require('../utils/branchAccess');
-const { resolveUnit, wholesaleFloorPerBase, evaluateRetailPrice, wholesaleUnitPrice, retailUnitPrice } = require('../utils/units');
+const { resolveUnit, wholesaleFloorPerBase, evaluateRetailPrice, wholesaleUnitPrice, retailUnitPrice, suggestedRetailPerBase } = require('../utils/units');
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -125,6 +125,24 @@ function unitBreakdown(product, baseQty) {
 // TRANSFERS: warehouse -> retail ("sell to myself" with a new retail price), retail -> warehouse (return),
 // warehouse -> warehouse. Every line may be entered in any unit of the product (2 bundles -> 48 packets).
 // ============================================================================================================
+/**
+ * Retail price rule for stock moved warehouse -> retail (per BASE unit), shared by the real move and the preview.
+ * No price typed: keep the current retail price if it is already above the wholesale value; otherwise fall back to the
+ * retail price the owner configured on a unit (bundle retail price / factor) so the move is not blocked for nothing.
+ */
+function retailPricingFor({ product, variant, requested, cost }) {
+  const floor = wholesaleFloorPerBase(product, variant);
+  const existing = variant ? variant.sellingPrice : product.sellingPrice;
+  let req = requested;
+  if (req === undefined || req === null) {
+    const f = floor > 0 ? floor : (cost || 0);
+    if (!(existing > f)) { const sug = suggestedRetailPerBase(product); if (sug) req = sug; }
+  }
+  const pricing = evaluateRetailPrice({ requestedCents: req, existingCents: existing, wholesaleFloor: floor, costCents: cost });
+  pricing.previous = existing;
+  return pricing;
+}
+
 async function transferBetweenLocations(businessId, user, { branchId, fromLocation, toLocation, fromWarehouseId, toWarehouseId, items, notes }) {
   const userId = user._id;
   if (!LOCS.includes(fromLocation) || !LOCS.includes(toLocation) || (fromLocation === 'RETAIL' && toLocation === 'RETAIL')) {
@@ -174,10 +192,18 @@ async function transferBetweenLocations(businessId, user, { branchId, fromLocati
         if (variantId && !variant) throw ApiError.badRequest('Variant not found', 'VARIANT_NOT_FOUND');
 
         // ---- unit conversion: "2 bundles" -> 48 base units. Stock and the ledger only ever hold base units. ----
-        const unit = resolveUnit(product, line.unitId);
+        const unit = resolveUnit(product, line.moveAll ? null : line.unitId);
         if (!unit.isBase && !biz?.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
-        const enteredQty = round3(line.quantity);
-        const qty = round3(enteredQty * unit.factor);
+        let enteredQty = round3(line.quantity || 0);
+        let qty = round3(enteredQty * unit.factor);
+        if (line.moveAll) {
+          // "Move everything": the whole available stock of this product in the source pool, in base units.
+          if (product.trackSerialNumber) throw ApiError.badRequest(`${product.name} is serial-tracked: list the serial numbers to move`, 'SERIAL_DETAILS_REQUIRED');
+          const row = await inventoryModel(fromLocation).findOne({ businessId, branchId: srcBranchId, productId: product._id, variantId, ...(src ? { warehouseId: src._id } : {}) }).session(session);
+          qty = round3((row?.quantity || 0) - (row?.reservedQuantity || 0));
+          enteredQty = qty;
+          if (qty <= 0) throw ApiError.badRequest(`${product.name}: there is no stock to move`, 'NO_STOCK_TO_MOVE');
+        }
         if (qty <= 0) throw ApiError.badRequest('Quantity must be greater than zero', 'INVALID_QUANTITY');
         if (product.trackSerialNumber && !Number.isInteger(qty)) throw ApiError.badRequest(`${product.name}: serial-tracked units must be whole numbers`, 'INVALID_QUANTITY');
         if (kind === 'WAREHOUSE_TO_WAREHOUSE' && !sameBranch && (product.trackBatch || product.trackSerialNumber)) {
@@ -192,9 +218,8 @@ async function transferBetweenLocations(businessId, user, { branchId, fromLocati
         // ---- warehouse -> retail: the owner sells to himself, so he sets the new RETAIL price (per base unit) ----
         let pricing = null;
         if (kind === 'TO_RETAIL') {
-          const floor = wholesaleFloorPerBase(product, variant);
           const existing = variant ? variant.sellingPrice : product.sellingPrice;
-          pricing = evaluateRetailPrice({ requestedCents: line.retailPrice, existingCents: existing, wholesaleFloor: floor, costCents: unitCostPerBase });
+          pricing = retailPricingFor({ product, variant, requested: line.retailPrice, cost: unitCostPerBase });
           if (pricing.error) throw ApiError.badRequest(`${product.name}: ${pricing.error.message}`, pricing.error.code);
           if (pricing.changed) {
             if (variant) { variant.sellingPrice = pricing.priceCents; await variant.save({ session }); } else { product.sellingPrice = pricing.priceCents; await product.save({ session }); }
@@ -416,8 +441,66 @@ async function reconcile(businessId, branchId) {
   return { ok: differences.length === 0, differences };
 }
 
+/**
+ * Dry run of a transfer: nothing is written. For every line it says how many BASE units would move (2 bundles -> 48
+ * packets), whether the source has enough, the retail price that would be used and the profit / uplift over wholesale
+ * the owner can expect. Lines that would fail come back with ok:false and the reason, so a screen can show all problems at once.
+ */
+async function previewTransfer(businessId, user, { branchId, fromLocation, toLocation, fromWarehouseId, toWarehouseId, items }) {
+  await assertWarehouseEnabled(businessId);
+  const src = fromLocation === 'WAREHOUSE' ? await resolveWarehouse(businessId, { warehouseId: fromWarehouseId, branchId, userId: user._id }) : null;
+  const srcBranchId = src ? src.branchId : branchId;
+  if (!srcBranchId) throw ApiError.badRequest('branchId is required', 'INVALID_TRANSFER');
+  assertBranchAccess(user, srcBranchId);
+  const kind = fromLocation === 'WAREHOUSE' && toLocation === 'RETAIL' ? 'TO_RETAIL' : fromLocation === 'RETAIL' ? 'TO_WAREHOUSE' : 'WAREHOUSE_TO_WAREHOUSE';
+  const biz = await Business.findById(businessId).select('featureSettings').lean();
+  const lines = [];
+  for (const line of items) {
+    const out = { productId: line.productId, variantId: line.variantId || null, ok: true, errors: [] };
+    try {
+      const product = await Product.findOne({ _id: line.productId, businessId });
+      if (!product) throw ApiError.notFound('Product not found');
+      const variant = line.variantId ? await ProductVariant.findOne({ _id: line.variantId, businessId, productId: product._id }) : null;
+      if (product.hasVariants && !variant) throw ApiError.badRequest(`${product.name} requires a variant`, 'VARIANT_REQUIRED');
+      const unit = resolveUnit(product, line.moveAll ? null : line.unitId);
+      if (!unit.isBase && !biz?.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
+      const row = await inventoryModel(fromLocation).findOne({ businessId, branchId: srcBranchId, productId: product._id, variantId: variant?._id || null, ...(src ? { warehouseId: src._id } : {}) }).lean();
+      const available = round3((row?.quantity || 0) - (row?.reservedQuantity || 0));
+      const qty = line.moveAll ? available : round3((line.quantity || 0) * unit.factor);
+      const cost = variant ? variant.costPrice : product.costPrice;
+      Object.assign(out, {
+        name: product.name, baseUnit: product.unit, unitName: unit.name, unitFactor: unit.factor,
+        enteredQuantity: line.moveAll ? qty : line.quantity, baseQuantity: qty, availableBase: available,
+        availableInUnit: round3(available / unit.factor), unitCostCents: cost, costValueCents: Math.round(qty * cost),
+      });
+      if (qty <= 0) out.errors.push({ code: 'NO_STOCK_TO_MOVE', message: 'There is no stock to move' });
+      else if (qty > available) out.errors.push({ code: 'INSUFFICIENT_STOCK', message: `Only ${available} ${product.unit} available (${round3(available / unit.factor)} ${unit.name})` });
+      if (kind === 'TO_RETAIL') {
+        const pr = retailPricingFor({ product, variant, requested: line.retailPrice, cost });
+        const wholesale = pr.floorKind === 'WHOLESALE' ? pr.floorCents : null;
+        Object.assign(out, {
+          retailPriceCents: pr.priceCents, previousRetailPriceCents: pr.previous, wholesaleValuePerBaseCents: wholesale === null ? null : Math.round(wholesale),
+          suggestedRetailPriceCents: suggestedRetailPerBase(product), retailValueCents: Math.round(qty * pr.priceCents),
+          expectedProfitCents: Math.round(qty * (pr.priceCents - cost)),
+          marginPercent: pr.priceCents > 0 ? Math.round(((pr.priceCents - cost) / pr.priceCents) * 10000) / 100 : 0,
+          wholesaleValueCents: wholesale === null ? null : Math.round(qty * wholesale),
+          upliftOverWholesaleCents: wholesale === null ? null : Math.round(qty * (pr.priceCents - wholesale)),
+        });
+        if (pr.error) out.errors.push({ code: pr.error.code, message: pr.error.message });
+      }
+    } catch (e) { out.errors.push({ code: e.code || 'ERROR', message: e.message }); }
+    out.ok = out.errors.length === 0;
+    lines.push(out);
+  }
+  const sum = (k) => lines.reduce((s, l) => s + (l[k] || 0), 0);
+  return {
+    kind, ok: lines.every((l) => l.ok), lines,
+    totals: { costValueCents: sum('costValueCents'), retailValueCents: sum('retailValueCents'), wholesaleValueCents: sum('wholesaleValueCents'), expectedProfitCents: sum('expectedProfitCents'), upliftOverWholesaleCents: sum('upliftOverWholesaleCents') },
+  };
+}
+
 module.exports = {
   listWarehouses, getWarehouse, createWarehouse, updateWarehouse,
-  transferBetweenLocations, listLocationTransfers, getLocationTransfer,
+  transferBetweenLocations, previewTransfer, listLocationTransfers, getLocationTransfer,
   listWarehouseInventory, adjustWarehouseStock, wholesaleCatalog, getWholesaleSettings, updateWholesaleSettings, stockOverview, reconcile,
 };

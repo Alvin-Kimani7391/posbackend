@@ -65,6 +65,24 @@ function evaluateRetailPrice({ requestedCents, existingCents = 0, wholesaleFloor
   return { priceCents, changed, floorCents, floorKind, error };
 }
 
+/**
+ * Retail price (cents per BASE unit) the owner already configured on a unit (bundle retailPrice / factor).
+ * Used as the default when stock is moved warehouse -> retail without a typed price. null when none is set.
+ */
+function suggestedRetailPerBase(product) {
+  const c = [];
+  for (const u of product.units || []) if (u.status !== 'inactive' && pos(u.retailPrice) && pos(u.factor)) c.push(u.retailPrice / u.factor);
+  return c.length ? Math.round(Math.max(...c)) : null;
+}
+
+/** 53 packets with a bundle of 24 -> [{unit:'bundle', whole:2, remainderBase:5}, ...] (quick "how many bundles" view). */
+function unitBreakdown(product, baseQty) {
+  return (product?.units || []).filter((u) => u.status !== 'inactive' && u.factor > 0).map((u) => {
+    const whole = Math.floor(round3(baseQty / u.factor));
+    return { unitId: u._id, unit: u.name, factor: u.factor, whole, remainderBase: round3(baseQty - whole * u.factor) };
+  });
+}
+
 /** Validate a product's units[] ({name,factor,...}). Returns [{path,message}]. */
 function unitConfigIssues(units = [], baseUnit = 'piece') {
   const issues = [];
@@ -79,4 +97,4 @@ function unitConfigIssues(units = [], baseUnit = 'piece') {
   return issues;
 }
 
-module.exports = { round3, resolveUnit, toBase, wholesaleUnitPrice, retailUnitPrice, wholesaleFloorPerBase, evaluateRetailPrice, unitConfigIssues };
+module.exports = { round3, resolveUnit, toBase, wholesaleUnitPrice, retailUnitPrice, wholesaleFloorPerBase, evaluateRetailPrice, unitConfigIssues, suggestedRetailPerBase, unitBreakdown };

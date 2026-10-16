@@ -22,6 +22,10 @@ const offlineItemSchema = z.object({
   totalCents: cents,
   batchId: objectId.optional(),
   serialNumbers: z.array(z.string().trim().max(64)).max(1000).optional(),
+  // UNIT CONVERSION: quantity / unitPriceCents are per `unitId` (e.g. bundle). unitName/unitFactor are the till's snapshot.
+  unitId: objectId.optional(),
+  unitName: z.string().trim().max(40).optional(),
+  unitFactor: z.number().positive().max(1000000).optional(),
 });
 
 const mpesaClaimSchema = z.object({
@@ -52,6 +56,10 @@ const offlineSaleSchema = z.object({
   customerId: objectId.optional(),
   items: z.array(offlineItemSchema).min(1).max(200),
   payments: z.array(offlinePaymentSchema).max(6),
+  // WHOLESALE sale made offline: sold from a warehouse's stock at wholesale unit prices.
+  channel: z.enum(['RETAIL', 'WHOLESALE']).default('RETAIL'),
+  warehouseId: objectId.optional(),
+  dueDate: z.coerce.date().optional(),
   cartDiscountCents: cents.default(0),
   subtotalCents: cents,
   itemDiscountCents: cents,
@@ -95,7 +103,7 @@ const pushSchema = z.object({
 
 const deviceQuery = z.object({ deviceId: deviceIdStr });
 const catalogQuery = deviceQuery.extend({
-  type: z.enum(['products', 'variants', 'categories', 'stock', 'batches', 'serials', 'customers']),
+  type: z.enum(['products', 'variants', 'categories', 'stock', 'batches', 'serials', 'customers', 'warehouses', 'warehouseStock']),
   cursor: z.string().trim().max(80).optional(),
   since: z.coerce.date().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),

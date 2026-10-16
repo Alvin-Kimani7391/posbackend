@@ -21,3 +21,6 @@ exports.reconcile = catchAsync(async (req, res) => sendSuccess(res, 200, 'Reconc
 
 exports.getSettings = catchAsync(async (req, res) => sendSuccess(res, 200, 'Wholesale settings fetched', { settings: await svc.getWholesaleSettings(req.businessId) }));
 exports.updateSettings = catchAsync(async (req, res) => sendSuccess(res, 200, 'Wholesale settings saved', { settings: await svc.updateWholesaleSettings(req.businessId, req.user._id, req.body) }));
+
+exports.previewTransfer = catchAsync(async (req, res) =>
+  sendSuccess(res, 200, 'Transfer preview', await svc.previewTransfer(req.businessId, req.user, req.body)));

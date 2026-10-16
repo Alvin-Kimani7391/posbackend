@@ -63,3 +63,21 @@ exports.printReceipt = catchAsync(async (req, res) => {
   const receipt = await receiptService.recordPrint(req.businessId, req.params.id);
   return sendSuccess(res, 200, 'Print recorded', { receipt });
 });
+const invoiceService = require('../services/sale-invoice.service');
+const ApiError = require('../utils/ApiError');
+
+/**
+ * GET /sales/:id/invoice?format=html|json&copy=ORIGINAL|DUPLICATE|CUSTOMER COPY|OFFICE COPY&paper=A4|A5&autoprint=true
+ * html (default): a print-ready invoice page (Print / Save as PDF). The app fetches it with its token and shows or prints it.
+ */
+exports.getInvoice = catchAsync(async (req, res) => {
+  const data = await invoiceService.getInvoiceData(req.businessId, req.params.id);
+  const isElevated = req.user.role === ROLES.OWNER || req.user.role === ROLES.ADMIN || hasPermission(req.user, 'reports.view');
+  if (!isElevated && String(data.sale.cashierId) !== String(req.user._id)) throw ApiError.forbidden('You can only print invoices for your own sales', 'FORBIDDEN');
+  const { format = 'html', copy = 'ORIGINAL', paper = 'A4', autoprint } = req.query;
+  if (format === 'json') return sendSuccess(res, 200, 'Invoice fetched', { invoice: invoiceService.toJson(data) });
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  // the page carries its own print button / auto-print script, so it gets its own (still locked-down) CSP
+  res.set('Content-Security-Policy', "default-src 'none'; img-src * data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
+  return res.status(200).send(invoiceService.renderInvoiceHtml(data, { copy, paper, autoPrint: autoprint === true }));
+});

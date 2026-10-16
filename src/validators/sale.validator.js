@@ -55,4 +55,12 @@ const cancelSaleSchema = z.object({
 
 const idParamSchema = z.object({ id: objectId });
 
-module.exports = { createSaleSchema, listSalesQuery, cancelSaleSchema, idParamSchema, moneyInput };
+const invoiceQuery = z.object({
+  format: z.enum(['html', 'json']).optional(),
+  copy: z.enum(['ORIGINAL', 'DUPLICATE', 'CUSTOMER COPY', 'OFFICE COPY']).optional(),
+  paper: z.enum(['A4', 'A5']).optional(),
+  autoprint: z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
+});
+
+module.exports = {
+  invoiceQuery, createSaleSchema, listSalesQuery, cancelSaleSchema, idParamSchema, moneyInput };

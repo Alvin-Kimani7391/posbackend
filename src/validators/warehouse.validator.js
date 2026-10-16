@@ -8,14 +8,15 @@ const moneyInput = z.coerce.number().nonnegative().transform(toCents);
 const locationTransferItem = z.object({
   productId: objectId,
   variantId: objectId.optional(),
-  quantity: z.coerce.number().positive(),  // in `unitId` (default: the product's base unit)
+  quantity: z.coerce.number().positive().optional(), // in `unitId` (default: the product's base unit); omit with moveAll
+  moveAll: z.boolean().optional(),         // move EVERYTHING in stock of this product (in base units), whatever the bundle size
   unitId: objectId.optional(),             // UNIT CONVERSION: move "2 bundles" -> 48 packets
   // warehouse -> retail: the NEW retail selling price per BASE unit (must be higher than the wholesale price).
   // Omit to keep the current retail price (allowed only if it is already higher than the wholesale price).
   retailPrice: moneyInput.optional(),
   batchId: objectId.optional(),
   serialNumbers: z.array(z.string().trim().min(3).max(64)).max(1000).optional(),
-});
+}).refine((i) => i.moveAll || i.quantity > 0, { message: 'Give a quantity, or set moveAll', path: ['quantity'] });
 
 const locationTransferSchema = z.object({
   branchId: objectId.optional(),           // shop-floor branch (default: the warehouse's branch)
