@@ -22,6 +22,7 @@ const userSchema = new Schema(
     revokedPermissions: [{ type: String }],
 
     employeeCode: { type: String, trim: true },
+    language: { type: String, enum: ['en', 'sw'] }, // personal override of the business language
     branchIds: [{ type: Schema.Types.ObjectId, ref: 'Branch' }],
 
     status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },

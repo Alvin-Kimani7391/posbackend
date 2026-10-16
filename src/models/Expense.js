@@ -12,7 +12,7 @@ const expenseSchema = new Schema(
     amount: { type: Number, required: true, min: 1 }, // integer cents
     description: { type: String, trim: true },
 
-    paymentMethod: { type: String, enum: ['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER'], default: 'CASH' },
+    paymentMethod: { type: String, enum: ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER'], default: 'CASH' },
     reference: { type: String, trim: true },
     receiptImage: { type: String },
 

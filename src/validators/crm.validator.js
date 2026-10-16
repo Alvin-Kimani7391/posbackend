@@ -37,7 +37,7 @@ const settingsSchema = z.object({
   inactiveDays: z.coerce.number().int().min(7).max(730).optional(),
   frequentMinPurchases: z.coerce.number().int().min(2).max(100).optional(),
   frequentWindowDays: z.coerce.number().int().min(7).max(365).optional(),
-  vipMinSpend: z.coerce.number().min(0).max(1000000000).optional(), // KES
+  vipMinSpend: z.coerce.number().min(0).max(1000000000).optional(), // major units of the business currency
   vipMinPurchases: z.coerce.number().int().min(0).max(10000).optional(),
 });
 

@@ -12,6 +12,11 @@ exports.updateBusiness = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Business updated', { business });
 });
 
+exports.changeCountry = catchAsync(async (req, res) => {
+  const business = await businessService.changeCountry(req.businessId, req.user._id, req.body);
+  return sendSuccess(res, 200, 'Country updated', { business });
+});
+
 exports.getProfile = catchAsync(async (req, res) => {
   const profile = await businessService.getProfile(req.businessId);
   return sendSuccess(res, 200, 'Business profile fetched', { profile });

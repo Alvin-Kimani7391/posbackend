@@ -18,7 +18,7 @@ const setCreditLimitSchema = z.object({ creditLimit: moneyInput });
 
 const recordPaymentSchema = z.object({
   branchId: objectId,
-  method: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']),
+  method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']),
   amount: moneyInput,
   reference: z.string().trim().optional(),
 });

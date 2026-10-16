@@ -2,6 +2,7 @@ const router = require('express').Router();
 
 router.use(require('../../middleware/subscriptionGate')); // first (adjust path to where you keep middleware)
 
+router.use('/meta', require('../meta.routes')); // public: countries, currencies, languages for onboarding
 router.use('/auth', require('../auth.routes'));
 router.use('/billing', require('../billing.routes'));
 router.use('/business', require('../business.routes'));

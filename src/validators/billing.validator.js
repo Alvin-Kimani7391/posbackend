@@ -1,6 +1,9 @@
 const { z } = require('zod');
 const { objectId } = require('./common');
-const { PHASE_TYPES, PRICING_MODES, TIER_METRICS, PAYMENT_METHODS, SUBSCRIPTION_STATUSES, PAYMENT_STATUSES, LIMITS } = require('../constants/billing');
+const { PHASE_TYPES, PRICING_MODES, TIER_METRICS, PAYMENT_METHODS, SUBSCRIPTION_STATUSES, PAYMENT_STATUSES, LIMITS, BILLING_CURRENCIES, MANUAL_MAX_CENTS_BY_CURRENCY } = require('../constants/billing');
+
+// Upper bound across currencies; the service applies the exact cap for the business's own currency (KES 1M / TZS 20M).
+const MANUAL_MAX_ANY = Math.max(...Object.values(MANUAL_MAX_CENTS_BY_CURRENCY));
 
 const idParamSchema = z.object({ id: objectId });
 const businessParamSchema = z.object({ businessId: objectId });
@@ -18,8 +21,11 @@ const stkSchema = z.object({
 });
 
 const manualSchema = z.object({
-  mpesaMessage: z.string().trim().min(20, 'Paste the full M-PESA message').max(1000),
-  amountCents: z.coerce.number().int().positive().max(LIMITS.MANUAL_MAX_CENTS).optional(),
+  // Kenya: the pasted M-PESA message (required, checked in the service). Tanzania: message and/or the typed transaction code.
+  mpesaMessage: z.string().trim().max(1000).default(''),
+  transactionCode: z.string().trim().max(20).optional().or(z.literal('')),
+  provider: z.string().trim().max(40).optional().or(z.literal('')), // TZ: M-Pesa | Mixx by Yas | Airtel Money | HaloPesa | Bank
+  amountCents: z.coerce.number().int().positive().max(MANUAL_MAX_ANY).optional(),
 });
 
 const listQuery = z.object({ ...paging, status: z.string().trim().max(20).optional().or(z.literal('')) });
@@ -57,6 +63,8 @@ const phaseSchema = z.discriminatedUnion('type', [
 
 const planBody = z.object({
   name: z.string().trim().min(2).max(80),
+  currency: z.enum(BILLING_CURRENCIES).default('KES'), // every amount in the plan is in this currency
+  
   description: z.string().trim().max(300).optional(),
   isActive: z.boolean().optional(),
   phases: z.array(phaseSchema).min(1).max(10),
@@ -88,7 +96,8 @@ const planActiveSchema = z.object({ isActive: z.boolean() });
 
 const settingsSchema = z.object({
   billingEnabled: z.boolean().optional(),
-  defaultPlanKey: keyStr.optional(),
+  defaultPlanKey: keyStr.optional(), // default plan for Kenyan (KES) businesses
+  defaultPlanKeyTZ: keyStr.optional(), // default plan for Tanzanian (TZS) businesses
   stk: z.object({
     enabled: z.boolean().optional(),
     channelId: z.string().trim().min(1).optional(),
@@ -99,6 +108,11 @@ const settingsSchema = z.object({
     .refine((d) => !(d.basicAuthToken && (d.apiUsername || d.apiPassword)), { message: 'Provide either a Basic Auth token OR username/password, not both' }).optional(),
   manual: z.object({
     enabled: z.boolean().optional(), methodLabel: z.string().trim().max(60).optional(), number: z.string().trim().max(30).optional(),
+    accountName: z.string().trim().max(80).optional(), accountReference: z.string().trim().max(120).optional(),
+    phone: z.string().trim().max(20).optional(), instructions: z.string().trim().max(1000).optional(),
+  }).optional(),
+  manualTz: z.object({
+    enabled: z.boolean().optional(), methodLabel: z.string().trim().max(80).optional(), number: z.string().trim().max(30).optional(),
     accountName: z.string().trim().max(80).optional(), accountReference: z.string().trim().max(120).optional(),
     phone: z.string().trim().max(20).optional(), instructions: z.string().trim().max(1000).optional(),
   }).optional(),
@@ -116,6 +130,7 @@ const subsQuery = z.object({
   ...paging,
   status: z.enum(SUBSCRIPTION_STATUSES).optional().or(z.literal('')),
   arrears: z.enum(['0', '1']).optional().or(z.literal('')),
+  currency: z.enum(BILLING_CURRENCIES).optional().or(z.literal('')),
   sort: z.enum(['arrears', 'recent']).optional().or(z.literal('')),
   search: z.string().trim().max(100).optional().or(z.literal('')),
 });
@@ -123,6 +138,7 @@ const paymentsQuery = z.object({
   ...paging,
   status: z.enum(PAYMENT_STATUSES).optional().or(z.literal('')),
   method: z.enum(PAYMENT_METHODS).optional().or(z.literal('')),
+  currency: z.enum(BILLING_CURRENCIES).optional().or(z.literal('')),
   businessId: objectId.optional().or(z.literal('')),
 });
 
@@ -145,16 +161,16 @@ const invoiceAdjustSchema = z.object({
 });
 const voidSchema = z.object({ reason: z.string().trim().min(3).max(300) });
 const recordPaymentSchema = z.object({
-  amountCents: z.coerce.number().int().positive().max(LIMITS.MANUAL_MAX_CENTS),
+  amountCents: z.coerce.number().int().positive().max(MANUAL_MAX_ANY),
   method: z.enum(['MPESA_MANUAL', 'CASH', 'BANK', 'OTHER']),
   reference: z.string().trim().max(120).optional(), note: z.string().trim().max(300).optional(),
-  receiptCode: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]{9}$/, 'M-PESA codes are 10 characters').optional().or(z.literal('')),
+  receiptCode: z.string().trim().regex(/^[A-Za-z0-9]{6,20}$/, 'Transaction codes are 6-20 letters/numbers (M-PESA codes are 10)').optional().or(z.literal('')),
 });
 const noticeSchema = z.object({
   title: z.string().trim().min(3).max(120), message: z.string().trim().min(3).max(1000),
   severity: z.enum(['info', 'warning', 'critical']).default('warning'), sendEmail: z.boolean().optional(),
 });
-const approveSchema = z.object({ amountCents: z.coerce.number().int().positive().max(LIMITS.MANUAL_MAX_CENTS).optional(), note: z.string().trim().max(300).optional() });
+const approveSchema = z.object({ amountCents: z.coerce.number().int().positive().max(MANUAL_MAX_ANY).optional(), note: z.string().trim().max(300).optional() });
 const rejectSchema = z.object({ reason: z.string().trim().min(3).max(300) });
 const backfillSchema = z.object({ planKey: keyStr.optional() });
 

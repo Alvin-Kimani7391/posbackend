@@ -1,6 +1,10 @@
 const catchAsync = require('../utils/catchAsync');
 const { sendSuccess } = require('../utils/ApiResponse');
 const authService = require('../services/auth.service');
+const businessService = require('../services/business.service');
+
+// Country block (flag, currency, "needs country selection") sent with every login so the dashboard can show the flag at once.
+const countryOf = (user) => businessService.getCountrySummary(user.businessId).catch(() => null);
 
 const meta = (req) => ({ ip: req.ip, userAgent: req.headers['user-agent'] });
 
@@ -16,6 +20,7 @@ exports.login = catchAsync(async (req, res) => {
   const { user, accessToken, refreshToken } = await authService.loginWithPassword(req.body, meta(req));
   return sendSuccess(res, 200, 'Login successful', {
     user: user.toSafeJSON(),
+    country: await countryOf(user),
     accessToken,
     refreshToken,
   });
@@ -25,6 +30,7 @@ exports.pinLogin = catchAsync(async (req, res) => {
   const { user, accessToken, refreshToken } = await authService.loginWithPin(req.body, meta(req));
   return sendSuccess(res, 200, 'Login successful', {
     user: user.toSafeJSON(),
+    country: await countryOf(user),
     accessToken,
     refreshToken,
   });
@@ -57,6 +63,11 @@ exports.changePassword = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Password changed successfully');
 });
 
+exports.setLanguage = catchAsync(async (req, res) => {
+  const user = await authService.setLanguage(req.user, req.body.language);
+  return sendSuccess(res, 200, 'Language updated', { user: user.toSafeJSON() });
+});
+
 exports.me = catchAsync(async (req, res) => {
-  return sendSuccess(res, 200, 'Current user', { user: req.user.toSafeJSON() });
+  return sendSuccess(res, 200, 'Current user', { user: req.user.toSafeJSON(), country: await countryOf(req.user) });
 });

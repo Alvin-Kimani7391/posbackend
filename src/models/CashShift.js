@@ -1,8 +1,8 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
-// One line of the closing cash count: e.g. { denomination: 500, count: 7 } = 7 x KES 500.
-// `denomination` is whole KES (NOT cents) and `count` a plain integer, so this sub-document
+// One line of the closing cash count: e.g. { denomination: 500, count: 7 } = 7 x 500 in the shift's currency.
+// `denomination` is whole major units (NOT cents) and `count` a plain integer, so this sub-document
 // is intentionally NOT passed through moneyFields. Subtotals are derived (denomination * count).
 const denominationLineSchema = new Schema(
   {
@@ -19,6 +19,8 @@ const cashShiftSchema = new Schema(
     registerId: { type: Schema.Types.ObjectId, ref: 'CashRegister', required: true },
     cashierId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true }, // who opened it
     closedBy: { type: Schema.Types.ObjectId, ref: 'User' }, // who closed it (may differ from cashierId)
+
+    currency: { type: String }, // currency the shift was run and counted in (stamped at open; legacy shifts = KES)
 
     openingCash: { type: Number, required: true, default: 0 }, // integer cents
     closingCash: { type: Number }, // what the system computes: opening + cash sales - cash refunds/payouts

@@ -1,13 +1,16 @@
 const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
+const { getDenominations } = require('../utils/denominations');
+const { invalidateBusinessContext, buildContext } = require('../utils/businessContext');
+const countryService = require('./country.service');
 const { resolveFeatures, BUSINESS_TYPES, FEATURE_KEYS, BUSINESS_FEATURE_DEFAULTS, LOCKED_ON, defaultsFor } = require('../constants/businessFeatures');
 
 // Fields an ADMIN/OWNER may edit. Never allow status/subscription fields to be
 // set from this route - those are controlled by billing/admin processes.
 const EDITABLE_FIELDS = [
   'name', 'legalName', 'businessType', 'phone', 'email', 'address', 'county', 'town',
-  'taxPin', 'kraPin', 'vatRegistered', 'currency', 'timezone', 'logo',
+  'taxPin', 'kraPin', 'vrn', 'vatRegistered', 'timezone', 'logo', 'language',
   'receiptSettings', 'taxSettings', 'paymentSettings', 'settings',
   'businessSubtype', 'featureSettings',
 ];
@@ -33,6 +36,21 @@ async function updateOwnBusiness(businessId, userId, updates) {
 
   const oldValue = business.toObject();
 
+  // Currency is fixed by the country chosen at onboarding - every stored amount is in it. Older clients may echo
+  // the current value back; anything else is refused.
+  if (updates.currency !== undefined && updates.currency !== business.currency) {
+    throw ApiError.badRequest(
+      `The currency of this business is ${business.currency} and cannot be changed. (Wrong country? Use PUT /business/country before adding any data.)`,
+      'CURRENCY_LOCKED'
+    );
+  }
+  // Tanzania: the TIN has 9 digits, shown as 123-456-789.
+  if (updates.taxPin && business.countryCode === 'TZ') {
+    const digits = String(updates.taxPin).replace(/[\s-]/g, '');
+    if (!/^\d{9}$/.test(digits)) throw ApiError.badRequest('A Tanzanian TIN has 9 digits (e.g. 123-456-789)', 'INVALID_TAX_ID');
+    updates = { ...updates, taxPin: `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}` };
+  }
+
   for (const field of EDITABLE_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(updates, field)) continue;
 
@@ -56,6 +74,7 @@ async function updateOwnBusiness(businessId, userId, updates) {
   }
 
   await business.save();
+  invalidateBusinessContext(businessId);
 
   await AuditLog.create({
     businessId,
@@ -77,18 +96,41 @@ async function updateOwnBusiness(businessId, userId, updates) {
  */
 async function getProfile(businessId) {
   const b = await Business.findById(businessId)
-    .select('name businessType businessSubtype featureSettings currency onboarding.typeConfirmed')
+    .select('name businessType businessSubtype featureSettings currency countryCode country countryConfirmed language timezone onboarding.typeConfirmed')
     .lean();
   if (!b) throw ApiError.notFound('Business not found');
   const fs = b.featureSettings || {};
+  const ctx = buildContext(b);
   return {
     id: b._id,
     name: b.name,
+    // Country drives currency, notes/coins, tax labels and which integrations exist: the app renders from this
+    // block instead of hard-coding Kenya.
+    country: {
+      code: ctx.countryCode, name: ctx.country.name, flag: ctx.country.flag, flagCode: ctx.country.flagCode, currency: ctx.currency, timezone: ctx.timezone,
+      language: ctx.language, languages: ctx.country.languages, vatRate: ctx.country.vatRate,
+      taxAuthority: ctx.country.taxAuthority, taxIdLabel: ctx.country.taxIdLabel, dialCode: ctx.country.dialCode,
+      denominations: getDenominations(ctx.currency), mobileMoney: ctx.country.mobileMoney, integrations: ctx.country.integrations,
+    },
+    // Existing (pre-Tanzania) businesses are asked once to pick Kenya or Tanzania; the app shows the picker while this is true.
+    countryConfirmed: b.countryConfirmed === true,
+    needsCountrySelection: b.countryConfirmed !== true,
+    language: ctx.language,
     businessType: b.businessType || 'general_shop',
     businessSubtype: b.businessSubtype || '',
-    currency: b.currency || 'KES',
+    currency: ctx.currency,
     typeConfirmed: !!(b.onboarding && b.onboarding.typeConfirmed),
     featureSettings: Object.fromEntries(FEATURE_KEYS.map((k) => [k, fs[k] === true])),
+  };
+}
+
+/** Small block for login / me responses: enough to draw the flag in the dashboard and decide whether to show the country picker. */
+async function getCountrySummary(businessId) {
+  if (!businessId) return null;
+  const p = await getProfile(businessId);
+  return {
+    code: p.country.code, name: p.country.name, flag: p.country.flag, flagCode: p.country.flagCode,
+    currency: p.country.currency, language: p.language, needsCountrySelection: p.needsCountrySelection,
   };
 }
 
@@ -162,4 +204,6 @@ async function updateOnboarding(businessId, userId, input) {
   return serialiseOnboarding(business);
 }
 
-module.exports = { getOwnBusiness, updateOwnBusiness, getProfile, getTypeCatalogue, getOnboarding, updateOnboarding };
+const changeCountry = (businessId, userId, input) => countryService.changeCountry(businessId, userId, input);
+
+module.exports = { getOwnBusiness, updateOwnBusiness, changeCountry, getProfile, getCountrySummary, getTypeCatalogue, getOnboarding, updateOnboarding };

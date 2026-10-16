@@ -2,6 +2,7 @@ const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
 const controller = require('../controllers/mpesa.controller');
 const validate = require('../middleware/validate');
+const requireCountry = require('../middleware/requireCountry');
 const { authenticate, requirePermission, requireBranchAccess } = require('../middleware/auth');
 const { z } = require('zod');
 const { objectId } = require('../validators/common');
@@ -37,6 +38,7 @@ router.post('/c2b/:businessId/:token', tillWebhookLimiter, controller.inboundCal
 
 
 router.use(authenticate);
+router.use(requireCountry('KE')); // Kenya-only integration (PayHero M-PESA / KRA eTIMS / Kenyan SMS)
 router.post('/stk', requirePermission('sales.create'), requireBranchAccess, validate({ body: stkSchema }), controller.stkPush);
 
 // Manual (Buy Goods / Till) payments

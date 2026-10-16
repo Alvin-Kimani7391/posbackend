@@ -78,7 +78,7 @@ const qcSchema = z.object({ passed: z.boolean(), note: z.string().trim().max(500
 const cancelSchema = z.object({ reason });
 const paymentSchema = z.object({
   type: z.enum(['DEPOSIT', 'PAYMENT', 'REFUND']),
-  method: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']),
+  method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']),
   amount: positiveMoney,
   reference: z.string().trim().max(100).optional(),
 });

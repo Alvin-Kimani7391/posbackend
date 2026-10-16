@@ -38,6 +38,9 @@ const { resolveWarehouse } = require('./warehouse.resolver');
 const etimsService = require('./etims.service');
 const offlineMpesa = require('./offline-mpesa.service');
 const notificationService = require('./notification.service');
+const { getBusinessContext } = require('../utils/businessContext');
+const { formatMoney } = require('../utils/currency');
+const { t: i18n } = require('../i18n');
 
 const TIME_TOLERANCE_MS = 5 * 60 * 1000;
 const flag = (code, severity, detail) => ({ code, severity, detail });
@@ -304,7 +307,7 @@ async function ingestOfflineSale(ctx) {
       flags.push(flag('CREDIT_LIMIT_EXCEEDED', 'HIGH', `${customer.name} would owe ${customer.outstandingBalance + balance}c against a limit of ${customer.creditLimit}c`));
     }
   }
-  if (s.payments.some((p) => p.method === 'CARD' || p.method === 'BANK') && !caps.allowCard) flags.push(flag('METHOD_NOT_ALLOWED', 'HIGH', 'A card or bank payment was recorded but these cannot be verified offline and are not allowed'));
+  if (s.payments.some((p) => p.method === 'CARD' || p.method === 'BANK' || p.method === 'MOBILE_MONEY') && !caps.allowCard) flags.push(flag('METHOD_NOT_ALLOWED', 'HIGH', 'A card or bank payment was recorded but these cannot be verified offline and are not allowed'));
 
   // ---- 6. shift ----
   let shift = null;
@@ -510,11 +513,12 @@ async function ingestOfflineSale(ctx) {
     }).catch((e) => console.error('notifyCreditSaleIssued failed', e.message));
   }
   if (result.reviewStatus === 'PENDING') {
+    const bctx = await getBusinessContext(businessId);
     const high = result.flags.filter((f) => f.severity === 'HIGH').map((f) => f.code);
     await safeNotify(businessId, {
       type: 'OFFLINE_REVIEW',
       title: 'Offline sale needs review',
-      message: `Sale ${receiptNumber} (KSh ${(totals.total / 100).toFixed(2)}) synced from ${device.deviceCode || 'a till'} and needs a manager's review: ${[...new Set(high)].join(', ')}.`,
+      message: `${i18n(bctx.language, 'offline.syncedSale', { receipt: receiptNumber, amount: formatMoney(totals.total, bctx.currency, { lang: bctx.language }), device: device.deviceCode || 'a till' })} - ${[...new Set(high)].join(', ')}.`,
       data: { saleId: result.saleId, flags: [...new Set(high)] },
     });
   }

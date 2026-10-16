@@ -1,7 +1,7 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
-const PAYMENT_METHODS = ['CASH', 'MPESA', 'CARD', 'BANK', 'CREDIT', 'OTHER'];
+const PAYMENT_METHODS = ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'CREDIT', 'OTHER'];
 const PAYMENT_STATUSES = ['PENDING', 'SUCCESS', 'FAILED', 'CANCELLED', 'REFUNDED', 'PARTIAL'];
 
 const paymentSchema = new Schema(

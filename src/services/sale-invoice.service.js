@@ -14,38 +14,18 @@ const Payment = require('../models/Payment');
 const User = require('../models/User');
 const IntegrationSettings = require('../models/IntegrationSettings');
 const ApiError = require('../utils/ApiError');
+const { formatMoney, amountInWords: amountInWordsI18n } = require('../utils/currency');
+const { t } = require('../i18n');
+const { buildContext } = require('../utils/businessContext');
+const { normalizeLanguage } = require('../constants/countries');
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = (cents, cur = 'KES') => `${cur} ${(Math.round(Number(cents) || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (cents, cur = 'KES', lang = 'en') => formatMoney(cents, cur, { lang }); // KES 1,250.50  |  TZS 15,000
 const num = (n) => (Math.round((Number(n) || 0) * 1000) / 1000).toString();
 const dateFmt = (d, tz) => (d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: tz || 'Africa/Nairobi' }) : '');
 
-const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
-const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
-function below1000(n) {
-  const out = [];
-  if (n >= 100) { out.push(`${ONES[Math.floor(n / 100)]} hundred`); n %= 100; if (n) out.push('and'); }
-  if (n >= 20) { out.push(TENS[Math.floor(n / 10)] + (n % 10 ? `-${ONES[n % 10]}` : '')); } else if (n > 0) out.push(ONES[n]);
-  return out.join(' ');
-}
-function wordsInt(n) {
-  if (n === 0) return 'zero';
-  const parts = [];
-  for (const [size, label] of [[1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']]) {
-    if (n >= size) { parts.push(`${below1000(Math.floor(n / size))} ${label}`); n %= size; }
-  }
-  if (n > 0) parts.push(n < 100 && parts.length ? `and ${below1000(n)}` : below1000(n));
-  return parts.join(' ');
-}
-/** 125050 cents -> "One hundred and twenty-five Kenya Shillings and fifty cents only" */
-function amountInWords(cents, cur = 'KES') {
-  const total = Math.max(0, Math.round(Number(cents) || 0));
-  const whole = Math.floor(total / 100); const c = total % 100;
-  const name = cur === 'KES' ? (whole === 1 ? 'Kenya Shilling' : 'Kenya Shillings') : cur;
-  let s = `${wordsInt(whole)} ${name}`;
-  if (c) s += ` and ${wordsInt(c)} cents`;
-  return `${s.charAt(0).toUpperCase()}${s.slice(1)} only`;
-}
+/** 125050 cents -> "One thousand two hundred and fifty Kenya Shillings and fifty cents only" (Swahili for lang='sw'). */
+const amountInWords = (cents, cur = 'KES', lang = 'en') => amountInWordsI18n(cents, cur, lang);
 
 async function getInvoiceData(businessId, saleId) {
   const sale = await Sale.findOne({ _id: saleId, businessId }).lean();
@@ -62,17 +42,23 @@ async function getInvoiceData(businessId, saleId) {
   return { sale, business: business || {}, branch, customer, warehouse, payments, cashier, tillNumber: integ?.mpesa?.tillNumber || null };
 }
 
-function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = false } = {}) {
+function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = false, lang: langOpt } = {}) {
   const { sale, business: b, branch, customer, warehouse, payments, cashier } = d;
-  const cur = b.currency || 'KES';
-  const tz = b.timezone;
-  const m = (c) => money(c, cur);
+  const ctx = buildContext(b);                       // country / currency / language of THIS business
+  const lang = normalizeLanguage(langOpt, ctx.language);
+  const L = (key, params) => t(lang, `invoice.${key}`, params);
+  const cur = ctx.currency;
+  const tz = b.timezone || ctx.timezone;
+  const m = (c) => money(c, cur, lang);
   const vatReg = !!b.vatRegistered;
-  const title = vatReg ? 'TAX INVOICE' : 'INVOICE';
-  const status = sale.saleStatus && sale.saleStatus !== 'COMPLETED' ? sale.saleStatus : (sale.balance > 0 ? (sale.amountPaid > 0 ? 'PART PAID' : 'UNPAID') : 'PAID');
-  const stampClass = status === 'PAID' ? 'paid' : status === 'PART PAID' ? 'part' : 'due';
+  const title = vatReg ? L('taxInvoice') : L('invoice');
+  const statusKey = sale.saleStatus && sale.saleStatus !== 'COMPLETED' ? null : (sale.balance > 0 ? (sale.amountPaid > 0 ? 'PART PAID' : 'UNPAID') : 'PAID');
+  const status = statusKey ? ({ PAID: L('statusPaid'), 'PART PAID': L('statusPart'), UNPAID: L('statusUnpaid') })[statusKey] : sale.saleStatus;
+  const stampClass = statusKey === 'PAID' ? 'paid' : statusKey === 'PART PAID' ? 'part' : 'due';
   const bs = b.receiptSettings || {};
-  const kra = b.kraPin || b.taxPin;
+  const taxId = b.kraPin || b.taxPin;                 // KRA PIN (Kenya) / TIN (Tanzania)
+  const taxIdLabel = ctx.country.taxIdLabel[lang];
+  const vrnLine = b.vrn ? `<div>VRN: <strong>${esc(b.vrn)}</strong></div>` : '';
 
   const rows = (sale.items || []).map((i, idx) => {
     const unitLabel = i.unitName ? `${esc(i.unitName)}${i.unitFactor > 1 ? ` <span class="muted">(x${num(i.unitFactor)})</span>` : ''}` : '';
@@ -90,8 +76,8 @@ function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = fal
     </tr>`;
   }).join('');
 
-  const payRows = (payments || []).map((p) => `<tr><td>${esc(p.method)}${p.reference ? ` <span class="muted">${esc(p.reference)}</span>` : ''}</td><td class="r">${m(p.amount)}</td></tr>`).join('');
-  const issuedFrom = warehouse ? `Warehouse: ${esc(warehouse.name)}` : (branch ? `Branch: ${esc(branch.name)}` : '');
+  const payRows = (payments || []).map((p) => `<tr><td>${esc(p.provider && p.method === 'MOBILE_MONEY' ? p.provider : p.method)}${p.reference ? ` <span class="muted">${esc(p.reference)}</span>` : ''}</td><td class="r">${m(p.amount)}</td></tr>`).join('');
+  const issuedFrom = warehouse ? `${L('warehouse')}: ${esc(warehouse.name)}` : (branch ? `${L('branch')}: ${esc(branch.name)}` : '');
   const addr = [b.address, b.town, b.county].filter(Boolean).join(', ');
   const css = `
     @page { size: ${paper === 'A5' ? 'A5' : 'A4'}; margin: 12mm; }
@@ -113,65 +99,67 @@ function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = fal
     .actions button{padding:8px 16px;font-size:13px;cursor:pointer}
     @media print{body{background:#fff}.page{margin:0;padding:0;max-width:none}.actions{display:none}}`;
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} ${esc(sale.invoiceNumber || sale.receiptNumber)}</title><style>${css}</style></head><body>
-<div class="actions"><button onclick="window.print()">Print / Save as PDF</button></div>
+<div class="actions"><button onclick="window.print()">${esc(L('print'))}</button></div>
 <div class="page">
   <div class="stamp ${stampClass}">${esc(status)}</div>
   <div class="top">
     <div class="biz">
       ${b.logo && /^https?:\/\//i.test(b.logo) && bs.showLogo !== false ? `<img src="${esc(b.logo)}" alt="" style="max-height:54px;max-width:160px;margin-bottom:4px">` : ''}
       <h1>${esc(b.legalName || b.name)}</h1>
-      <div>${esc(addr)}</div><div>Tel: ${esc(branch?.phone || b.phone || '')}${b.email ? ` &nbsp; Email: ${esc(b.email)}` : ''}</div>
-      ${kra ? `<div>KRA PIN: <strong>${esc(kra)}</strong></div>` : ''}
+      <div>${esc(addr)}</div><div>${L('tel')}: ${esc(branch?.phone || b.phone || '')}${b.email ? ` &nbsp; ${L('email')}: ${esc(b.email)}` : ''}</div>
+      ${taxId ? `<div>${esc(taxIdLabel)}: <strong>${esc(taxId)}</strong></div>` : ''}${vrnLine}
     </div>
-    <div class="doc"><h2>${title}</h2><div>No: <strong>${esc(sale.invoiceNumber || sale.receiptNumber)}</strong></div>
-      <div>Date: ${esc(dateFmt(sale.soldAt || sale.createdAt, tz))}</div>${sale.dueDate ? `<div>Due: <strong>${esc(dateFmt(sale.dueDate, tz))}</strong></div>` : ''}
+    <div class="doc"><h2>${title}</h2><div>${L('no')}: <strong>${esc(sale.invoiceNumber || sale.receiptNumber)}</strong></div>
+      <div>${L('date')}: ${esc(dateFmt(sale.soldAt || sale.createdAt, tz))}</div>${sale.dueDate ? `<div>${L('due')}: <strong>${esc(dateFmt(sale.dueDate, tz))}</strong></div>` : ''}
       <div class="copy">${esc(copy)}</div></div>
   </div>
   <div class="meta">
-    <div class="box"><h3>Bill to</h3>${customer ? `<strong>${esc(customer.name)}</strong><br>${esc(customer.phone || '')}${customer.address ? `<br>${esc(customer.address)}` : ''}${customer.kraPin ? `<br>KRA PIN: ${esc(customer.kraPin)}` : ''}` : 'Walk-in customer'}</div>
-    <div class="box"><h3>Details</h3>${esc(sale.channel === 'WHOLESALE' ? 'Wholesale sale' : 'Retail sale')}<br>${issuedFrom}<br>Receipt: ${esc(sale.receiptNumber)}<br>Served by: ${esc(cashier?.name || '')}</div>
+    <div class="box"><h3>${esc(L('billTo'))}</h3>${customer ? `<strong>${esc(customer.name)}</strong><br>${esc(customer.phone || '')}${customer.address ? `<br>${esc(customer.address)}` : ''}${customer.kraPin ? `<br>${esc(taxIdLabel)}: ${esc(customer.kraPin)}` : ''}` : L('walkIn')}</div>
+    <div class="box"><h3>${esc(L('details'))}</h3>${esc(sale.channel === 'WHOLESALE' ? L('wholesaleSale') : L('retailSale'))}<br>${issuedFrom}<br>${L('receipt')}: ${esc(sale.receiptNumber)}<br>${L('servedBy')}: ${esc(cashier?.name || '')}</div>
   </div>
-  <table><thead><tr><th class="c" style="width:28px">#</th><th>Description</th><th class="c">Qty / Unit</th><th class="r">Unit price</th><th class="r">Discount</th><th class="c">VAT</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th class="c" style="width:28px">#</th><th>${esc(L('description'))}</th><th class="c">${esc(L('qtyUnit'))}</th><th class="r">${esc(L('unitPrice'))}</th><th class="r">${esc(L('discount'))}</th><th class="c">${esc(L('vat'))}</th><th class="r">${esc(L('amount'))}</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="bottom">
     <div class="left">
-      ${payRows ? `<table><thead><tr><th>Payments received</th><th class="r">Amount</th></tr></thead><tbody>${payRows}</tbody></table>` : ''}
-      <div class="words"><strong>Amount in words:</strong> ${esc(amountInWords(sale.total, cur))}</div>
-      ${sale.notes ? `<div style="margin-top:8px"><strong>Notes:</strong> ${esc(sale.notes)}</div>` : ''}
-      ${d.tillNumber ? `<div style="margin-top:8px"><strong>Pay via M-PESA Till:</strong> ${esc(d.tillNumber)}</div>` : ''}
+      ${payRows ? `<table><thead><tr><th>${esc(L('paymentsReceived'))}</th><th class="r">${esc(L('amount'))}</th></tr></thead><tbody>${payRows}</tbody></table>` : ''}
+      <div class="words"><strong>${esc(L('amountInWords'))}:</strong> ${esc(amountInWords(sale.total, cur, lang))}</div>
+      ${sale.notes ? `<div style="margin-top:8px"><strong>${esc(L('notes'))}:</strong> ${esc(sale.notes)}</div>` : ''}
+      ${d.tillNumber && ctx.country.integrations.mpesaPayhero ? `<div style="margin-top:8px"><strong>${esc(L('payViaTill'))}:</strong> ${esc(d.tillNumber)}</div>` : ''}
     </div>
     <div class="right"><table class="tot">
-      <tr><td>Subtotal</td><td class="r">${m(sale.subtotal)}</td></tr>
-      ${sale.itemDiscount ? `<tr><td>Item discounts</td><td class="r">- ${m(sale.itemDiscount)}</td></tr>` : ''}
-      ${sale.cartDiscount ? `<tr><td>Discount</td><td class="r">- ${m(sale.cartDiscount)}</td></tr>` : ''}
-      <tr><td>VAT${b.taxSettings?.taxInclusive ? ' (included)' : ''}</td><td class="r">${m(sale.tax)}</td></tr>
-      <tr class="grand"><td>TOTAL</td><td class="r">${m(sale.total)}</td></tr>
-      <tr><td>Paid</td><td class="r">${m(sale.amountPaid)}</td></tr>
-      <tr><td><strong>Balance due</strong></td><td class="r"><strong>${m(sale.balance)}</strong></td></tr>
+      <tr><td>${esc(L('subtotal'))}</td><td class="r">${m(sale.subtotal)}</td></tr>
+      ${sale.itemDiscount ? `<tr><td>${esc(L('itemDiscounts'))}</td><td class="r">- ${m(sale.itemDiscount)}</td></tr>` : ''}
+      ${sale.cartDiscount ? `<tr><td>${esc(L('discountLine'))}</td><td class="r">- ${m(sale.cartDiscount)}</td></tr>` : ''}
+      <tr><td>${esc(L('vat'))}${b.taxSettings?.taxInclusive ? L('vatIncluded') : ''}</td><td class="r">${m(sale.tax)}</td></tr>
+      <tr class="grand"><td>${esc(L('total'))}</td><td class="r">${m(sale.total)}</td></tr>
+      <tr><td>${esc(L('paid'))}</td><td class="r">${m(sale.amountPaid)}</td></tr>
+      <tr><td><strong>${esc(L('balanceDue'))}</strong></td><td class="r"><strong>${m(sale.balance)}</strong></td></tr>
     </table></div>
   </div>
-  <div class="sign"><div>Prepared by</div><div>Delivered by</div><div>Received by (name, signature, date)</div></div>
-  <div class="foot">${esc(bs.footerMessage || 'Thank you for your business!')}${(bs.customLines || []).map((l) => `<br>${esc(l)}`).join('')}<br>Goods remain the property of ${esc(b.name)} until paid in full.</div>
+  <div class="sign"><div>${esc(L('preparedBy'))}</div><div>${esc(L('deliveredBy'))}</div><div>${esc(L('receivedBy'))}</div></div>
+  <div class="foot">${esc(bs.footerMessage && bs.footerMessage !== 'Thank you for your business!' ? bs.footerMessage : L('thanks'))}${(bs.customLines || []).map((l) => `<br>${esc(l)}`).join('')}<br>${esc(L('goodsRemain', { name: b.name }))}</div>
 </div>
 ${autoPrint ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},300)})</script>' : ''}
 </body></html>`;
 }
 
-/** JSON version (KES decimals) for apps that draw the invoice themselves. */
-function toJson(d) {
+/** JSON version (decimal major units of the business currency) for apps that draw the invoice themselves. */
+function toJson(d, { lang: langOpt } = {}) {
   const { sale, business, branch, customer, warehouse, payments } = d;
+  const ctx = buildContext(business);
+  const lang = normalizeLanguage(langOpt, ctx.language);
   const k = (c) => Math.round(Number(c) || 0) / 100;
   return {
     invoiceNumber: sale.invoiceNumber, receiptNumber: sale.receiptNumber, date: sale.soldAt || sale.createdAt, dueDate: sale.dueDate || null,
     status: sale.balance > 0 ? (sale.amountPaid > 0 ? 'PART_PAID' : 'UNPAID') : 'PAID', channel: sale.channel || 'RETAIL',
-    business: { name: business.name, address: business.address, phone: business.phone, kraPin: business.kraPin || business.taxPin, currency: business.currency || 'KES' },
+    business: { name: business.name, address: business.address, phone: business.phone, taxId: business.kraPin || business.taxPin, taxIdLabel: ctx.country.taxIdLabel[lang], kraPin: business.kraPin || business.taxPin, vrn: business.vrn || null, currency: ctx.currency, country: ctx.countryCode, language: lang },
     branch: branch ? { name: branch.name, phone: branch.phone } : null, warehouse: warehouse ? { name: warehouse.name, code: warehouse.code } : null,
     customer: customer ? { name: customer.name, phone: customer.phone, address: customer.address } : null,
     items: (sale.items || []).map((i) => ({ name: i.nameSnapshot, sku: i.skuSnapshot, quantity: i.quantity, unit: i.unitName || null, unitFactor: i.unitFactor || 1, baseQuantity: i.baseQuantity || i.quantity, unitPrice: k(i.unitPrice), discount: k(i.discount), taxRate: i.taxRate, taxAmount: k(i.taxAmount), total: k(i.total) })),
     subtotal: k(sale.subtotal), itemDiscount: k(sale.itemDiscount), cartDiscount: k(sale.cartDiscount), tax: k(sale.tax), total: k(sale.total), amountPaid: k(sale.amountPaid), balance: k(sale.balance),
-    amountInWords: amountInWords(sale.total, business.currency || 'KES'),
-    payments: (payments || []).map((p) => ({ method: p.method, reference: p.reference, amount: k(p.amount) })),
+    amountInWords: amountInWords(sale.total, ctx.currency, lang),
+    payments: (payments || []).map((p) => ({ method: p.method, provider: p.provider || null, reference: p.reference, amount: k(p.amount) })),
   };
 }
 

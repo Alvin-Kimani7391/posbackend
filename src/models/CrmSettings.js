@@ -9,7 +9,7 @@ const crmSettingsSchema = new Schema(
     inactiveDays: { type: Number, default: 60, min: 7 }, // no purchase for this long => inactive
     frequentMinPurchases: { type: Number, default: 4, min: 2 }, // ...within frequentWindowDays => frequent
     frequentWindowDays: { type: Number, default: 30, min: 7 },
-    vipMinSpendCents: { type: Number, default: 2000000, min: 0 }, // net spend (KES 20,000) => VIP. 0 disables.
+    vipMinSpendCents: { type: Number, default: 2000000, min: 0 }, // net spend (KES 20,000 / TZS 400,000 set per business, see crm.service) => VIP. 0 disables.
     vipMinPurchases: { type: Number, default: 0, min: 0 }, // OR this many purchases => VIP. 0 disables.
 
     syncCursor: { type: Date }, // last Sale.updatedAt processed by the incremental sync

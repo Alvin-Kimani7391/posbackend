@@ -1,7 +1,7 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
-const SHORTAGE_PAYMENT_METHODS = ['CASH', 'MPESA', 'BANK', 'SALARY_DEDUCTION', 'OTHER'];
+const SHORTAGE_PAYMENT_METHODS = ['CASH', 'MPESA', 'MOBILE_MONEY', 'BANK', 'SALARY_DEDUCTION', 'OTHER'];
 
 // One repayment by a cashier against a CashierShortage.
 const shortagePaymentSchema = new Schema(

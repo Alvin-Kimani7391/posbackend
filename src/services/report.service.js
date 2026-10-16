@@ -480,7 +480,7 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
  *  byProduct     Per product and channel, with units in the base unit, so bundles and single units compare properly.
  *  trend         Profit per day per channel (business timezone).
  * Refunded quantities are taken out of revenue, cost and units, so the numbers match what was really kept.
- * Money in the response is KES (decimal); quantities are BASE units.
+ * Money in the response is in the business currency (KES or TZS, decimal major units); quantities are BASE units.
  */
 async function getWholesaleReport(businessId, { branchId, from, to, warehouseId, top = 50 }) {
   const match = saleMatch({ businessId, branchId, from, to });

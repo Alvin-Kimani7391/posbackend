@@ -1,5 +1,5 @@
 const { Schema, model } = require('mongoose');
-const { SUBSCRIPTION_STATUSES } = require('../constants/billing');
+const { SUBSCRIPTION_STATUSES, BILLING_CURRENCIES } = require('../constants/billing');
 
 const lockSchema = new Schema(
   {
@@ -19,6 +19,7 @@ const subscriptionSchema = new Schema(
     planId: { type: Schema.Types.ObjectId, ref: 'BillingPlan' },
     planKey: { type: String },
     planName: { type: String },
+    currency: { type: String, enum: BILLING_CURRENCIES, default: 'KES' }, // currency of every amount on this document
     planRun: { type: Number, default: 1 }, // bumped whenever admin switches plan (keeps invoice sequences unique)
 
     status: { type: String, enum: SUBSCRIPTION_STATUSES, default: 'TRIALING' },

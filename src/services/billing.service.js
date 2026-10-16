@@ -15,7 +15,7 @@ const ApiError = require('../utils/ApiError');
 const withTx = require('../utils/withTx');
 const lockCache = require('../utils/lockCache');
 const { addDays, addMonths, floorShilling, DAY } = require('../utils/billingDates');
-const { BUSINESS_STATUS_MAP } = require('../constants/billing');
+const { BUSINESS_STATUS_MAP, DEFAULT_BILLING_CURRENCY, PLAN_KEY_BY_CURRENCY, STK_CURRENCIES } = require('../constants/billing');
 const { ROLES } = require('../constants/roles');
 const settingsSvc = require('./billing.settings');
 const notify = require('./billing.notify');
@@ -45,22 +45,61 @@ const DEFAULT_PLAN = {
   ],
 };
 
-async function ensureDefaultPlan() {
-  const existing = await BillingPlan.findOne({ key: DEFAULT_PLAN.key });
+// Same structure as DEFAULT_PLAN, priced in Tanzanian shillings (KES x 20, rounded to friendly numbers).
+// PLACEHOLDER VALUES - edit in the admin plan editor before turning billing on for Tanzania.
+const DEFAULT_PLAN_TZ = {
+  key: PLAN_KEY_BY_CURRENCY.TZS,
+  name: 'Standard (Tanzania)',
+  description: '7-day free trial, 3-month setup payment, then monthly maintenance by usage - priced in TZS.',
+  currency: 'TZS',
+  isActive: true,
+  phases: [
+    { key: 'trial', name: 'Free trial', type: 'TRIAL', durationDays: 7 },
+    { key: 'setup', name: 'Setup & licence', type: 'INSTALLMENTS', durationMonths: 3, installments: 3, totalAmountCents: 30000000, dueAfterDays: 0 }, // TZS 300,000
+    {
+      key: 'maintenance', name: 'Monthly maintenance', type: 'RECURRING', intervalMonths: 1, durationMonths: null,
+      pricingMode: 'TIERED', tierMetric: 'TRANSACTION_COUNT', dueAfterDays: 0,
+      tiers: [
+        { label: 'Starter', upTo: 1000, amountCents: 1000000 }, // TZS 10,000
+        { label: 'Growth', upTo: 3000, amountCents: 1500000 }, // TZS 15,000
+        { label: 'Pro', upTo: null, amountCents: 2200000 }, // TZS 22,000
+      ],
+    },
+  ],
+};
+const DEFAULT_PLANS = { KES: DEFAULT_PLAN, TZS: DEFAULT_PLAN_TZ };
+const normCurrency = (c) => (DEFAULT_PLANS[c] ? c : DEFAULT_BILLING_CURRENCY);
+
+async function ensureDefaultPlan(currency = DEFAULT_BILLING_CURRENCY) {
+  const def = DEFAULT_PLANS[normCurrency(currency)];
+  const existing = await BillingPlan.findOne({ key: def.key });
   if (existing) return existing;
-  try { return await BillingPlan.create(DEFAULT_PLAN); }
-  catch (err) { if (err.code === 11000) return BillingPlan.findOne({ key: DEFAULT_PLAN.key }); throw err; }
+  try { return await BillingPlan.create(def); }
+  catch (err) { if (err.code === 11000) return BillingPlan.findOne({ key: def.key }); throw err; }
 }
 
-async function resolvePlan(planKey) {
+/** Plans only ever apply to businesses of the plan's own currency - a TZS business can never be put on a KES plan. */
+async function resolvePlan(planKey, currency = DEFAULT_BILLING_CURRENCY) {
+  const cur = normCurrency(currency);
   if (planKey) {
     const plan = await BillingPlan.findOne({ key: planKey, isActive: true });
     if (!plan) throw ApiError.badRequest('That plan does not exist or is inactive', 'PLAN_NOT_FOUND');
+    if ((plan.currency || DEFAULT_BILLING_CURRENCY) !== cur) {
+      throw ApiError.badRequest(`That plan is priced in ${plan.currency || DEFAULT_BILLING_CURRENCY}, but this business pays in ${cur}.`, 'PLAN_CURRENCY_MISMATCH');
+    }
     return plan;
   }
   const settings = await settingsSvc.get();
-  const byKey = await BillingPlan.findOne({ key: settings.defaultPlanKey || 'standard', isActive: true });
-  return byKey || ensureDefaultPlan();
+  const defaultKey = cur === 'TZS' ? (settings.defaultPlanKeyTZ || PLAN_KEY_BY_CURRENCY.TZS) : (settings.defaultPlanKey || PLAN_KEY_BY_CURRENCY.KES);
+  const byKey = await BillingPlan.findOne({ key: defaultKey, isActive: true });
+  if (byKey && (byKey.currency || DEFAULT_BILLING_CURRENCY) === cur) return byKey;
+  return ensureDefaultPlan(cur);
+}
+
+/** The billing currency of a business (its own currency; legacy businesses = KES). */
+async function currencyOf(businessId) {
+  const b = await Business.findById(businessId).select('currency').lean();
+  return normCurrency(b && b.currency);
 }
 
 /* ========================= schedule math (pure) ========================= */
@@ -168,13 +207,14 @@ async function syncBusiness(sub) {
 async function startSubscription(businessId, { planKey, startPhaseKey, startAt = new Date() } = {}) {
   const existing = await Subscription.findOne({ businessId });
   if (existing) return existing;
-  const plan = await resolvePlan(planKey);
+  const currency = await currencyOf(businessId);
+  const plan = await resolvePlan(planKey, currency);
   let index = 0;
   if (startPhaseKey) {
     index = plan.phases.findIndex((p) => p.key === startPhaseKey);
     if (index < 0) throw ApiError.badRequest('That phase does not exist on the plan', 'PHASE_NOT_FOUND');
   }
-  const sub = new Subscription({ businessId, startedAt: startAt, status: plan.phases[index]?.type === 'TRIAL' ? 'TRIALING' : 'ACTIVE' });
+  const sub = new Subscription({ businessId, currency: plan.currency || currency, startedAt: startAt, status: plan.phases[index]?.type === 'TRIAL' ? 'TRIALING' : 'ACTIVE' });
   enterPhase(sub, plan.toObject(), index, startAt);
   try { await sub.save(); }
   catch (err) { if (err.code === 11000) return Subscription.findOne({ businessId }); throw err; }
@@ -197,7 +237,7 @@ async function generateInvoice(sub, plan, phase, now) {
     for (let attempt = 0; attempt < 3 && !invoice; attempt += 1) {
       try {
         invoice = await Invoice.create({
-          businessId: sub.businessId, subscriptionId: sub._id, number: newInvoiceNumber(), kind: p.kind,
+          businessId: sub.businessId, subscriptionId: sub._id, number: newInvoiceNumber(), kind: p.kind, currency: sub.currency || DEFAULT_BILLING_CURRENCY,
           planRun: sub.planRun, phaseKey: phase.key, sequence: sub.phaseInvoiceCount,
           description: p.description, periodStart: p.periodStart, periodEnd: p.periodEnd, dueDate: p.dueDate,
           baseAmount: p.amount, amount: p.amount, meta: p.meta,
@@ -310,6 +350,27 @@ async function applyCredit(subId) {
   return used;
 }
 
+/**
+ * A business changed country (and therefore currency). Only possible while it has never been invoiced or paid:
+ * the subscription is re-created on the plan of the new currency, keeping the original start date so the trial
+ * clock does not restart. Once any invoice or payment exists the currency is locked (money would be mislabelled).
+ */
+async function switchCurrency(businessId, newCurrency) {
+  const currency = normCurrency(newCurrency);
+  const sub = await Subscription.findOne({ businessId });
+  if (!sub) return null;
+  if ((sub.currency || DEFAULT_BILLING_CURRENCY) === currency) return sub;
+  const [invoices, payments] = await Promise.all([Invoice.countDocuments({ businessId }), SubscriptionPayment.countDocuments({ businessId })]);
+  if (invoices || payments) {
+    throw ApiError.conflict('This business already has subscription invoices or payments in its current currency, so the country cannot be changed. Contact support.', 'COUNTRY_LOCKED_BILLING');
+  }
+  const startAt = sub.startedAt || new Date();
+  await Subscription.deleteOne({ _id: sub._id });
+  const fresh = await startSubscription(businessId, { startAt });
+  await notify.event(businessId, 'SUBSCRIPTION_CURRENCY_SWITCHED', `Subscription moved to ${currency}`, { subscriptionId: fresh._id });
+  return fresh;
+}
+
 /* ============================ reconcile ============================ */
 
 function deriveStatus(sub) {
@@ -366,7 +427,7 @@ async function getStatusLight(businessId, user) {
   if (!settings.billingEnabled || !sub) return { enabled: !!settings.billingEnabled, hasSubscription: !!sub };
   const now = Date.now();
   const out = {
-    enabled: true, hasSubscription: true, status: sub.status,
+    enabled: true, hasSubscription: true, status: sub.status, currency: sub.currency || DEFAULT_BILLING_CURRENCY,
     locked: !!sub.lock?.active, lockReason: sub.lock?.reason || null,
     trialEndsAt: sub.status === 'TRIALING' ? sub.trialEndsAt : null,
     daysLeftInTrial: sub.status === 'TRIALING' && sub.trialEndsAt ? Math.max(Math.ceil((new Date(sub.trialEndsAt) - now) / DAY), 0) : null,
@@ -380,13 +441,18 @@ async function getStatusLight(businessId, user) {
   return out;
 }
 
-const paymentOptions = (s) => ({
-  stk: { available: !!(s.stk?.enabled && s.stk.channelId && s.stk.credentialsSetAt) },
-  manual: {
-    available: !!s.manual?.enabled, label: s.manual?.methodLabel, number: s.manual?.number, accountName: s.manual?.accountName,
-    accountReference: s.manual?.accountReference, phone: s.manual?.phone, instructions: s.manual?.instructions,
-  },
-});
+/** What the billing page offers. STK exists for KES only; TZS businesses pay the platform's Tanzanian number and an admin verifies it. */
+const paymentOptions = (s, currency = DEFAULT_BILLING_CURRENCY) => {
+  const m = currency === 'TZS' ? s.manualTz : s.manual;
+  return {
+    currency,
+    stk: { available: STK_CURRENCIES.includes(currency) && !!(s.stk?.enabled && s.stk.channelId && s.stk.credentialsSetAt) },
+    manual: {
+      available: !!m?.enabled, label: m?.methodLabel, number: m?.number, accountName: m?.accountName,
+      accountReference: m?.accountReference, phone: m?.phone, instructions: m?.instructions,
+    },
+  };
+};
 
 /** Read-only preview of what comes next (used by owner overview and admin detail). */
 async function describeUpcoming(sub, plan) {
@@ -404,7 +470,8 @@ async function describeUpcoming(sub, plan) {
 
 async function getOverview(businessId) {
   const [settings, sub] = await Promise.all([settingsSvc.get(), Subscription.findOne({ businessId }).lean()]);
-  const base = { enabled: !!settings.billingEnabled, paymentOptions: paymentOptions(settings), contact: settings.contact || {} };
+  const currency = sub?.currency || (await currencyOf(businessId));
+  const base = { enabled: !!settings.billingEnabled, currency, paymentOptions: paymentOptions(settings, currency), contact: settings.contact || {} };
   if (!sub) return { ...base, subscription: null };
 
   const now = new Date();
@@ -424,7 +491,7 @@ async function getOverview(businessId) {
   return {
     ...base,
     subscription: {
-      status: sub.status, planKey: sub.planKey, planName: sub.planName,
+      status: sub.status, currency: sub.currency || DEFAULT_BILLING_CURRENCY, planKey: sub.planKey, planName: sub.planName,
       phase: sub.phaseKey ? { key: sub.phaseKey, name: sub.phaseName, type: sub.phaseType, startedAt: sub.phaseStartedAt, endsAt: sub.phaseEndsAt } : null,
       trialEndsAt: sub.trialEndsAt, nextActionAt: sub.nextActionAt,
       creditCents: sub.creditCents, arrearsCents: sub.arrearsCents, openBalanceCents: sub.openBalanceCents,
@@ -464,7 +531,7 @@ async function listPayments(businessId, { page = 1, limit = 15, status } = {}) {
 }
 
 module.exports = {
-  DEFAULT_PLAN, ensureDefaultPlan, resolvePlan, enterPhase, syncBusiness,
+  DEFAULT_PLAN, DEFAULT_PLAN_TZ, ensureDefaultPlan, resolvePlan, currencyOf, switchCurrency, paymentOptions, enterPhase, syncBusiness,
   startSubscription, advanceSubscription, allocatePayment, applyCredit, reconcile, claimSubKey,
   describeUpcoming, getStatusLight, getOverview, listInvoices, listPayments, deriveStatus,
 };

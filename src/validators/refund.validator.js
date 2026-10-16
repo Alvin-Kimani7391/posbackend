@@ -14,7 +14,7 @@ const createRefundSchema = z.object({
   saleId: objectId,
   items: z.array(refundItemSchema).min(1),
   reason: z.string().trim().min(1),
-  paymentMethod: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']),
+  paymentMethod: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']),
 });
 
 const listRefundsQuery = paginationQuery.extend({

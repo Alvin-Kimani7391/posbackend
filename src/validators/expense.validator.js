@@ -10,7 +10,7 @@ const createExpenseSchema = z.object({
   category: z.enum(EXPENSE_CATEGORIES),
   amount: moneyInput,
   description: z.string().trim().optional(),
-  paymentMethod: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']).optional().default('CASH'),
+  paymentMethod: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']).optional().default('CASH'),
   reference: z.string().trim().optional(),
   receiptImage: z.string().trim().optional(),
   expenseDate: z.coerce.date().optional(),

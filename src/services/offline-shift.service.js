@@ -12,6 +12,7 @@ const SyncRejection = require('../models/SyncRejection');
 const AuditLog = require('../models/AuditLog');
 const notificationService = require('./notification.service');
 const shiftService = require('./shift.service');
+const { getBusinessContext } = require('../utils/businessContext');
 const { IngestRejection } = require('./offline-sale.service');
 
 const TOL = 5 * 60 * 1000;
@@ -67,7 +68,7 @@ async function ingestShiftOpen({ business, device, claims, event: e, syncedAt })
   try {
     shift = await CashShift.create({
       businessId, branchId, registerId: register._id, cashierId: cashier._id,
-      openingCash: e.openingCashCents, openedAt, status: 'OPEN',
+      openingCash: e.openingCashCents, openedAt, status: 'OPEN', currency: (await getBusinessContext(businessId)).currency,
       clientShiftId: e.clientShiftId, deviceId: device.deviceId, isOffline: true, syncedAt,
       offlineFlags: flags, offlineReview: flags.some((f) => f.severity === 'HIGH') ? 'PENDING' : 'NONE',
     });

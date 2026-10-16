@@ -9,6 +9,8 @@ const User = require('../models/User');
 
 const mpesaService = require('./mpesa.service');
 const etimsService = require('./etims.service');
+const { assertCountry } = require('../middleware/requireCountry');
+const { buildContext } = require('../utils/businessContext');
 const notificationService = require('./notification.service');
 const { CREDIT_WARNING_THRESHOLD } = require('../constants/notificationTypes');
 
@@ -278,7 +280,10 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       // Resolve MPESA lines against verified MpesaTransactions before building
       // payment docs. CASH/CARD/BANK stay exactly as before (cashier-attested).
       for (const p of payments) {
+        if (p.method === 'MOBILE_MONEY' && !p.reference) throw ApiError.badRequest('A mobile-money transaction reference is required', 'MOBILE_MONEY_REFERENCE_REQUIRED');
         if (p.method === 'MPESA') {
+          // Automatic M-PESA verification (PayHero) is Kenya-only. Elsewhere use MOBILE_MONEY with a reference.
+          await assertCountry(businessId, 'KE');
           if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
           const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, sale._id, session);
           p.provider = confirmed.channel === 'MANUAL' ? 'payhero-till' : 'payhero';
@@ -401,8 +406,11 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         [{
           businessId, branchId, saleId: sale._id, receiptNumber, invoiceNumber,
           receiptData: {
+            // Currency / country / language of THIS business, frozen at sale time so a reprint always shows the same
+            // currency and wording, and the tax-id label is right (KRA PIN in Kenya, TIN / VRN in Tanzania).
+            locale: (() => { const c = buildContext(business); return { currency: c.currency, countryCode: c.countryCode, language: c.language, taxIdLabel: c.country.taxIdLabel[c.language] }; })(),
             business: {
-              name: business.name, address: business.address, phone: business.phone, kraPin: business.kraPin,
+              name: business.name, address: business.address, phone: business.phone, kraPin: business.kraPin || business.taxPin, vrn: business.vrn,
               footerMessage: business.receiptSettings?.footerMessage,
               headerMessage: business.receiptSettings?.headerMessage,
               logo: business.receiptSettings?.showLogo ? business.logo : undefined,

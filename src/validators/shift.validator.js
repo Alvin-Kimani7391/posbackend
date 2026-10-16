@@ -1,7 +1,6 @@
 const { z } = require('zod');
 const { objectId, paginationQuery } = require('./common');
 const { toCents } = require('../utils/money');
-const { DENOMINATIONS } = require('../utils/denominations');
 
 const moneyInput = z.coerce.number().nonnegative().transform(toCents);
 
@@ -22,7 +21,8 @@ const openShiftSchema = z.object({
 });
 
 const denominationLine = z.object({
-  denomination: z.coerce.number().refine((v) => DENOMINATIONS.includes(v), 'Unsupported denomination'),
+  // Which notes/coins exist depends on the business currency (KES vs TZS): enforced in shift.service#closeShift.
+  denomination: z.coerce.number().positive().max(1000000),
   count: z.coerce.number().int('Count must be a whole number').nonnegative().max(1000000),
 });
 

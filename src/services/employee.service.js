@@ -3,6 +3,17 @@ const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
+const { getBusinessContext } = require('../utils/businessContext');
+const { isValidPhone, phoneForStorage } = require('../utils/phone');
+
+/** Validate a phone against the business's country and return the form we store. */
+async function resolvePhone(businessId, phone) {
+  const ctx = await getBusinessContext(businessId);
+  if (!isValidPhone(phone, ctx.countryCode)) {
+    throw ApiError.badRequest(`Enter a valid ${ctx.country.name} phone number`, 'INVALID_PHONE');
+  }
+  return phoneForStorage(phone, ctx.countryCode);
+}
 
 // Roles that can never be assigned through the employee API.
 const RESERVED_ROLES = [ROLES.OWNER, ROLES.SUPER_ADMIN];
@@ -36,6 +47,8 @@ async function createEmployee(businessId, createdBy, data) {
   if (RESERVED_ROLES.includes(data.role)) {
     throw ApiError.badRequest('This role cannot be assigned this way', 'INVALID_ROLE');
   }
+
+  data = { ...data, phone: await resolvePhone(businessId, data.phone) };
 
   const secret = data.pin || data.password;
   if (!secret) {
@@ -82,6 +95,8 @@ async function updateEmployee(businessId, actorId, userId, updates) {
   if (user.role === ROLES.OWNER && updates.role && updates.role !== ROLES.OWNER) {
     throw ApiError.badRequest('Cannot change the OWNER role', 'INVALID_ROLE_CHANGE');
   }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'phone')) updates = { ...updates, phone: await resolvePhone(businessId, updates.phone) };
 
   const oldValue = { name: user.name, role: user.role, branchIds: user.branchIds };
 

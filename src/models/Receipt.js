@@ -25,8 +25,10 @@ const receiptSchema = new Schema(
     // SALE TIME - if the owner changes the footer message or toggles
     // showKraPin tomorrow, yesterday's receipt must not change.
     receiptData: {
+      // Currency/country/language the sale was made in (legacy receipts have none = KES / Kenya / English).
+      locale: { currency: String, countryCode: String, language: String, taxIdLabel: String },
       business: {
-        name: String, address: String, phone: String, kraPin: String,
+        name: String, address: String, phone: String, kraPin: String, vrn: String,
         footerMessage: String, headerMessage: String, logo: String,
         showKraPin: Boolean, showCashierName: Boolean, showMpesaReceiptCode: Boolean,
         customLines: [String], paperWidth: String,
@@ -67,7 +69,7 @@ receiptSchema.index({ businessId: 1, receiptNumber: 1 });
 // items/payments arrays), which the generic moneySchemaPlugin doesn't reach
 // (it only handles top-level fields and one level of array-of-subdocuments).
 // So Receipt gets its own transform converting exactly those nested cents
-// fields to decimal KES on output - everything else in receiptData passes
+// fields to decimal major units (KES / TZS) on output - everything else in receiptData passes
 // through untouched (externalTransactionId is a string, not money, so it's
 // never touched by this transform).
 const { fromCents } = require('../utils/money');

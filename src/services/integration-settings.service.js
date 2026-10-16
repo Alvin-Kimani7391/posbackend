@@ -5,6 +5,7 @@ const { encrypt, maskedHint } = require('../utils/crypto');
 const { ROLES } = require('../constants/roles');
 const payhero = require('../integrations/mpesa/payhero.provider');
 const digitax = require('../integrations/etims/digitax.client');
+const { assertCountry } = require('../middleware/requireCountry');
 
 async function getOrCreate(businessId) {
   let settings = await IntegrationSettings.findOne({ businessId }).select('+mpesa.credentialsBlob +etims.credentialsBlob');
@@ -57,6 +58,7 @@ function assertOwner(user) {
 }
 
 async function updateMpesa(businessId, user, { enabled, channelId, apiUsername, apiPassword, basicAuthToken }) {
+  await assertCountry(businessId, 'KE'); // PayHero M-PESA and KRA eTIMS exist in Kenya only
   assertOwner(user);
   const settings = await getOrCreate(businessId);
   const changed = [];
@@ -85,6 +87,7 @@ async function updateMpesa(businessId, user, { enabled, channelId, apiUsername, 
 }
 
 async function updateEtims(businessId, user, { enabled, environment, kraPin, apiKey, username, password }) {
+  await assertCountry(businessId, 'KE'); // PayHero M-PESA and KRA eTIMS exist in Kenya only
   assertOwner(user);
   const settings = await getOrCreate(businessId);
   const changed = [];
@@ -109,6 +112,7 @@ async function updateEtims(businessId, user, { enabled, environment, kraPin, api
 
 /** "Test connection" buttons - real calls against the provider, no state changes. */
 async function testMpesa(businessId, user) {
+  await assertCountry(businessId, 'KE'); // PayHero M-PESA and KRA eTIMS exist in Kenya only
   assertOwner(user);
   const settings = await IntegrationSettings.findOne({ businessId }).select('+mpesa.credentialsBlob');
   if (!settings?.mpesa?.credentialsBlob) throw ApiError.badRequest('No M-PESA credentials saved yet', 'MPESA_NOT_CONFIGURED');
@@ -127,6 +131,7 @@ async function testMpesa(businessId, user) {
 }
 
 async function testEtims(businessId, user) {
+  await assertCountry(businessId, 'KE'); // PayHero M-PESA and KRA eTIMS exist in Kenya only
   assertOwner(user);
   const settings = await IntegrationSettings.findOne({ businessId }).select('+etims.credentialsBlob');
   if (!settings?.etims?.credentialsBlob) throw ApiError.badRequest('No eTIMS credentials saved yet', 'ETIMS_NOT_CONFIGURED');

@@ -28,7 +28,7 @@ const partSchema = new Schema({
 
 const paymentSchema = new Schema({
   type: { type: String, enum: ['DEPOSIT', 'PAYMENT', 'REFUND'], required: true },
-  method: { type: String, enum: ['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER'], required: true },
+  method: { type: String, enum: ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER'], required: true },
   amount: { type: Number, required: true, min: 1 },
   reference: { type: String },
   at: { type: Date, default: Date.now },

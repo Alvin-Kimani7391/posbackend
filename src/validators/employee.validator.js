@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { objectId, kenyanPhone } = require('./common');
+const { objectId, anyPhone } = require('./common');
 const { ROLES } = require('../constants/roles');
 
 // SUPER_ADMIN is a platform role: it can only be created with
@@ -11,7 +11,7 @@ const createEmployeeSchema = z
   .object({
     name: z.string().trim().min(2),
     email: z.string().trim().email().optional(),
-    phone: kenyanPhone,
+    phone: anyPhone, // checked against the business's country in employee.service
     role: roleEnum,
     employeeCode: z.string().trim().min(2).optional(),
     branchIds: z.array(objectId).default([]),
@@ -26,7 +26,7 @@ const createEmployeeSchema = z
 const updateEmployeeSchema = z.object({
   name: z.string().trim().min(2).optional(),
   email: z.string().trim().email().optional(),
-  phone: kenyanPhone.optional(),
+  phone: anyPhone.optional(),
   role: roleEnum.optional(),
   employeeCode: z.string().trim().optional(),
   branchIds: z.array(objectId).optional(),

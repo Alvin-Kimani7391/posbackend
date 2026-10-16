@@ -11,6 +11,8 @@ const MpesaTransaction = require('../models/MpesaTransaction');
 const MpesaInboundPayment = require('../models/MpesaInboundPayment');
 const ApiError = require('../utils/ApiError');
 const { normalizePhone, toLocalPhone } = require('../utils/phone');
+const { countryCodeOf } = require('../utils/businessContext');
+const { vipDefaultCents } = require('./country.service');
 const engine = require('./crm.engine');
 const OfflineMpesaClaim = require('../models/OfflineMpesaClaim');
 
@@ -61,7 +63,7 @@ async function getSettings(businessId) {
   try {
     doc = await CrmSettings.findOneAndUpdate(
       { businessId },
-      { $setOnInsert: { businessId } },
+      { $setOnInsert: { businessId, vipMinSpendCents: vipDefaultCents(await countryCodeOf(businessId)) } }, // KES 20,000 / TZS 400,000
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean();
   } catch (e) {
@@ -547,10 +549,11 @@ function getRebuildStatus(businessId) {
 }
 
 async function backfillPhones(businessId, status) {
+  const country = await countryCodeOf(businessId);
   const cursor = Customer.find({ businessId, phone: { $exists: true, $ne: '' }, phoneNormalized: { $exists: false } })
     .select('_id phone createdAt').sort({ createdAt: 1 }).cursor();
   for await (const c of cursor) {
-    const n = normalizePhone(c.phone);
+    const n = normalizePhone(c.phone, country);
     if (!n) { status.invalidPhones += 1; continue; }
     const owner = await Customer.findOne({ businessId, phoneNormalized: n }).select('_id').lean();
     if (owner) {
@@ -627,8 +630,9 @@ function customerFilter(businessId, { rules, match, search, lifecycle, includeAr
     const term = String(search).trim();
     const rx = { $regex: engine.escapeRegex(term), $options: 'i' };
     const or = [{ name: rx }, { email: rx }, { customerNumber: rx }, { phone: rx }];
-    const digits = normalizePhone(term);
-    if (digits) or.push({ phoneNormalized: digits });
+    // A local number is valid in both countries: match whichever canonical form(s) exist for it.
+    const digits = [normalizePhone(term, 'KE'), normalizePhone(term, 'TZ')].filter(Boolean);
+    if (digits.length) or.push({ phoneNormalized: { $in: digits } });
     parts.push({ $or: or });
   }
   const ruleFilter = engine.buildRuleFilter(rules, match);

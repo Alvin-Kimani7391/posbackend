@@ -9,7 +9,7 @@ const BillingEvent = require('../models/BillingEvent');
 const { TYPE_SEVERITY } = require('../constants/notificationTypes');
 const { ROLES } = require('../constants/roles');
 const { sendEmail } = require('./email.service');
-const { renderEmail, kes, fmtDate } = require('../utils/emailTemplates');
+const { renderEmail, money, fmtDate } = require('../utils/emailTemplates');
 const settingsSvc = require('./billing.settings');
 
 const APP = () => String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
@@ -74,6 +74,7 @@ const cta = () => (billingUrl() ? { label: 'Open billing page', url: billingUrl(
 /* ----------------------------- specific events ----------------------------- */
 
 async function invoiceIssued(inv) {
+  const kes = (c) => money(c, inv.currency);
   const balance = inv.amount - inv.amountPaid;
   const covered = balance <= 0;
   await notifyOwners({
@@ -96,6 +97,7 @@ async function invoiceIssued(inv) {
 }
 
 async function reminder(inv, key, ctx = {}) {
+  const kes = (c) => money(c, inv.currency);
   const balance = inv.amount - inv.amountPaid;
   const overdue = (ctx.daysOverdue || 0) > 0 || (inv.dueDate <= new Date());
   let title; let lead;
@@ -116,7 +118,7 @@ async function reminder(inv, key, ctx = {}) {
     entityType: 'Invoice', entityId: inv._id,
     email: {
       subject: title, heading: overdue ? 'Payment overdue' : 'Payment reminder',
-      paragraphs: [lead, 'Pay with M-PESA from the billing page. Part-payments are accepted and carry forward.'],
+      paragraphs: [lead, (inv.currency === 'TZS' ? 'Pay from the billing page using the mobile-money or bank details shown there. Part-payments are accepted and carry forward.' : 'Pay with M-PESA from the billing page. Part-payments are accepted and carry forward.')],
       rows: [['Invoice', inv.number], ['Description', inv.description], ['Balance', kes(balance)], ['Due date', fmtDate(inv.dueDate)]],
       cta: cta(),
     },
@@ -125,6 +127,7 @@ async function reminder(inv, key, ctx = {}) {
 }
 
 async function paymentReceived(p) {
+  const kes = (c) => money(c, p.currency);
   const lines = (p.allocations || []).map((a) => `${a.invoiceNumber}: ${kes(a.amount)}`);
   await notifyOwners({
     businessId: p.businessId, type: 'BILLING_PAYMENT',
@@ -135,7 +138,7 @@ async function paymentReceived(p) {
     email: {
       subject: `Payment received - ${kes(p.amount)}`, heading: 'Payment received',
       paragraphs: ['Thank you - your payment has been applied.', ...lines],
-      rows: [['Amount', kes(p.amount)], ['Reference', p.reference], ...(p.mpesaReceiptNumber ? [['M-PESA code', p.mpesaReceiptNumber]] : []), ...(p.creditAddedCents ? [['Credit carried forward', kes(p.creditAddedCents)]] : [])],
+      rows: [['Amount', kes(p.amount)], ['Reference', p.reference], ...(p.mpesaReceiptNumber ? [[p.currency === 'TZS' ? 'Transaction code' : 'M-PESA code', p.mpesaReceiptNumber]] : []), ...(p.creditAddedCents ? [['Credit carried forward', kes(p.creditAddedCents)]] : [])],
       cta: cta(),
     },
     eventType: 'PAYMENT_SUCCESS',
@@ -143,10 +146,11 @@ async function paymentReceived(p) {
 }
 
 async function manualSubmitted(p, businessName) {
+  const kes = (c) => money(c, p.currency);
   await notifyOwners({
     businessId: p.businessId, type: 'BILLING_PAYMENT',
     title: 'Payment submitted for verification',
-    message: `We received your M-PESA message (${p.mpesaReceiptNumber || p.reference}). It will be credited once verified, usually within a few hours.`,
+    message: `We received your payment message (${p.mpesaReceiptNumber || p.reference}). It will be credited once verified, usually within a few hours.`,
     entityType: 'SubscriptionPayment', entityId: p._id, eventType: 'MANUAL_SUBMITTED',
   });
   await adminAlert({
@@ -168,6 +172,7 @@ async function manualRejected(p, reason) {
 }
 
 async function locked(sub, { auto, note }) {
+  const kes = (c) => money(c, sub.currency);
   await notifyOwners({
     businessId: sub.businessId, type: 'BILLING_LOCKED', severity: 'critical',
     title: 'Account locked - payment required',

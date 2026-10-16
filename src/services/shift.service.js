@@ -5,7 +5,8 @@ const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { fromCents } = require('../utils/money');
-const { normalizeDenominations, denominationsTotalCents } = require('../utils/denominations');
+const { getDenominations, unsupportedDenominations, normalizeDenominations, denominationsTotalCents } = require('../utils/denominations');
+const { getBusinessContext } = require('../utils/businessContext');
 const notificationService = require('./notification.service');
 const shortageService = require('./shortage.service');
 
@@ -48,7 +49,13 @@ async function getShift(businessId, id) {
   return shift;
 }
 
-/** Shift + every successful cash payment taken during it (decimal KES, ready for the API). */
+/** What the close-shift screen renders: the notes/coins of THIS business's currency (KE: 1000..1, TZ: 10000..50). */
+async function getCountingSheet(businessId) {
+  const ctx = await getBusinessContext(businessId);
+  return { currency: ctx.currency, countryCode: ctx.countryCode, denominations: getDenominations(ctx.currency) };
+}
+
+/** Shift + every successful cash payment taken during it (decimal major units of the business currency, ready for the API). */
 async function getShiftDetail(businessId, id) {
   const shift = await getShift(businessId, id);
   const payments = await Payment.find({ businessId, shiftId: shift._id, method: 'CASH', status: 'SUCCESS' })
@@ -64,7 +71,7 @@ async function getShiftDetail(businessId, id) {
     createdAt: p.createdAt,
   }));
 
-  return { shift, cashSales };
+  return { shift, cashSales, currency: shift.currency || (await getBusinessContext(businessId)).currency };
 }
 
 async function openShift(businessId, branchId, cashierId, { registerId, openingCash }) {
@@ -78,7 +85,9 @@ async function openShift(businessId, branchId, cashierId, { registerId, openingC
   if (existingForCashier) throw ApiError.conflict('You already have an open shift', 'SHIFT_ALREADY_OPEN');
   if (existingForRegister) throw ApiError.conflict('This register already has an open shift', 'REGISTER_IN_USE');
 
-  const shift = await CashShift.create({ businessId, branchId, registerId, cashierId, openingCash, status: 'OPEN' });
+  const ctx = await getBusinessContext(businessId);
+  // Stamp the currency: float, cash sales and closing count of this shift are all in this one currency.
+  const shift = await CashShift.create({ businessId, branchId, registerId, cashierId, openingCash, currency: ctx.currency, status: 'OPEN' });
   await AuditLog.create({ businessId, branchId, userId: cashierId, action: 'shift.open', entityType: 'CashShift', entityId: shift._id, newValue: { openingCash } });
 
   const [cashier] = await Promise.all([User.findById(cashierId).select('name role'), shift.populate('registerId', 'name code')]);
@@ -94,7 +103,13 @@ async function closeShift(businessId, userId, id, { denominations, actualCash, n
   if (shift.status !== 'OPEN') throw ApiError.conflict('Shift is already closed', 'SHIFT_ALREADY_CLOSED');
 
   // The counted total is ALWAYS derived from the denomination count, so the two can never disagree.
-  const countedDenominations = normalizeDenominations(denominations);
+  // Notes/coins accepted depend on the shift's currency (legacy shifts: the business currency).
+  const currency = shift.currency || (await getBusinessContext(businessId)).currency;
+  const bad = unsupportedDenominations(denominations, currency);
+  if (bad.length) {
+    throw ApiError.badRequest(`These denominations do not exist in ${currency}: ${bad.join(', ')}`, 'INVALID_DENOMINATION');
+  }
+  const countedDenominations = normalizeDenominations(denominations, currency);
   const countedCents = denominationsTotalCents(countedDenominations);
   if (actualCash !== undefined && actualCash !== countedCents) {
     throw ApiError.badRequest('Counted total does not match the denomination breakdown', 'DENOMINATION_MISMATCH');
@@ -112,6 +127,7 @@ async function closeShift(businessId, userId, id, { denominations, actualCash, n
   shift.actualCash = countedCents;
   shift.cashDifference = cashDifference;
   shift.denominations = countedDenominations;
+  shift.currency = currency;
   shift.status = 'CLOSED';
   shift.closedAt = closedAt || new Date();
   shift.closedBy = userId;
@@ -154,4 +170,4 @@ async function closeShift(businessId, userId, id, { denominations, actualCash, n
   return shift;
 }
 
-module.exports = { getCurrentShift, listShifts, getShift, getShiftDetail, openShift, closeShift };
+module.exports = { getCurrentShift, listShifts, getShift, getShiftDetail, getCountingSheet, openShift, closeShift };

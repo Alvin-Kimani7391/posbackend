@@ -19,11 +19,12 @@ const saleItemSchema = z.object({
 // is the implicit unpaid remainder (sale.total - sum(payments)), computed
 // by sale.service, not something the client asserts directly.
 const paymentInputSchema = z.object({
-  method: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']),
+  method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']),
   amount: moneyInput,
   reference: z.string().trim().optional(),
+  provider: z.string().trim().max(40).optional(), // MOBILE_MONEY: which rail (M-Pesa, Mixx by Yas, Airtel Money, HaloPesa...)
   amountTendered: moneyInput.optional(),
-});
+}).transform((p) => (p.method === 'MOBILE_MONEY' ? p : { ...p, provider: undefined }));
 
 const createSaleSchema = z.object({
   branchId: objectId,

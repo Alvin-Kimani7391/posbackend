@@ -9,9 +9,15 @@ const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
 const billing = require('./billing.service');
 const { resolveFeatures } = require('../constants/businessFeatures');
+const countryService = require('./country.service');
+const { phoneForStorage, loginPhoneCandidates } = require('../utils/phone');
+const { invalidateBusinessContext } = require('../utils/businessContext');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
 
-async function registerBusinessOwner({ businessName, businessType = 'general_shop', ownerName, phone, email, password }) {
+async function registerBusinessOwner({ businessName, businessType = 'general_shop', country = 'KE', language, ownerName, phone: rawPhone, email, password }) {
+  // Tanzanian numbers are stored internationally (255...), so a Tanzanian 0712... can never collide with a Kenyan 0712...
+  const defaults = countryService.buildBusinessDefaults(country, language);
+  const phone = phoneForStorage(rawPhone, defaults.countryCode);
   const session = await mongoose.startSession();
   try {
     let business;
@@ -25,7 +31,7 @@ async function registerBusinessOwner({ businessName, businessType = 'general_sho
 
       business = (
         await Business.create(
-          [{ name: businessName, businessType, featureSettings: resolveFeatures(businessType), phone, email }],
+          [{ ...defaults, countryConfirmed: true, name: businessName, businessType, featureSettings: resolveFeatures(businessType), phone, email }],
           { session }
         )
       )[0];
@@ -66,6 +72,7 @@ async function registerBusinessOwner({ businessName, businessType = 'general_sho
     await billing.startSubscription(business._id)
       .catch((e) => console.error('[billing] start failed', e.message));
 
+    invalidateBusinessContext(business._id);
     return { business, user };
   } finally {
     session.endSession();
@@ -94,15 +101,17 @@ async function assertBusinessActive(user) {
 
 async function loginWithPassword({ identifier, password }, meta = {}) {
   const isEmail = identifier.includes('@');
-  const query = isEmail ? { email: identifier.toLowerCase() } : { phone: identifier };
+  // A phone may be stored as typed (Kenya) or as 255XXXXXXXXX (Tanzania). The same local number can exist in both
+  // countries, so the password is checked against every active match, never just the first.
+  const query = isEmail ? { email: identifier.toLowerCase() } : { phone: { $in: loginPhoneCandidates(identifier) } };
 
-  const user = await User.findOne(query).select('+passwordHash');
-  if (!user || user.status !== 'active') {
-    throw ApiError.unauthorized('Invalid credentials', 'INVALID_CREDENTIALS');
+  const candidates = (await User.find(query).select('+passwordHash').limit(5)).filter((u) => u.status === 'active');
+  let user = null;
+  for (const c of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await c.comparePassword(password)) { user = c; break; }
   }
-
-  const valid = await user.comparePassword(password);
-  if (!valid) {
+  if (!user) {
     throw ApiError.unauthorized('Invalid credentials', 'INVALID_CREDENTIALS');
   }
 
@@ -185,7 +194,7 @@ async function logout(user) {
 
 async function requestPasswordReset({ identifier }) {
   const isEmail = identifier.includes('@');
-  const query = isEmail ? { email: identifier.toLowerCase() } : { phone: identifier };
+  const query = isEmail ? { email: identifier.toLowerCase() } : { phone: { $in: loginPhoneCandidates(identifier) } };
   const user = await User.findOne(query);
 
   // Always respond as if successful to avoid leaking which accounts exist.
@@ -218,6 +227,12 @@ async function resetPassword({ token, newPassword }) {
   await user.save();
 }
 
+async function setLanguage(user, language) {
+  user.language = language;
+  await user.save();
+  return user;
+}
+
 async function changePassword(user, { currentPassword, newPassword }) {
   const fullUser = await User.findById(user._id).select('+passwordHash');
   const valid = await fullUser.comparePassword(currentPassword);
@@ -241,4 +256,5 @@ module.exports = {
   requestPasswordReset,
   resetPassword,
   changePassword,
+  setLanguage,
 };

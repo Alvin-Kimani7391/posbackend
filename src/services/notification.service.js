@@ -4,9 +4,19 @@ const { ROLES } = require('../constants/roles');
 const { TYPE_SEVERITY, EMPLOYEE_RAISABLE_TYPES } = require('../constants/notificationTypes');
 const ApiError = require('../utils/ApiError');
 const { toCents } = require('../utils/money');
+const { getBusinessContext } = require('../utils/businessContext');
+const { formatMoney } = require('../utils/currency');
+const { t, methodLabel: i18nMethodLabel } = require('../i18n');
 
-const formatKES = (cents) =>
-  `KES ${(Math.abs(cents) / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/**
+ * Every amount in a notification is shown in the BUSINESS's own currency and language (KES/TZS, English/Swahili).
+ * nctx.fmt(cents) prints the absolute amount (the sentence - "short by" / "over by" - says which way it goes).
+ */
+async function notifCtx(businessId) {
+  const ctx = await getBusinessContext(businessId);
+  const fmt = (cents) => formatMoney(cents, ctx.currency, { lang: ctx.language, abs: true });
+  return { ...ctx, fmt, t: (key, params) => t(ctx.language, key, params) };
+}
 
 const MANAGEMENT_ROLES = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER];
 
@@ -68,26 +78,28 @@ async function notifyActorAndManagement(businessId, actor, managementPayload, ac
 /* -------------------------------------------------------------------- */
 
 async function notifyShiftOpened(businessId, branchId, shift, cashier) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   const base = {
     type: 'SHIFT_OPENED',
     branchId,
     sourceUserId: cashier._id,
     entityType: 'CashShift',
     entityId: shift._id,
-    data: { registerId: shift.registerId?._id || shift.registerId, openingCash: shift.openingCash, openedAt: shift.openedAt },
+    data: { registerId: shift.registerId?._id || shift.registerId, openingCash: shift.openingCash, openedAt: shift.openedAt, currency: nctx.currency },
   };
 
   return notifyActorAndManagement(
     businessId, cashier,
     {
       ...base,
-      title: `Shift opened - ${cashier.name}`,
-      message: `${cashier.name} opened register ${shift.registerId?.code || ''} with a float of ${formatKES(shift.openingCash)}.`,
+      title: nctx.t('shift.opened.titleMgmt', { name: cashier.name }),
+      message: nctx.t('shift.opened.msgMgmt', { name: cashier.name, register: shift.registerId?.code || '', amount: fmtMoney(shift.openingCash) }),
     },
     {
       ...base,
-      title: 'Shift opened',
-      message: `You opened register ${shift.registerId?.code || ''} with a float of ${formatKES(shift.openingCash)}. Every cash sale you ring up adds to what's expected in the drawer when you close.`,
+      title: nctx.t('shift.opened.titleOwn'),
+      message: nctx.t('shift.opened.msgOwn', { register: shift.registerId?.code || '', amount: fmtMoney(shift.openingCash) }),
     }
   );
 }
@@ -107,11 +119,13 @@ async function notifyShiftOpened(businessId, branchId, shift, cashier) {
  * a fixed-shape table). The message text lists only the non-zero lines.
  */
 async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   const diff = shift.cashDifference;
   let type = 'SHIFT_CLOSED';
-  let headline = 'balanced';
-  if (diff < 0) { type = 'CASH_SHORTAGE'; headline = `short by ${formatKES(diff)}`; }
-  else if (diff > 0) { type = 'CASH_OVER'; headline = `over by ${formatKES(diff)}`; }
+  let headline = nctx.t('shift.closed.headline.balanced');
+  if (diff < 0) { type = 'CASH_SHORTAGE'; headline = nctx.t('shift.closed.headline.short', { amount: fmtMoney(diff) }); }
+  else if (diff > 0) { type = 'CASH_OVER'; headline = nctx.t('shift.closed.headline.over', { amount: fmtMoney(diff) }); }
 
   const denominations = (shift.denominations || []).map((d) => ({
     denomination: d.denomination,
@@ -120,15 +134,16 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
   }));
   const denomLine = denominations
     .filter((d) => d.count > 0)
-    .map((d) => `${d.count} × ${d.denomination.toLocaleString('en-KE')}`)
+    .map((d) => `${d.count} × ${d.denomination.toLocaleString('en-US')}`)
     .join(', ');
-  const denomText = denomLine ? ` Counted: ${denomLine}.` : '';
+  const denomText = denomLine ? nctx.t('shift.closed.counted', { lines: denomLine }) : '';
 
   const data = {
     openingCash: shift.openingCash,
     expectedCash: shift.expectedCash,
     actualCash: shift.actualCash,
     cashDifference: diff,
+    currency: nctx.currency,
     denominations,
     denominationTotal: denominations.reduce((s, d) => s + d.subtotal, 0),
     cashSaleCount: cashSales.length,
@@ -145,26 +160,29 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
 
   const base = { type, branchId, sourceUserId: cashier._id, entityType: 'CashShift', entityId: shift._id, data };
 
-  let ownExtra = ' Nicely balanced.';
-  if (diff < 0) ownExtra = " Check the cash sales below against what you counted, and flag your manager if you can't account for the difference. The shortage is now recorded against you until it is cleared.";
-  else if (diff > 0) ownExtra = ' Check the cash sales below, and hand the extra over to your manager.';
+  let ownExtra = nctx.t('shift.closed.extraBalanced');
+  if (diff < 0) ownExtra = nctx.t('shift.closed.extraShort');
+  else if (diff > 0) ownExtra = nctx.t('shift.closed.extraOver');
 
   return notifyActorAndManagement(
     businessId, cashier,
     {
       ...base,
-      title: `Shift closed - ${cashier.name} (${headline})`,
-      message:
-        `${cashier.name} closed register${shift.registerId?.code ? ` ${shift.registerId.code}` : ''}. ` +
-        `Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)}, ` +
-        `counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${denomText}`,
+      title: nctx.t('shift.closed.titleMgmt', { name: cashier.name, headline }),
+      message: nctx.t('shift.closed.msgMgmt', {
+        name: cashier.name,
+        register: shift.registerId?.code ? nctx.t('shift.closed.registerWord', { code: shift.registerId.code }) : '',
+        opening: fmtMoney(shift.openingCash), expected: fmtMoney(shift.expectedCash), counted: fmtMoney(shift.actualCash),
+        headline, denoms: denomText,
+      }),
     },
     {
       ...base,
-      title: `Shift closed (${headline})`,
-      message:
-        `Your shift is closed. Opening float ${formatKES(shift.openingCash)}, expected ${formatKES(shift.expectedCash)} ` +
-        `from cash sales, you counted ${formatKES(shift.actualCash)} - drawer is ${headline}.${denomText}${ownExtra}`,
+      title: nctx.t('shift.closed.titleOwn', { headline }),
+      message: nctx.t('shift.closed.msgOwn', {
+        opening: fmtMoney(shift.openingCash), expected: fmtMoney(shift.expectedCash), counted: fmtMoney(shift.actualCash),
+        headline, denoms: denomText, extra: ownExtra,
+      }),
     }
   );
 }
@@ -182,12 +200,14 @@ async function notifyShiftClosed(businessId, branchId, shift, cashier, cashSales
  * cashier is themselves management (they already got the management copy).
  */
 async function notifyShortagePayment(businessId, shortage, cashier, actor, payment) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   const cleared = shortage.status === 'CLEARED';
   const type = cleared ? 'SHORTAGE_CLEARED' : 'SHORTAGE_PAYMENT';
-  const cashierName = cashier?.name || 'The cashier';
-  const actorName = actor?.name || 'A manager';
-  const methodLabel = String(payment.method || 'CASH').replace(/_/g, ' ').toLowerCase();
-  const refText = payment.reference ? ` (ref: ${payment.reference})` : '';
+  const cashierName = cashier?.name || nctx.t('shortage.theCashier');
+  const actorName = actor?.name || nctx.t('shortage.aManager');
+  const methodLabel = i18nMethodLabel(nctx.language, payment.method || 'CASH');
+  const refText = payment.reference ? nctx.t('common.ref', { ref: payment.reference }) : '';
 
   const base = {
     type,
@@ -212,15 +232,13 @@ async function notifyShortagePayment(businessId, shortage, cashier, actor, payme
   };
 
   const balanceLine = cleared
-    ? 'The shortage is now fully cleared.'
-    : `${formatKES(shortage.balance)} is still outstanding.`;
+    ? nctx.t('shortage.cleared')
+    : nctx.t('shortage.outstanding', { amount: fmtMoney(shortage.balance) });
 
   const managementPayload = {
     ...base,
-    title: cleared ? `Shortage cleared - ${cashierName}` : `Shortage payment - ${cashierName}`,
-    message:
-      `${actorName} recorded a ${formatKES(payment.amount)} ${methodLabel} payment from ${cashierName}${refText} ` +
-      `towards a ${formatKES(shortage.amount)} shortage. ${balanceLine}`,
+    title: nctx.t(cleared ? 'shortage.titleClearedMgmt' : 'shortage.titlePaymentMgmt', { cashier: cashierName }),
+    message: nctx.t('shortage.msgMgmt', { actor: actorName, amount: fmtMoney(payment.amount), method: methodLabel, cashier: cashierName, ref: refText, total: fmtMoney(shortage.amount), balanceLine }),
   };
 
   const results = await notifyManagement(businessId, managementPayload);
@@ -228,10 +246,8 @@ async function notifyShortagePayment(businessId, shortage, cashier, actor, payme
   if (cashier && !MANAGEMENT_ROLES.includes(cashier.role)) {
     const own = await notifyUser(businessId, cashier._id, {
       ...base,
-      title: cleared ? 'Your shortage is cleared' : 'Shortage payment received',
-      message:
-        `${actorName} recorded your ${formatKES(payment.amount)} ${methodLabel} payment${refText} ` +
-        `towards the ${formatKES(shortage.amount)} shortage. ${balanceLine}`,
+      title: nctx.t(cleared ? 'shortage.titleClearedOwn' : 'shortage.titlePaymentOwn'),
+      message: nctx.t('shortage.msgOwn', { actor: actorName, amount: fmtMoney(payment.amount), method: methodLabel, ref: refText, total: fmtMoney(shortage.amount), balanceLine }),
     });
     return [...results, own];
   }
@@ -239,10 +255,12 @@ async function notifyShortagePayment(businessId, shortage, cashier, actor, payme
 }
 
 async function notifySaleCancelled(businessId, branchId, sale, cashier) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   return notifyManagement(businessId, {
     type: 'SALE_CANCELLED',
-    title: `Sale cancelled - ${sale.receiptNumber}`,
-    message: `${cashier?.name || 'A cashier'} cancelled sale ${sale.receiptNumber} (${formatKES(sale.total)}).`,
+    title: nctx.t('sale.cancelledTitle', { receipt: sale.receiptNumber }),
+    message: nctx.t('sale.cancelledMsg', { name: cashier?.name || nctx.t('sale.aCashier'), receipt: sale.receiptNumber, amount: fmtMoney(sale.total) }),
     branchId,
     sourceUserId: cashier?._id,
     entityType: 'Sale',
@@ -252,10 +270,11 @@ async function notifySaleCancelled(businessId, branchId, sale, cashier) {
 }
 
 async function notifyTransferRequested(businessId, transfer, requester) {
+  const nctx = await notifCtx(businessId);
   return notifyManagement(businessId, {
     type: 'TRANSFER_REQUESTED',
-    title: `Transfer requested - ${transfer.transferNumber}`,
-    message: `${requester?.name || 'A staff member'} requested transfer ${transfer.transferNumber} (${transfer.items.length} item(s)), awaiting approval.`,
+    title: nctx.t('transfer.requestedTitle', { number: transfer.transferNumber }),
+    message: nctx.t('transfer.requestedMsg', { name: requester?.name || nctx.t('transfer.aStaff'), number: transfer.transferNumber, count: transfer.items.length }),
     branchId: transfer.fromBranchId,
     sourceUserId: requester?._id,
     entityType: 'StockTransfer',
@@ -265,13 +284,12 @@ async function notifyTransferRequested(businessId, transfer, requester) {
 }
 
 async function notifyStockLevel(businessId, branchId, { productId, variantId, productName, quantity, threshold }) {
+  const nctx = await notifCtx(businessId);
   const outOfStock = quantity <= 0;
   return notifyManagement(businessId, {
     type: outOfStock ? 'OUT_OF_STOCK' : 'LOW_STOCK',
-    title: outOfStock ? `Out of stock - ${productName}` : `Low stock - ${productName}`,
-    message: outOfStock
-      ? `${productName} just ran out of stock.`
-      : `${productName} is down to ${quantity} unit(s) (threshold: ${threshold}).`,
+    title: nctx.t(outOfStock ? 'stock.outTitle' : 'stock.lowTitle', { product: productName }),
+    message: nctx.t(outOfStock ? 'stock.outMsg' : 'stock.lowMsg', { product: productName, quantity, threshold }),
     branchId,
     entityType: 'BranchInventory',
     entityId: productId,
@@ -280,10 +298,12 @@ async function notifyStockLevel(businessId, branchId, { productId, variantId, pr
 }
 
 async function notifyRefundRequested(businessId, branchId, refund, sale, requester) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   return notifyManagement(businessId, {
     type: 'REFUND_REQUEST',
-    title: `Refund requested - ${refund.refundNumber}`,
-    message: `${requester?.name || 'A staff member'} requested a ${formatKES(refund.amount)} refund on sale ${sale?.receiptNumber || ''} - awaiting approval.`,
+    title: nctx.t('refund.requestedTitle', { number: refund.refundNumber }),
+    message: nctx.t('refund.requestedMsg', { name: requester?.name || nctx.t('refund.aStaff'), amount: fmtMoney(refund.amount), receipt: sale?.receiptNumber || '' }),
     branchId,
     sourceUserId: requester?._id,
     entityType: 'Refund',
@@ -293,10 +313,12 @@ async function notifyRefundRequested(businessId, branchId, refund, sale, request
 }
 
 async function notifyRefundCompleted(businessId, branchId, refund, sale, actor) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   return notifyManagement(businessId, {
     type: 'REFUND_COMPLETED',
-    title: `Refund completed - ${refund.refundNumber}`,
-    message: `${formatKES(refund.amount)} refunded on sale ${sale?.receiptNumber || ''}${actor?.name ? ` by ${actor.name}` : ''}.`,
+    title: nctx.t('refund.completedTitle', { number: refund.refundNumber }),
+    message: nctx.t('refund.completedMsg', { amount: fmtMoney(refund.amount), receipt: sale?.receiptNumber || '', by: actor?.name ? nctx.t('refund.by', { name: actor.name }) : '' }),
     branchId,
     sourceUserId: actor?._id,
     entityType: 'Refund',
@@ -312,8 +334,10 @@ async function notifyRefundCompleted(businessId, branchId, refund, sale, actor) 
  * so both sides get a detailed, personalized copy every single time.
  */
 async function notifyCreditSaleIssued(businessId, branchId, customer, cashier, { amount, saleId, receiptNumber, newBalance, creditLimit, paymentStatus }) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   const availableCredit = Math.max((creditLimit || 0) - newBalance, 0);
-  const modeLabel = paymentStatus === 'CREDIT' ? 'fully on credit' : 'partially on credit';
+  const modeLabel = nctx.t(paymentStatus === 'CREDIT' ? 'credit.fully' : 'credit.partly');
 
   const base = {
     type: 'CREDIT_SALE',
@@ -338,17 +362,13 @@ async function notifyCreditSaleIssued(businessId, branchId, customer, cashier, {
     businessId, cashier,
     {
       ...base,
-      title: `Credit sale - ${customer.name}`,
-      message:
-        `${cashier.name} sold ${formatKES(amount)} to ${customer.name} ${modeLabel} (receipt ${receiptNumber}). ` +
-        `${customer.name} now owes ${formatKES(newBalance)} of a ${formatKES(creditLimit)} limit (${formatKES(availableCredit)} still available).`,
+      title: nctx.t('credit.titleMgmt', { customer: customer.name }),
+      message: nctx.t('credit.msgMgmt', { cashier: cashier.name, amount: fmtMoney(amount), customer: customer.name, mode: modeLabel, receipt: receiptNumber, balance: fmtMoney(newBalance), limit: fmtMoney(creditLimit), available: fmtMoney(availableCredit) }),
     },
     {
       ...base,
-      title: `You issued credit - ${customer.name}`,
-      message:
-        `You sold ${formatKES(amount)} to ${customer.name} ${modeLabel} (receipt ${receiptNumber}). ` +
-        `They now owe ${formatKES(newBalance)} of a ${formatKES(creditLimit)} limit (${formatKES(availableCredit)} still available).`,
+      title: nctx.t('credit.titleOwn', { customer: customer.name }),
+      message: nctx.t('credit.msgOwn', { amount: fmtMoney(amount), customer: customer.name, mode: modeLabel, receipt: receiptNumber, balance: fmtMoney(newBalance), limit: fmtMoney(creditLimit), available: fmtMoney(availableCredit) }),
     }
   );
 }
@@ -364,14 +384,14 @@ async function notifyCreditSaleIssued(businessId, branchId, customer, cashier, {
  * management-only is correct, since the actor there IS management.
  */
 async function notifyCreditDue(businessId, customer, { outstandingBalance, creditLimit, trigger, saleId, receiptNumber, actor }) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   const atOrOverLimit = outstandingBalance >= creditLimit;
 
   const managementPayload = {
     type: 'CREDIT_DUE',
-    title: atOrOverLimit ? `Credit limit reached - ${customer.name}` : `Nearing credit limit - ${customer.name}`,
-    message: atOrOverLimit
-      ? `${customer.name} now owes ${formatKES(outstandingBalance)}, at or over their ${formatKES(creditLimit)} limit.`
-      : `${customer.name} owes ${formatKES(outstandingBalance)} of a ${formatKES(creditLimit)} limit (${Math.round((outstandingBalance / creditLimit) * 100)}%).`,
+    title: nctx.t(atOrOverLimit ? 'credit.dueTitleLimit' : 'credit.dueTitleNear', { customer: customer.name }),
+    message: nctx.t(atOrOverLimit ? 'credit.dueMsgLimit' : 'credit.dueMsgNear', { customer: customer.name, balance: fmtMoney(outstandingBalance), limit: fmtMoney(creditLimit), percent: Math.round((outstandingBalance / creditLimit) * 100) }),
     entityType: 'Customer',
     entityId: customer._id,
     data: { customerId: customer._id, outstandingBalance, creditLimit, trigger, saleId, receiptNumber },
@@ -380,10 +400,8 @@ async function notifyCreditDue(businessId, customer, { outstandingBalance, credi
   if (actor) {
     const actorPayload = {
       ...managementPayload,
-      title: atOrOverLimit ? `${customer.name} hit their credit limit` : `${customer.name} is nearing their credit limit`,
-      message: atOrOverLimit
-        ? `Heads up: after your sale, ${customer.name} now owes ${formatKES(outstandingBalance)}, at or over the ${formatKES(creditLimit)} limit set for them.`
-        : `Heads up: after your sale, ${customer.name} owes ${formatKES(outstandingBalance)} of their ${formatKES(creditLimit)} limit (${Math.round((outstandingBalance / creditLimit) * 100)}%).`,
+      title: nctx.t(atOrOverLimit ? 'credit.dueOwnTitleLimit' : 'credit.dueOwnTitleNear', { customer: customer.name }),
+      message: nctx.t(atOrOverLimit ? 'credit.dueOwnMsgLimit' : 'credit.dueOwnMsgNear', { customer: customer.name, balance: fmtMoney(outstandingBalance), limit: fmtMoney(creditLimit), percent: Math.round((outstandingBalance / creditLimit) * 100) }),
     };
     return notifyActorAndManagement(businessId, actor, managementPayload, actorPayload);
   }
@@ -399,6 +417,8 @@ async function notifyCreditDue(businessId, customer, { outstandingBalance, credi
  * detailed copy.
  */
 async function notifyCustomerPaymentReceived(businessId, branchId, customer, actor, { amount, method, reference, newBalance }) {
+  const nctx = await notifCtx(businessId);
+  const fmtMoney = nctx.fmt;
   const base = {
     type: 'CUSTOMER_PAYMENT',
     branchId,
@@ -415,21 +435,23 @@ async function notifyCustomerPaymentReceived(businessId, branchId, customer, act
     },
   };
 
+  const methodWord = i18nMethodLabel(nctx.language, method);
+  const refText = reference ? nctx.t('common.ref', { ref: reference }) : '';
   const balanceLine = newBalance > 0
-    ? `${customer.name} still owes ${formatKES(newBalance)}.`
-    : `${customer.name}'s balance is now fully cleared.`;
+    ? nctx.t('credit.stillOwes', { customer: customer.name, balance: fmtMoney(newBalance) })
+    : nctx.t('credit.balanceCleared', { customer: customer.name });
 
   return notifyActorAndManagement(
     businessId, actor,
     {
       ...base,
-      title: `Payment received - ${customer.name}`,
-      message: `${actor.name} recorded a ${formatKES(amount)} ${method} payment from ${customer.name}${reference ? ` (ref: ${reference})` : ''}. ${balanceLine}`,
+      title: nctx.t('credit.payTitleMgmt', { customer: customer.name }),
+      message: nctx.t('credit.payMsgMgmt', { actor: actor.name, amount: fmtMoney(amount), method: methodWord, customer: customer.name, ref: refText, balanceLine }),
     },
     {
       ...base,
-      title: `You recorded a payment - ${customer.name}`,
-      message: `You recorded a ${formatKES(amount)} ${method} payment from ${customer.name}${reference ? ` (ref: ${reference})` : ''}. ${balanceLine}`,
+      title: nctx.t('credit.payTitleOwn', { customer: customer.name }),
+      message: nctx.t('credit.payMsgOwn', { amount: fmtMoney(amount), method: methodWord, customer: customer.name, ref: refText, balanceLine }),
     }
   );
 }

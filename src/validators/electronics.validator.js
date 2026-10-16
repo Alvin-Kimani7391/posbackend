@@ -68,7 +68,7 @@ const actionSchema = z.object({ action: z.enum(['startWork', 'awaitParts', 'read
 const cancelRepairSchema = z.object({ reason });
 const repairPaymentSchema = z.object({
   type: z.enum(['DEPOSIT', 'PAYMENT', 'REFUND']),
-  method: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']),
+  method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']),
   amount: positiveMoney,
   reference: z.string().trim().max(100).optional(),
 });

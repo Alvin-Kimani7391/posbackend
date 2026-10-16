@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const validate = require('../middleware/validate');
+const requireCountry = require('../middleware/requireCountry');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const catchAsync = require('../utils/catchAsync');
 const { sendSuccess } = require('../utils/ApiResponse');
@@ -8,6 +9,7 @@ const AuditLog = require('../models/AuditLog');
 const v = require('../validators/smsAlerts.validator');
 
 router.use(authenticate);
+router.use(requireCountry('KE')); // Kenya-only integration (PayHero M-PESA / KRA eTIMS / Kenyan SMS)
 
 router.get('/settings', requirePermission('settings.view'), catchAsync(async (req, res) => sendSuccess(res, 200, 'SMS alert settings fetched', await alerts.getSettings(req.businessId))));
 

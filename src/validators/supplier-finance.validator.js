@@ -18,7 +18,7 @@ const supplierPaymentSchema = z.object({
   supplierId: objectId,
   branchId: objectId.optional(),
   amount: positiveMoney,
-  method: z.enum(['CASH', 'MPESA', 'BANK', 'CHEQUE', 'OTHER']).default('CASH'),
+  method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'BANK', 'CHEQUE', 'OTHER']).default('CASH'),
   reference: z.string().trim().max(100).optional(),
   paidAt: z.coerce.date().optional(),
   notes: z.string().trim().max(500).optional(),

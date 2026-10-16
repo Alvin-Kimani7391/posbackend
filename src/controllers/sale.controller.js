@@ -75,9 +75,9 @@ exports.getInvoice = catchAsync(async (req, res) => {
   const isElevated = req.user.role === ROLES.OWNER || req.user.role === ROLES.ADMIN || hasPermission(req.user, 'reports.view');
   if (!isElevated && String(data.sale.cashierId) !== String(req.user._id)) throw ApiError.forbidden('You can only print invoices for your own sales', 'FORBIDDEN');
   const { format = 'html', copy = 'ORIGINAL', paper = 'A4', autoprint } = req.query;
-  if (format === 'json') return sendSuccess(res, 200, 'Invoice fetched', { invoice: invoiceService.toJson(data) });
+  if (format === 'json') return sendSuccess(res, 200, 'Invoice fetched', { invoice: invoiceService.toJson(data, { lang: req.langExplicit ? req.lang : undefined }) });
   res.set('Content-Type', 'text/html; charset=utf-8');
   // the page carries its own print button / auto-print script, so it gets its own (still locked-down) CSP
   res.set('Content-Security-Policy', "default-src 'none'; img-src * data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
-  return res.status(200).send(invoiceService.renderInvoiceHtml(data, { copy, paper, autoPrint: autoprint === true }));
+  return res.status(200).send(invoiceService.renderInvoiceHtml(data, { copy, paper, autoPrint: autoprint === true, lang: req.langExplicit ? req.lang : undefined }));
 });

@@ -1,5 +1,5 @@
 const { Schema, model } = require('mongoose');
-const { PHASE_TYPES, PRICING_MODES, TIER_METRICS } = require('../constants/billing');
+const { PHASE_TYPES, PRICING_MODES, TIER_METRICS, BILLING_CURRENCIES } = require('../constants/billing');
 
 const tierSchema = new Schema(
   {
@@ -38,6 +38,9 @@ const billingPlanSchema = new Schema(
     key: { type: String, required: true, unique: true, trim: true, lowercase: true },
     name: { type: String, required: true, trim: true },
     description: { type: String, trim: true, default: '' },
+    // Every amount in the plan's phases/tiers is in this currency. A business is only ever put on a plan of its own currency.
+  currency: { type: String, enum: BILLING_CURRENCIES, default: 'KES' }, // currency of every amount on this document
+
     isActive: { type: Boolean, default: true },
     phases: { type: [phaseSchema], validate: [(v) => v.length > 0, 'A plan needs at least one phase'] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },

@@ -1,5 +1,5 @@
 const { Schema, model } = require('mongoose');
-const { INVOICE_STATUSES, INVOICE_KINDS } = require('../constants/billing');
+const { INVOICE_STATUSES, INVOICE_KINDS, BILLING_CURRENCIES } = require('../constants/billing');
 
 const invoiceSchema = new Schema(
   {
@@ -7,6 +7,7 @@ const invoiceSchema = new Schema(
     subscriptionId: { type: Schema.Types.ObjectId, ref: 'Subscription', required: true },
     number: { type: String, required: true, unique: true },
     kind: { type: String, enum: INVOICE_KINDS, required: true },
+    currency: { type: String, enum: BILLING_CURRENCIES, default: 'KES' }, // currency of every amount on this document
 
     planRun: { type: Number, default: 1 },
     phaseKey: { type: String },

@@ -54,13 +54,17 @@ const authenticate = catchAsync(async (req, res, next) => {
 
   // A suspended business is locked out on its very next request,
   // even with a still-valid access token.
-  const business = await Business.findById(user.businessId).select('status').lean();
+  const business = await Business.findById(user.businessId).select('status language countryCode currency').lean();
   if (!business || business.status !== 'active') {
     throw ApiError.forbidden('This business account is suspended. Contact support.', 'BUSINESS_SUSPENDED');
   }
 
   req.user = user;
   req.businessId = user.businessId; // <-- authoritative source of truth everywhere downstream
+  req.currency = business.currency || 'KES';
+  req.countryCode = business.countryCode || 'KE';
+  // The app's explicit choice wins; otherwise the user's own language, then the business default.
+  if (!req.langExplicit) req.lang = user.language || business.language || req.lang || 'en';
   next();
 });
 

@@ -12,7 +12,7 @@ const settingsSvc = require('../services/billing.settings');
 const lockCache = require('../utils/lockCache');
 
 const ALWAYS_ALLOWED = [
-  /^\/auth(\/|$)/, /^\/billing(\/|$)/, /^\/announcements(\/|$)/, /^\/notifications(\/|$)/,
+  /^\/meta(\/|$)/, /^\/auth(\/|$)/, /^\/billing(\/|$)/, /^\/announcements(\/|$)/, /^\/notifications(\/|$)/,
   /^\/tickets(\/|$)/, /^\/admin(\/|$)/, /^\/payments\/mpesa\/(callback|c2b)(\/|$)/,
   /^\/sms-hooks(\/|$)/,
     /^\/sync(\/|$)/,   // offline sales already happened; a locked shop must still be able to deliver them (flagged at ingest)

@@ -36,7 +36,7 @@ const mpesaClaimSchema = z.object({
 
 const offlinePaymentSchema = z
   .object({
-    method: z.enum(['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER']),
+    method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']),
     amountCents: positiveCents,
     amountTenderedCents: cents.optional(),
     reference: z.string().trim().max(60).optional(),

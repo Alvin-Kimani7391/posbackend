@@ -1,10 +1,11 @@
 const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-const kes = (cents) => {
-  const n = Number(cents || 0) / 100;
-  return `KES ${n.toLocaleString('en-KE', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
-};
+const { formatMoney } = require('./currency');
+
+/** Amount in cents -> "KES 1,250.50" / "TZS 15,000" in the given currency (default KES for legacy documents). */
+const money = (cents, currency = 'KES') => formatMoney(cents, currency || 'KES');
+const kes = (cents) => money(cents, 'KES'); // kept for older callers
 
 const fmtDate = (d) => (d ? new Intl.DateTimeFormat('en-KE', { dateStyle: 'medium', timeZone: 'Africa/Nairobi' }).format(new Date(d)) : '-');
 
@@ -30,4 +31,4 @@ ${footnote ? `<p style="margin:16px 0 0;font-size:12px;color:#667085">${esc(foot
 </td></tr></table></td></tr></table></body></html>`;
 }
 
-module.exports = { esc, kes, fmtDate, renderEmail };
+module.exports = { esc, kes, money, fmtDate, renderEmail };

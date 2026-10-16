@@ -54,12 +54,12 @@ function evaluateRetailPrice({ requestedCents, existingCents = 0, wholesaleFloor
   const changed = given && priceCents !== Math.round(existingCents || 0);
   let error = null;
   if (priceCents <= floorCents) {
-    const kes = (floorCents / 100).toFixed(2);
+    const kes = (floorCents / 100).toFixed(2); // amount in the business's own currency
     error = {
       code: given ? 'RETAIL_PRICE_TOO_LOW' : 'RETAIL_PRICE_REQUIRED',
       message: given
-        ? `The retail price must be higher than the ${hasW ? 'wholesale price' : 'cost'} of KES ${kes} per unit`
-        : `Set a retail selling price: the current one is not higher than the ${hasW ? 'wholesale price' : 'cost'} of KES ${kes} per unit`,
+        ? `The retail price must be higher than the ${hasW ? 'wholesale price' : 'cost'} of ${kes} per unit`
+        : `Set a retail selling price: the current one is not higher than the ${hasW ? 'wholesale price' : 'cost'} of ${kes} per unit`,
     };
   }
   return { priceCents, changed, floorCents, floorKind, error };

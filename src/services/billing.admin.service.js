@@ -13,6 +13,7 @@ const withTx = require('../utils/withTx');
 const lockCache = require('../utils/lockCache');
 const { encrypt, maskedHint, decryptJson } = require('../utils/crypto');
 const { addDays, monthStartEAT, DAY } = require('../utils/billingDates');
+const { DEFAULT_BILLING_CURRENCY, BILLING_CURRENCIES } = require('../constants/billing');
 const payhero = require('../integrations/mpesa/payhero.provider');
 const settingsSvc = require('./billing.settings');
 const notify = require('./billing.notify');
@@ -42,8 +43,9 @@ async function overview() {
   const [settings, byStatus, arrears, collected, pendingVerification, trialsEnding, recentPayments, topDefaulters] = await Promise.all([
     settingsSvc.get({ fresh: true }),
     Subscription.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
-    Subscription.aggregate([{ $match: { arrearsCents: { $gt: 0 } } }, { $group: { _id: null, total: { $sum: '$arrearsCents' }, n: { $sum: 1 } } }]),
-    SubscriptionPayment.aggregate([{ $match: { status: 'SUCCESS', settledAt: { $gte: monthStart } } }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 } } }]),
+    // Money is grouped per currency: KES and TZS amounts are never added together.
+    Subscription.aggregate([{ $match: { arrearsCents: { $gt: 0 } } }, { $group: { _id: { $ifNull: ['$currency', 'KES'] }, total: { $sum: '$arrearsCents' }, n: { $sum: 1 } } }]),
+    SubscriptionPayment.aggregate([{ $match: { status: 'SUCCESS', settledAt: { $gte: monthStart } } }, { $group: { _id: { $ifNull: ['$currency', 'KES'] }, total: { $sum: '$amount' }, n: { $sum: 1 } } }]),
     SubscriptionPayment.countDocuments({ status: 'SUBMITTED' }),
     Subscription.countDocuments({ status: 'TRIALING', phaseEndsAt: { $gt: now, $lte: addDays(now, 3) } }),
     SubscriptionPayment.find({ status: { $in: ['SUCCESS', 'SUBMITTED'] } }).sort({ createdAt: -1 }).limit(8).populate('businessId', 'name').select('-rawCallback -rawInitiateResponse -mpesaMessage').lean(),
@@ -52,11 +54,18 @@ async function overview() {
   return {
     billingEnabled: !!settings.billingEnabled,
     counts: Object.fromEntries(byStatus.map((s) => [s._id, s.n])),
-    arrears: { totalCents: arrears[0]?.total || 0, businesses: arrears[0]?.n || 0 },
-    collectedThisMonth: { totalCents: collected[0]?.total || 0, payments: collected[0]?.n || 0 },
+    // totalCents / businesses / payments below are KES (kept for older screens); byCurrency has every currency.
+    arrears: {
+      totalCents: arrears.find((r) => r._id === 'KES')?.total || 0, businesses: arrears.find((r) => r._id === 'KES')?.n || 0,
+      byCurrency: Object.fromEntries(BILLING_CURRENCIES.map((c) => [c, { totalCents: arrears.find((r) => r._id === c)?.total || 0, businesses: arrears.find((r) => r._id === c)?.n || 0 }])),
+    },
+    collectedThisMonth: {
+      totalCents: collected.find((r) => r._id === 'KES')?.total || 0, payments: collected.find((r) => r._id === 'KES')?.n || 0,
+      byCurrency: Object.fromEntries(BILLING_CURRENCIES.map((c) => [c, { totalCents: collected.find((r) => r._id === c)?.total || 0, payments: collected.find((r) => r._id === c)?.n || 0 }])),
+    },
     pendingVerification, trialsEndingSoon: trialsEnding,
     recentPayments: recentPayments.map((p) => ({ ...p, businessName: p.businessId?.name, businessId: p.businessId?._id })),
-    topDefaulters: topDefaulters.map((s) => ({ businessId: s.businessId?._id, businessName: s.businessId?.name, arrearsCents: s.arrearsCents, oldestOverdueAt: s.oldestOverdueAt, status: s.status })),
+    topDefaulters: topDefaulters.map((s) => ({ businessId: s.businessId?._id, businessName: s.businessId?.name, currency: s.currency || DEFAULT_BILLING_CURRENCY, arrearsCents: s.arrearsCents, oldestOverdueAt: s.oldestOverdueAt, status: s.status })),
   };
 }
 
@@ -65,6 +74,7 @@ async function listSubscriptions(q) {
   const { page, limit } = paging(q);
   const match = {};
   if (q.status) match.status = q.status;
+  if (q.currency) match.currency = q.currency === 'KES' ? { $in: ['KES', null] } : q.currency;
   if (q.arrears === '1') match.arrearsCents = { $gt: 0 };
   if (q.search) {
     const re = new RegExp(esc(q.search), 'i');
@@ -78,7 +88,7 @@ async function listSubscriptions(q) {
   ]);
   const now = Date.now();
   const items = rows.map((s) => ({
-    _id: s._id, businessId: s.businessId?._id, business: s.businessId, status: s.status, planName: s.planName, phaseName: s.phaseName,
+    _id: s._id, businessId: s.businessId?._id, business: s.businessId, currency: s.currency || DEFAULT_BILLING_CURRENCY, status: s.status, planName: s.planName, phaseName: s.phaseName,
     arrearsCents: s.arrearsCents, openBalanceCents: s.openBalanceCents, creditCents: s.creditCents,
     daysOverdue: s.oldestOverdueAt ? Math.max(Math.floor((now - new Date(s.oldestOverdueAt)) / DAY), 0) : 0,
     lastPaymentAt: s.lastPaymentAt, trialEndsAt: s.trialEndsAt, locked: !!s.lock?.active, lockReason: s.lock?.reason,
@@ -116,14 +126,19 @@ async function backfill(admin, { planKey }) {
   const have = await Subscription.distinct('businessId');
   const rows = await Business.find({ _id: { $nin: have }, status: { $ne: 'closed' } }).select('_id').lean();
   let started = 0;
-  for (const b of rows) { await engine.startSubscription(b._id, { planKey }); started += 1; }
+  for (const b of rows) {
+    // A named plan is only used for businesses paying in that plan's currency; the rest get their own country's default.
+    const cur = await engine.currencyOf(b._id);
+    const chosen = planKey && (await BillingPlan.exists({ key: planKey, currency: cur === 'KES' ? { $in: ['KES', null] } : cur })) ? planKey : undefined;
+    await engine.startSubscription(b._id, { planKey: chosen }); started += 1;
+  }
   await audit(admin, null, 'admin.billing.backfill', 'Subscription', undefined, { started, planKey });
   return { started };
 }
 
 async function changePlan(admin, businessId, { planKey, startPhaseKey }) {
   const sub = await subFor(businessId);
-  const plan = await engine.resolvePlan(planKey);
+  const plan = await engine.resolvePlan(planKey, sub.currency || DEFAULT_BILLING_CURRENCY);
   let idx = 0;
   if (startPhaseKey) {
     idx = plan.phases.findIndex((p) => p.key === startPhaseKey);
@@ -189,7 +204,7 @@ async function createInvoice(admin, businessId, { description, amountCents, dueD
   const due = dueDate ? new Date(dueDate) : new Date();
   const inv = await Invoice.create({
     businessId, subscriptionId: sub._id, number: `BIL-ADHOC-${require('crypto').randomBytes(4).toString('hex').toUpperCase()}`,
-    kind: 'ONE_OFF', planRun: sub.planRun, phaseKey: 'adhoc', description, dueDate: due,
+    kind: 'ONE_OFF', currency: sub.currency || DEFAULT_BILLING_CURRENCY, planRun: sub.planRun, phaseKey: 'adhoc', description, dueDate: due,
     baseAmount: amountCents, amount: amountCents, reminderKeys: due <= new Date() ? ['due_now'] : [], createdBy: `ADMIN:${admin._id}`,
   });
   await engine.applyCredit(sub._id);
@@ -241,7 +256,7 @@ async function voidInvoice(admin, invoiceId, { reason }) {
 async function recordPayment(admin, businessId, { amountCents, method, reference, note, receiptCode }) {
   const sub = await subFor(businessId);
   const payment = await SubscriptionPayment.create({
-    businessId, subscriptionId: sub._id, initiatedBy: admin._id, source: 'ADMIN', method, status: 'SUCCESS',
+    businessId, subscriptionId: sub._id, currency: sub.currency || DEFAULT_BILLING_CURRENCY, initiatedBy: admin._id, source: 'ADMIN', method, status: 'SUCCESS',
     amount: amountCents, claimedAmount: amountCents, reference: `BLA-${require('crypto').randomBytes(6).toString('hex').toUpperCase()}`,
     resultDesc: reference || '', settledAt: new Date(),
     ...(receiptCode ? { mpesaReceiptNumber: receiptCode.toUpperCase(), receiptKey: receiptCode.toUpperCase() } : {}),
@@ -260,6 +275,7 @@ async function listPayments(q) {
   const match = {};
   if (q.status) match.status = q.status;
   if (q.method) match.method = q.method;
+  if (q.currency) match.currency = q.currency === 'KES' ? { $in: ['KES', null] } : q.currency;
   if (q.businessId) match.businessId = new mongoose.Types.ObjectId(q.businessId);
   const [rows, total] = await Promise.all([
     SubscriptionPayment.find(match).sort(q.status === 'SUBMITTED' ? { createdAt: 1 } : { createdAt: -1 }).skip((page - 1) * limit).limit(limit)
@@ -303,7 +319,7 @@ async function sendReminderNow(admin, businessId) {
 
 /* ================================== plans ================================== */
 async function listPlans() {
-  await engine.ensureDefaultPlan();
+  await Promise.all(BILLING_CURRENCIES.map((c) => engine.ensureDefaultPlan(c)));
   const [plans, counts] = await Promise.all([
     BillingPlan.find().sort({ createdAt: 1 }).lean(),
     Subscription.aggregate([{ $group: { _id: '$planId', n: { $sum: 1 } } }]),
@@ -341,6 +357,10 @@ async function updatePlan(admin, id, body) {
     if (prev && prev.type !== next.type) throw ApiError.conflict(`Phase "${u._id}" is in use - its type cannot be changed.`, 'PLAN_PHASE_IN_USE');
   }
   const before = plan.toObject().phases;
+  if (body.currency && body.currency !== (plan.currency || DEFAULT_BILLING_CURRENCY)) {
+    if (await Subscription.exists({ planId: plan._id })) throw ApiError.conflict('Businesses are already on this plan, so its currency cannot be changed. Create a new plan instead.', 'PLAN_CURRENCY_IN_USE');
+    plan.currency = body.currency;
+  }
   plan.name = body.name; plan.description = body.description || ''; plan.phases = body.phases; plan.updatedBy = admin._id;
   if (body.isActive !== undefined) plan.isActive = body.isActive;
   await plan.save();
@@ -352,7 +372,7 @@ async function setPlanActive(admin, id, isActive) {
   const plan = await BillingPlan.findById(id);
   if (!plan) throw ApiError.notFound('Plan not found');
   const settings = await settingsSvc.get();
-  if (!isActive && plan.key === settings.defaultPlanKey) throw ApiError.badRequest('Pick another default plan before deactivating this one.', 'PLAN_IS_DEFAULT');
+  if (!isActive && (plan.key === settings.defaultPlanKey || plan.key === settings.defaultPlanKeyTZ)) throw ApiError.badRequest('Pick another default plan before deactivating this one.', 'PLAN_IS_DEFAULT');
   plan.isActive = isActive; await plan.save();
   await audit(admin, null, 'admin.billing.plan.active', 'BillingPlan', plan._id, { isActive });
   return plan;
@@ -371,13 +391,18 @@ async function updateSettings(admin, body) {
   const merge = (target, patch, label) => Object.keys(patch || {}).forEach((k) => { if (patch[k] !== undefined) { target[k] = patch[k]; changed.push(`${label}.${k}`); } });
 
   if (body.defaultPlanKey !== undefined) {
-    if (!(await BillingPlan.exists({ key: body.defaultPlanKey, isActive: true }))) throw ApiError.badRequest('That plan does not exist or is inactive', 'PLAN_NOT_FOUND');
+    if (!(await BillingPlan.exists({ key: body.defaultPlanKey, isActive: true, currency: { $in: ['KES', null] } }))) throw ApiError.badRequest('That plan does not exist, is inactive, or is not priced in KES', 'PLAN_NOT_FOUND');
     s.defaultPlanKey = body.defaultPlanKey; changed.push('defaultPlanKey');
+  }
+  if (body.defaultPlanKeyTZ !== undefined) {
+    if (!(await BillingPlan.exists({ key: body.defaultPlanKeyTZ, isActive: true, currency: 'TZS' }))) throw ApiError.badRequest('That plan does not exist, is inactive, or is not priced in TZS', 'PLAN_NOT_FOUND');
+    s.defaultPlanKeyTZ = body.defaultPlanKeyTZ; changed.push('defaultPlanKeyTZ');
   }
   if (body.billingEnabled !== undefined) {
     if (body.billingEnabled && !(await BillingPlan.exists({ key: s.defaultPlanKey, isActive: true }))) {
       throw ApiError.badRequest('Create and activate the default plan before enabling billing.', 'BILLING_NO_PLAN');
     }
+    await engine.ensureDefaultPlan('TZS'); // Tanzanian businesses need their TZS plan as soon as billing is on
     s.billingEnabled = body.billingEnabled; changed.push('billingEnabled');
   }
   if (body.stk) {
@@ -390,6 +415,7 @@ async function updateSettings(admin, body) {
     s.stk.updatedBy = admin._id;
   }
   merge(s.manual, body.manual, 'manual');
+  merge(s.manualTz, body.manualTz, 'manualTz');
   merge(s.enforcement, body.enforcement, 'enforcement');
   merge(s.reminders, body.reminders, 'reminders');
   merge(s.contact, body.contact, 'contact');

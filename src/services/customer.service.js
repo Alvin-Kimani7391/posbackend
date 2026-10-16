@@ -6,12 +6,13 @@ const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { normalizePhone } = require('../utils/phone');
+const { countryCodeOf } = require('../utils/businessContext');
 const { escapeRegex } = require('./crm.engine');
 const notificationService = require('./notification.service');
 
 /** Throws a clear 409 when another customer in this business already owns this phone number. */
 async function assertPhoneFree(businessId, phone, excludeId) {
-  const n = normalizePhone(phone);
+  const n = normalizePhone(phone, await countryCodeOf(businessId));
   if (!n) return;
   const q = { businessId, phoneNormalized: n };
   if (excludeId) q._id = { $ne: excludeId };

@@ -2,6 +2,7 @@ const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 const ApiError = require('../utils/ApiError');
 const { normalizePhone } = require('../utils/phone');
+const { countryCodeOf } = require('../utils/businessContext');
 
 const LIFECYCLES = ['prospect', 'new', 'returning', 'frequent', 'vip', 'inactive'];
 
@@ -75,19 +76,22 @@ customerSchema.index({ businessId: 1, 'crm.lastPurchaseAt': -1 });
 moneyFields(customerSchema, ['creditLimit', 'outstandingBalance']);
 
 /* ---- keep phoneNormalized in sync no matter which code path writes the phone ---- */
-customerSchema.pre('validate', function setPhoneNormalized(next) {
+// The same local number (0712...) is valid in Kenya AND Tanzania, so the business's country decides how it is read.
+customerSchema.pre('validate', async function setPhoneNormalized() {
   if (this.isNew || this.isModified('phone')) {
-    const n = normalizePhone(this.phone);
+    const country = await countryCodeOf(this.businessId);
+    const n = normalizePhone(this.phone, country);
     this.phoneNormalized = n || undefined;
   }
-  next();
 });
 
-function syncPhoneOnUpdate(next) {
+async function syncPhoneOnUpdate() {
   const u = this.getUpdate() || {};
   const target = u.$set || u;
   if (Object.prototype.hasOwnProperty.call(target, 'phone')) {
-    const n = normalizePhone(target.phone);
+    const filter = (this.getFilter && this.getFilter()) || {};
+    const country = await countryCodeOf(filter.businessId);
+    const n = normalizePhone(target.phone, country);
     if (n) {
       target.phoneNormalized = n;
       if (u.$unset) delete u.$unset.phoneNormalized;
@@ -97,7 +101,6 @@ function syncPhoneOnUpdate(next) {
     }
     this.setUpdate(u);
   }
-  next();
 }
 customerSchema.pre('findOneAndUpdate', syncPhoneOnUpdate);
 customerSchema.pre('updateOne', syncPhoneOnUpdate);

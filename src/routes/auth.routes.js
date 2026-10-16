@@ -11,6 +11,7 @@ const {
   forgotPasswordSchema,
   resetPasswordSchema,
   changePasswordSchema,
+  languageSchema,
 } = require('../validators/auth.validator');
 
 router.post('/register', authLimiter, validate({ body: registerSchema }), controller.register);
@@ -21,6 +22,7 @@ router.post('/logout', authenticate, controller.logout);
 router.post('/forgot-password', authLimiter, validate({ body: forgotPasswordSchema }), controller.forgotPassword);
 router.post('/reset-password', authLimiter, validate({ body: resetPasswordSchema }), controller.resetPassword);
 router.post('/change-password', authenticate, validate({ body: changePasswordSchema }), controller.changePassword);
+router.put('/language', authenticate, validate({ body: languageSchema }), controller.setLanguage);
 router.get('/me', authenticate, controller.me);
 
 module.exports = router;

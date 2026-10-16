@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const ApiError = require('../utils/ApiError');
+const { errorMessage } = require('../i18n');
 
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
@@ -41,10 +42,14 @@ function errorHandler(err, req, res, next) {
     stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
   });
 
+  // Swahili users get the message in Swahili when the error code has a translation (English otherwise).
+  const localised = errorMessage(req.lang, code || 'INTERNAL_ERROR');
+
   res.status(statusCode || 500).json({
     success: false,
-    message,
+    message: localised || message,
     code: code || 'INTERNAL_ERROR',
+    ...(localised ? { messageEn: message } : {}),
     errors: errors || [],
   });
 }

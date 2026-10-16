@@ -28,7 +28,7 @@ const refundSchema = new Schema(
     amount: { type: Number, required: true }, // integer cents, sum of items[].amount
 
     reason: { type: String, required: true, trim: true },
-    paymentMethod: { type: String, enum: ['CASH', 'MPESA', 'CARD', 'BANK', 'OTHER'], required: true }, // how the money is being given back
+    paymentMethod: { type: String, enum: ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER'], required: true }, // how the money is being given back
 
     status: { type: String, enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'COMPLETED'], default: 'REQUESTED' },
     requestedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },

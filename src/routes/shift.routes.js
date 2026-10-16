@@ -6,6 +6,7 @@ const { openShiftSchema, closeShiftSchema, listShiftsQuery, currentShiftQuery, i
 
 router.use(authenticate);
 
+router.get('/denominations', requirePermission('shifts.view'), controller.denominations);
 router.get('/current', requirePermission('shifts.view'), validate({ query: currentShiftQuery }), controller.current);
 router.get('/', requirePermission('shifts.view'), validate({ query: listShiftsQuery }), controller.list);
 router.post('/open', requirePermission('shifts.open'), validate({ body: openShiftSchema }), controller.open);

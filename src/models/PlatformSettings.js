@@ -5,7 +5,8 @@ const platformSettingsSchema = new Schema(
   {
     key: { type: String, default: 'billing', unique: true },
     billingEnabled: { type: Boolean, default: false }, // master switch: off = no invoices, emails, locks
-    defaultPlanKey: { type: String, default: 'standard' },
+    defaultPlanKey: { type: String, default: 'standard' }, // plan new KES (Kenya) businesses start on
+    defaultPlanKeyTZ: { type: String, default: 'standard-tz' }, // plan new TZS (Tanzania) businesses start on
 
     stk: {
       enabled: { type: Boolean, default: false },
@@ -22,6 +23,17 @@ const platformSettingsSchema = new Schema(
       number: { type: String, trim: true }, // till / paybill number shown to owners
       accountName: { type: String, trim: true }, // name that appears on the M-PESA confirmation
       accountReference: { type: String, trim: true }, // e.g. "Use your business name as account"
+      phone: { type: String, trim: true },
+      instructions: { type: String, maxlength: 1000, default: '' },
+    },
+
+    // Where Tanzanian businesses send their subscription payment (M-Pesa / Mixx by Yas / Airtel Money Lipa namba, or bank).
+    manualTz: {
+      enabled: { type: Boolean, default: true },
+      methodLabel: { type: String, default: 'Lipa Namba (M-Pesa / Mixx by Yas / Airtel Money)', trim: true },
+      number: { type: String, trim: true },
+      accountName: { type: String, trim: true },
+      accountReference: { type: String, trim: true },
       phone: { type: String, trim: true },
       instructions: { type: String, maxlength: 1000, default: '' },
     },

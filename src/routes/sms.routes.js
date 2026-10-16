@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const multer = require('multer');
+const requireCountry = require('../middleware/requireCountry');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const catchAsync = require('../utils/catchAsync');
 const { sendSuccess } = require('../utils/ApiResponse');
@@ -13,6 +14,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 const docs = upload.fields([{ name: 'legal', maxCount: 1 }, { name: 'signature', maxCount: 1 }, { name: 'stamp', maxCount: 1 }]);
 
 router.use(authenticate);
+router.use(requireCountry('KE')); // Kenya-only integration (PayHero M-PESA / KRA eTIMS / Kenyan SMS)
 const view = requirePermission('reports.view');
 const send = requirePermission('customers.update');
 const pay = requirePermission('billing.pay');

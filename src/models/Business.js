@@ -2,6 +2,7 @@ const { Schema, model } = require('mongoose');
 
 const { BUSINESS_TYPES, FEATURE_KEYS } = require('../constants/businessFeatures');
 const { ONBOARDING_STEP_KEYS, ONBOARDING_STEP_STATUSES } = require('../constants/onboarding');
+const { COUNTRY_CODES, LANGUAGES, getCountry } = require('../constants/countries');
 
 const featureSettingsSchema = new Schema(
   Object.fromEntries(FEATURE_KEYS.map((k) => [k, { type: Boolean, default: false }])),
@@ -46,9 +47,18 @@ const businessSchema = new Schema(
     address: { type: String, trim: true },
     county: { type: String, trim: true },
     town: { type: String, trim: true },
+    // Country is chosen at onboarding and drives currency, timezone, denominations, VAT default and phone format
+    // (constants/countries.js). `country` is the display name, kept in sync with `countryCode`.
+    countryCode: { type: String, enum: COUNTRY_CODES, default: 'KE' },
+    // true once the owner has actively chosen the country (at sign-up, or via the one-time prompt shown to businesses
+    // that existed before Tanzania support). Until then the app asks the owner to choose.
+    countryConfirmed: { type: Boolean, default: false },
     country: { type: String, default: 'Kenya' },
+    // Default language (receipts, invoices, notifications, emails). Each user can override it. Legacy = English.
+    language: { type: String, enum: LANGUAGES, default: 'en' },
     taxPin: { type: String, trim: true },
     kraPin: { type: String, trim: true },
+    vrn: { type: String, trim: true }, // Tanzania VAT Registration Number (TIN goes in taxPin)
     vatRegistered: { type: Boolean, default: false },
     currency: { type: String, default: 'KES' },
     timezone: { type: String, default: 'Africa/Nairobi' },
@@ -85,6 +95,7 @@ const businessSchema = new Schema(
     paymentSettings: {
       acceptCash: { type: Boolean, default: true },
       acceptMpesa: { type: Boolean, default: true },
+      acceptMobileMoney: { type: Boolean, default: false }, // M-Pesa/Mixx/Airtel/HaloPesa recorded by reference (Tanzania)
       acceptCard: { type: Boolean, default: false },
       acceptBank: { type: Boolean, default: false },
       acceptCredit: { type: Boolean, default: false },
@@ -110,6 +121,7 @@ const businessSchema = new Schema(
         sessionHours: { type: Number, default: 12, min: 1, max: 24 },
         maxPendingSales: { type: Number, default: 200, min: 1, max: 5000 },
         maxPendingValueCents: { type: Number, default: 20000000, min: 0 },
+        maxManualMpesaCents: { type: Number, min: 0 }, // per-currency cap; unset = utils/offlinePolicy default
         allowCredit: { type: Boolean, default: false },
         allowManualMpesa: { type: Boolean, default: false },
         allowCard: { type: Boolean, default: false },
@@ -163,6 +175,25 @@ const businessSchema = new Schema(
 
 businessSchema.index({ name: 1 });
 businessSchema.index({ kraPin: 1 });
+
+/**
+ * Currency integrity. A business has exactly ONE currency, fixed by its country; every stored amount is in it,
+ * so books, shifts and reports can never mix units. Country name/currency/timezone are kept consistent with
+ * countryCode, and country/currency cannot change on a live business unless country.service#changeCountry
+ * (which sets $locals.allowCountryChange after proving there is no money data yet) does it.
+ */
+businessSchema.pre('validate', function enforceCountryCurrency(next) {
+  if (!this.isNew && (this.isModified('countryCode') || this.isModified('currency')) && !(this.$locals && this.$locals.allowCountryChange)) {
+    return next(new Error('Country and currency cannot be changed on an existing business'));
+  }
+  if (this.isNew || this.isModified('countryCode')) {
+    const profile = getCountry(this.countryCode);
+    this.country = profile.name;
+    this.currency = profile.currency;
+    if (this.isNew && !this.isModified('timezone')) this.timezone = profile.timezone;
+  }
+  return next();
+});
 
 module.exports = model('Business', businessSchema);
 module.exports.BUSINESS_TYPES = BUSINESS_TYPES;

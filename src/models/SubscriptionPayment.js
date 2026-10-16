@@ -1,5 +1,5 @@
 const { Schema, model } = require('mongoose');
-const { PAYMENT_METHODS, PAYMENT_STATUSES } = require('../constants/billing');
+const { PAYMENT_METHODS, PAYMENT_STATUSES, BILLING_CURRENCIES } = require('../constants/billing');
 
 /**
  * One payment attempt toward a business's platform subscription.
@@ -13,6 +13,7 @@ const subscriptionPaymentSchema = new Schema(
     subscriptionId: { type: Schema.Types.ObjectId, ref: 'Subscription', required: true, index: true },
     initiatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     source: { type: String, enum: ['OWNER', 'ADMIN'], default: 'OWNER' },
+    currency: { type: String, enum: BILLING_CURRENCIES, default: 'KES' }, // currency of every amount on this document
 
     method: { type: String, enum: PAYMENT_METHODS, required: true },
     status: { type: String, enum: PAYMENT_STATUSES, required: true, index: true },
@@ -26,7 +27,8 @@ const subscriptionPaymentSchema = new Schema(
     checkoutRequestId: { type: String },
     callbackToken: { type: String, select: false },
 
-    mpesaReceiptNumber: { type: String },
+    mpesaReceiptNumber: { type: String }, // the mobile-money transaction code (M-PESA code in Kenya; any provider's code in Tanzania)
+    provider: { type: String, trim: true }, // TZ manual payments: which network/bank the owner paid with
     receiptKey: { type: String, unique: true, sparse: true }, // set only while a code is "in use" => blocks double submission
     mpesaMessage: { type: String, maxlength: 1000 },
     parsed: { type: Schema.Types.Mixed }, // { code, amountCents, recipient }

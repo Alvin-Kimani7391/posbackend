@@ -6,7 +6,9 @@ const SubscriptionPayment = require('../models/SubscriptionPayment');
 const ApiError = require('../utils/ApiError');
 const { decryptJson } = require('../utils/crypto');
 const { parseMpesaMessage, looksLikeReceipt } = require('../utils/mpesaMessage');
-const { LIMITS } = require('../constants/billing');
+const { parseTzMessage, looksLikeCode } = require('../utils/mobileMoneyMessage');
+const { LIMITS, DEFAULT_BILLING_CURRENCY, STK_CURRENCIES, MANUAL_MAX_CENTS_BY_CURRENCY } = require('../constants/billing');
+const { formatMoney } = require('../utils/currency');
 const payhero = require('../integrations/mpesa/payhero.provider');
 const settingsSvc = require('./billing.settings');
 const notify = require('./billing.notify');
@@ -29,13 +31,14 @@ async function stkConfig() {
 function toClient(p) {
   const o = p.toObject ? p.toObject() : p;
   let message = '';
+  const tz = o.currency === 'TZS';
   if (o.status === 'PENDING') message = 'Waiting for the customer to enter their M-PESA PIN…';
   else if (o.status === 'SUBMITTED') message = 'Submitted - waiting for verification.';
-  else if (o.status === 'SUCCESS') message = o.mpesaReceiptNumber ? `Confirmed - M-PESA code ${o.mpesaReceiptNumber}` : 'Confirmed - payment received';
+  else if (o.status === 'SUCCESS') message = o.mpesaReceiptNumber ? `Confirmed - ${tz ? 'transaction' : 'M-PESA'} code ${o.mpesaReceiptNumber}` : 'Confirmed - payment received';
   else if (o.status === 'REJECTED') message = o.review?.note || 'Payment was not approved.';
   else message = o.resultDesc || 'Payment was not completed.';
   return {
-    id: o._id, method: o.method, status: o.status, amount: o.amount, claimedAmount: o.claimedAmount, reference: o.reference,
+    id: o._id, currency: o.currency || DEFAULT_BILLING_CURRENCY, provider: o.provider || null, method: o.method, status: o.status, amount: o.amount, claimedAmount: o.claimedAmount, reference: o.reference,
     mpesaReceiptNumber: o.mpesaReceiptNumber || null, failureType: o.failureType || null, message,
     createdAt: o.createdAt, settledAt: o.settledAt || null, allocations: o.allocations || [], creditAddedCents: o.creditAddedCents || 0,
   };
@@ -47,6 +50,9 @@ async function initiateStk(businessId, user, { phone, amountCents }) {
   const sub = await Subscription.findOne({ businessId });
   if (!sub) throw ApiError.notFound('No subscription found for this business');
   if (sub.status === 'CANCELLED') throw ApiError.badRequest('This subscription is cancelled. Contact support.', 'SUBSCRIPTION_CANCELLED');
+  if (!STK_CURRENCIES.includes(sub.currency || DEFAULT_BILLING_CURRENCY)) {
+    throw ApiError.badRequest('Online STK payment is only available in Kenya. Pay to the mobile-money number shown on the billing page and submit the confirmation message.', 'BILLING_STK_UNAVAILABLE_COUNTRY');
+  }
 
   const { channelId, credentials } = await stkConfig();
   const base = String(process.env.PUBLIC_API_BASE_URL || '').trim().replace(/\/+$/, '');
@@ -61,7 +67,7 @@ async function initiateStk(businessId, user, { phone, amountCents }) {
   const reference = `BLP-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
   const callbackToken = crypto.randomBytes(24).toString('hex');
   const payment = await SubscriptionPayment.create({
-    businessId, subscriptionId: sub._id, initiatedBy: user._id, source: 'OWNER', method: 'STK', status: 'PENDING',
+    businessId, subscriptionId: sub._id, currency: sub.currency || DEFAULT_BILLING_CURRENCY, initiatedBy: user._id, source: 'OWNER', method: 'STK', status: 'PENDING',
     amount: amountCents, claimedAmount: amountCents, reference, callbackToken, phone: payhero.normalizePhone(phone),
   });
 
@@ -186,19 +192,36 @@ async function handleCallback(paymentId, token, body) {
 
 /* ------------------------- manual (pasted SMS) ------------------------- */
 
-async function submitManual(businessId, user, { mpesaMessage, amountCents }) {
+async function submitManual(businessId, user, { mpesaMessage, amountCents, transactionCode, provider }) {
   const settings = await settingsSvc.get();
-  if (!settings.manual?.enabled) throw ApiError.badRequest('Manual payment is not available right now.', 'BILLING_MANUAL_DISABLED');
   const sub = await Subscription.findOne({ businessId });
   if (!sub) throw ApiError.notFound('No subscription found for this business');
+  const currency = sub.currency || DEFAULT_BILLING_CURRENCY;
+  const tz = currency === 'TZS';
+  const cfg = tz ? settings.manualTz : settings.manual;
+  if (!cfg?.enabled) throw ApiError.badRequest('Manual payment is not available right now.', 'BILLING_MANUAL_DISABLED');
+  const maxCents = MANUAL_MAX_CENTS_BY_CURRENCY[currency] || LIMITS.MANUAL_MAX_CENTS;
 
-  const parsed = parseMpesaMessage(mpesaMessage);
-  if (!parsed.code) throw ApiError.badRequest('Paste the full M-PESA confirmation message (it starts with a 10-character code and the word "Confirmed").', 'MPESA_MESSAGE_INVALID');
-
-  if (await SubscriptionPayment.exists({ receiptKey: parsed.code })) {
-    throw ApiError.conflict('That M-PESA code has already been submitted.', 'MPESA_ALREADY_SUBMITTED');
+  // Kenya: the 10-character M-PESA code must be in the pasted message. Tanzania: networks differ, so the code may be
+  // read from the message OR typed by the owner; an admin verifies it against the statement either way.
+  const parsed = tz ? parseTzMessage(mpesaMessage) : parseMpesaMessage(mpesaMessage);
+  let code = parsed.code;
+  if (tz && !code && transactionCode) {
+    const typed = String(transactionCode).trim().toUpperCase();
+    if (!looksLikeCode(typed)) throw ApiError.badRequest('Enter the transaction code exactly as it appears in the confirmation message (letters and numbers, 6-20 characters).', 'TRANSACTION_CODE_INVALID');
+    code = typed;
   }
-  if (await SmsPayment.exists({ mpesaCode: parsed.code })) {
+  if (!code) {
+    throw ApiError.badRequest(tz
+      ? 'We could not find the transaction code in that message. Paste the full confirmation message or type the transaction code.'
+      : 'Paste the full M-PESA confirmation message (it starts with a 10-character code and the word "Confirmed").', tz ? 'TRANSACTION_CODE_REQUIRED' : 'MPESA_MESSAGE_INVALID');
+  }
+  parsed.code = code;
+
+  if (await SubscriptionPayment.exists({ receiptKey: code })) {
+    throw ApiError.conflict(tz ? 'That transaction code has already been submitted.' : 'That M-PESA code has already been submitted.', 'MPESA_ALREADY_SUBMITTED');
+  }
+  if (!tz && await SmsPayment.exists({ mpesaCode: code })) {
     throw ApiError.conflict('That M-PESA code has already been used for an SMS payment.', 'MPESA_ALREADY_SUBMITTED');
   }
   const pending = await SubscriptionPayment.countDocuments({ businessId, method: 'MPESA_MANUAL', status: 'SUBMITTED' });
@@ -206,15 +229,15 @@ async function submitManual(businessId, user, { mpesaMessage, amountCents }) {
 
   let amount = parsed.amountCents;
   if (amount != null && amountCents != null && amount !== amountCents) {
-    throw ApiError.badRequest('The amount you entered does not match the amount in the M-PESA message.', 'MPESA_AMOUNT_MISMATCH');
+    throw ApiError.badRequest(`The amount you entered does not match the amount in the ${tz ? 'confirmation' : 'M-PESA'} message.`, 'MPESA_AMOUNT_MISMATCH');
   }
   if (amount == null) amount = amountCents;
-  if (!amount || amount <= 0 || amount > LIMITS.MANUAL_MAX_CENTS) throw ApiError.badRequest('Enter the amount you paid.', 'AMOUNT_REQUIRED');
+  if (!amount || amount <= 0 || amount > maxCents) throw ApiError.badRequest('Enter the amount you paid.', 'AMOUNT_REQUIRED');
 
   const flags = [];
   if (parsed.amountCents == null) flags.push('AMOUNT_NOT_IN_MESSAGE');
   if (parsed.looksReceived) flags.push('LOOKS_LIKE_RECEIVED_MESSAGE');
-  const targets = [settings.manual.number, settings.manual.accountName, settings.manual.phone].filter(Boolean).map((s) => String(s).toUpperCase().replace(/\s+/g, ''));
+  const targets = [cfg.number, cfg.accountName, cfg.phone].filter(Boolean).map((s) => String(s).toUpperCase().replace(/\s+/g, ''));
   const hay = parsed.text.toUpperCase().replace(/\s+/g, '');
   if (targets.length && !targets.some((t) => hay.includes(t))) flags.push('RECIPIENT_NOT_FOUND');
   if (await SubscriptionPayment.exists({ businessId, method: 'STK', status: 'SUCCESS', amount, createdAt: { $gte: new Date(Date.now() - 48 * 3600 * 1000) } })) flags.push('SIMILAR_RECENT_STK');
@@ -222,13 +245,14 @@ async function submitManual(businessId, user, { mpesaMessage, amountCents }) {
   let payment;
   try {
     payment = await SubscriptionPayment.create({
-      businessId, subscriptionId: sub._id, initiatedBy: user._id, source: 'OWNER', method: 'MPESA_MANUAL', status: 'SUBMITTED',
+      businessId, subscriptionId: sub._id, currency, initiatedBy: user._id, source: 'OWNER', method: 'MPESA_MANUAL', status: 'SUBMITTED',
       amount, claimedAmount: amount, reference: `BLM-${crypto.randomBytes(6).toString('hex').toUpperCase()}`,
-      mpesaReceiptNumber: parsed.code, receiptKey: parsed.code, mpesaMessage: parsed.text.slice(0, 1000),
-      parsed: { code: parsed.code, amountCents: parsed.amountCents, recipient: parsed.recipient }, flags,
+      provider: provider || undefined,
+      mpesaReceiptNumber: code, receiptKey: code, mpesaMessage: parsed.text.slice(0, 1000),
+      parsed: { code, amountCents: parsed.amountCents, recipient: parsed.recipient }, flags,
     });
   } catch (err) {
-    if (err.code === 11000) throw ApiError.conflict('That M-PESA code has already been submitted.', 'MPESA_ALREADY_SUBMITTED');
+    if (err.code === 11000) throw ApiError.conflict(tz ? 'That transaction code has already been submitted.' : 'That M-PESA code has already been submitted.', 'MPESA_ALREADY_SUBMITTED');
     throw err;
   }
   const business = await Business.findById(businessId).select('name').lean();
@@ -242,7 +266,8 @@ async function approveManual(admin, paymentId, { amountCents, note }) {
   if (p.status !== 'SUBMITTED') throw ApiError.conflict('This payment is not waiting for review.', 'PAYMENT_NOT_PENDING_REVIEW');
 
   const amount = amountCents ?? p.claimedAmount;
-  if (!Number.isInteger(amount) || amount <= 0 || amount > LIMITS.MANUAL_MAX_CENTS) throw ApiError.badRequest('Enter a valid verified amount.', 'AMOUNT_INVALID');
+  const maxCents = MANUAL_MAX_CENTS_BY_CURRENCY[p.currency || DEFAULT_BILLING_CURRENCY] || LIMITS.MANUAL_MAX_CENTS;
+  if (!Number.isInteger(amount) || amount <= 0 || amount > maxCents) throw ApiError.badRequest('Enter a valid verified amount.', 'AMOUNT_INVALID');
 
   const updated = await SubscriptionPayment.findOneAndUpdate(
     { _id: paymentId, status: 'SUBMITTED' },
@@ -250,7 +275,7 @@ async function approveManual(admin, paymentId, { amountCents, note }) {
     { new: true }
   );
   if (!updated) throw ApiError.conflict('Someone else just reviewed this payment.', 'PAYMENT_NOT_PENDING_REVIEW');
-  await notify.event(updated.businessId, 'MANUAL_APPROVED', `Manual payment ${updated.mpesaReceiptNumber} approved for ${amount} cents`, { paymentId: updated._id, actorId: admin._id, actorName: admin.name });
+  await notify.event(updated.businessId, 'MANUAL_APPROVED', `Manual payment ${updated.mpesaReceiptNumber} approved for ${formatMoney(amount, updated.currency)}`, { paymentId: updated._id, actorId: admin._id, actorName: admin.name });
   await engine.allocatePayment(updated._id);
   return SubscriptionPayment.findById(updated._id);
 }

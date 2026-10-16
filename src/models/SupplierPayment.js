@@ -21,7 +21,7 @@ const supplierPaymentSchema = new Schema(
     supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier', required: true },
     paymentNumber: { type: String, required: true },
     amount: { type: Number, required: true, min: 1 },
-    method: { type: String, enum: ['CASH', 'MPESA', 'BANK', 'CHEQUE', 'OTHER'], default: 'CASH' },
+    method: { type: String, enum: ['CASH', 'MPESA', 'MOBILE_MONEY', 'BANK', 'CHEQUE', 'OTHER'], default: 'CASH' },
     reference: { type: String, trim: true },
     paidAt: { type: Date, default: Date.now },
     notes: { type: String, trim: true },

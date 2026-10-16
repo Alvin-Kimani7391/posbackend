@@ -18,6 +18,12 @@ exports.updateRegister = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Register updated', { register });
 });
 
+// The notes/coins to count for this business's currency (KES or TZS).
+exports.denominations = catchAsync(async (req, res) => {
+  const sheet = await shiftService.getCountingSheet(req.businessId);
+  return sendSuccess(res, 200, 'Denominations fetched', sheet);
+});
+
 exports.current = catchAsync(async (req, res) => {
   const shift = await shiftService.getCurrentShift(req.businessId, req.query.branchId, req.user._id);
   return sendSuccess(res, 200, 'Current shift fetched', { shift });

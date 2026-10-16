@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { BUSINESS_TYPES, FEATURE_KEYS } = require('../constants/businessFeatures');
 const { ONBOARDING_STEP_KEYS } = require('../constants/onboarding');
+const { LANGUAGES, COUNTRY_CODES } = require('../constants/countries');
 
 const receiptSettingsSchema = z
   .object({
@@ -28,6 +29,7 @@ const paymentSettingsSchema = z
   .object({
     acceptCash: z.boolean().optional(),
     acceptMpesa: z.boolean().optional(),
+    acceptMobileMoney: z.boolean().optional(),
     acceptCard: z.boolean().optional(),
     acceptBank: z.boolean().optional(),
     acceptCredit: z.boolean().optional(),
@@ -71,8 +73,10 @@ const updateBusinessSchema = z
     town: z.string().trim().optional(),
     taxPin: z.string().trim().optional(),
     kraPin: z.string().trim().optional(),
+    vrn: z.string().trim().max(30).optional(),
+    language: z.enum(LANGUAGES).optional(),
     vatRegistered: z.boolean().optional(),
-    currency: z.string().trim().optional(),
+    currency: z.string().trim().optional(), // accepted for old clients but must equal the (locked) business currency
     timezone: z.string().trim().optional(),
     logo: z.string().trim().optional(),
     receiptSettings: receiptSettingsSchema.optional(),
@@ -104,4 +108,12 @@ const updateOnboardingSchema = z
   })
   .strict();
 
-module.exports = { updateBusinessSchema, updateOnboardingSchema };
+// Fix a wrong country choice - only works while the business has no money data (see country.service).
+const countrySchema = z
+  .object({
+    countryCode: z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v), z.enum(COUNTRY_CODES)),
+    language: z.enum(LANGUAGES).optional(),
+  })
+  .strict();
+
+module.exports = { updateBusinessSchema, updateOnboardingSchema, countrySchema };
