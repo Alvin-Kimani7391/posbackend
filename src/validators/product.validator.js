@@ -57,8 +57,12 @@ const productBase = z.object({
   description: z.string().trim().optional(),
   brand: z.string().trim().optional(),
   productType: z.enum(Product.PRODUCT_TYPES).optional(),
+  // WHOLESALE_FIRST = wholesale price is the main price and retail is optional (wholesalers). Default RETAIL_FIRST.
+  pricingMode: z.enum(Product.PRICING_MODES).optional(),
+  retailEnabled: strictBoolean.optional(),
   costPrice: moneyInput.optional().default(0),
-  sellingPrice: moneyInput,
+  // Required, except for WHOLESALE_FIRST products where the service derives it (see createProduct).
+  sellingPrice: moneyInput.optional(),
   // Sold at wholesalePrice (per unit) once a sale holds at least `moq` of this product. See utils/wholesale.js.
   wholesaleEnabled: strictBoolean.optional(),
   moq: optionalMoq,
@@ -83,6 +87,9 @@ const productBase = z.object({
 
 // Values here are already integer cents (the transforms above have run).
 const createProductSchema = productBase.superRefine((data, ctx) => {
+  if (data.sellingPrice === undefined && data.pricingMode !== 'WHOLESALE_FIRST') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sellingPrice'], message: 'Required' });
+  }
   const hasVariants = Array.isArray(data.variants) && data.variants.length > 0;
   if (!hasVariants && data.sellingPrice !== undefined && data.defaultDiscount > data.sellingPrice) {
     ctx.addIssue({
@@ -117,6 +124,7 @@ const updateProductSchema = productBase
 const listProductsQuery = paginationQuery.extend({
   categoryId: objectId.optional(),
   status: z.enum(['active', 'archived']).optional(),
+  channel: z.enum(['retail']).optional(), // retail = hide wholesale-only products (retail till / shop-floor sales)
 });
 
 const idParamSchema = z.object({ id: objectId });

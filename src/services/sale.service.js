@@ -121,6 +121,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
       throw ApiError.badRequest(`${product.name} requires a variant to be selected`, 'VARIANT_REQUIRED');
     }
 
+    if (channel === 'RETAIL' && product.retailEnabled === false) {
+      throw ApiError.badRequest(`${product.name} is sold wholesale only. Sell it from the wholesale screen, or enable retail on the product.`, 'WHOLESALE_ONLY_PRODUCT');
+    }
     const unit = resolveUnit(product, rawItem.unitId);
     if (!unit.isBase && !business.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
     if (product.trackSerialNumber && (!unit.isBase || channel === 'WHOLESALE')) {

@@ -218,6 +218,7 @@ async function transferBetweenLocations(businessId, user, { branchId, fromLocati
         // ---- warehouse -> retail: the owner sells to himself, so he sets the new RETAIL price (per base unit) ----
         let pricing = null;
         if (kind === 'TO_RETAIL') {
+          if (product.retailEnabled === false) throw ApiError.badRequest(`${product.name} is a wholesale-only product. Turn on "Also sell as retail" on the product first.`, 'WHOLESALE_ONLY_PRODUCT');
           const existing = variant ? variant.sellingPrice : product.sellingPrice;
           pricing = retailPricingFor({ product, variant, requested: line.retailPrice, cost: unitCostPerBase });
           if (pricing.error) throw ApiError.badRequest(`${product.name}: ${pricing.error.message}`, pricing.error.code);
@@ -476,6 +477,7 @@ async function previewTransfer(businessId, user, { branchId, fromLocation, toLoc
       if (qty <= 0) out.errors.push({ code: 'NO_STOCK_TO_MOVE', message: 'There is no stock to move' });
       else if (qty > available) out.errors.push({ code: 'INSUFFICIENT_STOCK', message: `Only ${available} ${product.unit} available (${round3(available / unit.factor)} ${unit.name})` });
       if (kind === 'TO_RETAIL') {
+        if (product.retailEnabled === false) out.errors.push({ code: 'WHOLESALE_ONLY_PRODUCT', message: 'This is a wholesale-only product. Turn on "Also sell as retail" on the product first.' });
         const pr = retailPricingFor({ product, variant, requested: line.retailPrice, cost });
         const wholesale = pr.floorKind === 'WHOLESALE' ? pr.floorCents : null;
         Object.assign(out, {

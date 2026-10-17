@@ -2,6 +2,9 @@ const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
 const PRODUCT_TYPES = ['physical', 'service', 'weighted', 'digital'];
+// RETAIL_FIRST  = classic shop: sellingPrice is the main price, wholesale is an optional MOQ discount.
+// WHOLESALE_FIRST = wholesaler: the WHOLESALE unit price is the main price; retail (and unit conversion) is optional.
+const PRICING_MODES = ['RETAIL_FIRST', 'WHOLESALE_FIRST'];
 const UNITS = [
   'piece', 'kg', 'g', 'litre', 'ml', 'metre', 'box', 'packet', 'service',
   'bundle', 'carton', 'dozen', 'pack', 'bag', 'sack', 'bottle', 'tin', 'sachet', 'roll', 'pair', 'set', 'tray', 'crate', 'pallet', 'tablet', 'strip',
@@ -32,6 +35,11 @@ const productSchema = new Schema(
     brand: { type: String, trim: true },
 
     productType: { type: String, enum: PRODUCT_TYPES, default: 'physical' },
+
+    // How this product is priced/entered (see PRICING_MODES). retailEnabled=false (WHOLESALE_FIRST only) = sold in
+    // wholesale only: the retail till and warehouse -> shop-floor moves refuse it.
+    pricingMode: { type: String, enum: PRICING_MODES, default: 'RETAIL_FIRST' },
+    retailEnabled: { type: Boolean, default: true },
 
     // --- money fields: stored as integer CENTS, see moneySchemaPlugin ---
     costPrice: { type: Number, required: true, default: 0, min: 0 },
@@ -101,3 +109,4 @@ moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defa
 module.exports = model('Product', productSchema);
 module.exports.PRODUCT_TYPES = PRODUCT_TYPES;
 module.exports.UNITS = UNITS;
+module.exports.PRICING_MODES = PRICING_MODES;

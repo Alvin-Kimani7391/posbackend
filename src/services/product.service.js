@@ -4,7 +4,7 @@ const Category = require('../models/Category');
 const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
-const { wholesaleConfigIssues } = require('../utils/wholesale');
+const { wholesaleConfigIssues, wholesaleFirstIssues } = require('../utils/wholesale');
 const { unitConfigIssues } = require('../utils/units');
 
 /** Units (bundle, carton...) need the unitConversions feature and a sane set-up (unique names, factor > 0). */
@@ -40,6 +40,18 @@ function assertWholesaleConfig(issues) {
   throw ApiError.badRequest(issues[0].message, 'INVALID_WHOLESALE_CONFIG', issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
 }
 
+/** Plain (raw cents) copy of unit sub-documents, safe to feed to the validators. */
+const plainUnits = (units) => (units || []).map((u) => ({
+  name: u.name, factor: u.factor, wholesalePrice: u.wholesalePrice, retailPrice: u.retailPrice,
+  isWholesaleDefault: !!u.isWholesaleDefault, status: u.status,
+}));
+
+/** WHOLESALE_FIRST set-up (wholesale price is the main price, retail optional). Throws a 400 with field errors. */
+function assertWholesaleFirst({ retailEnabled, wholesalePrice, sellingPrice, units }) {
+  const issues = wholesaleFirstIssues({ retailEnabled: retailEnabled !== false, wholesalePrice, sellingPrice, units: plainUnits(units) });
+  if (issues.length) throw ApiError.badRequest(issues[0].message, 'INVALID_WHOLESALE_CONFIG', issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
+}
+
 async function attachVariants(businessId, products) {
   const productIds = products.map((p) => p._id);
   const variants = await ProductVariant.find({ businessId, productId: { $in: productIds }, status: 'active' });
@@ -54,8 +66,9 @@ async function attachVariants(businessId, products) {
   });
 }
 
-async function listProducts(businessId, { page, limit, search, categoryId, status }) {
+async function listProducts(businessId, { page, limit, search, categoryId, status, channel }) {
   const filter = { businessId };
+  if (channel === 'retail') filter.retailEnabled = { $ne: false }; // hides wholesale-only products from retail selling
   if (status) filter.status = status;
   else filter.status = { $ne: 'archived' };
   if (categoryId) filter.categoryId = categoryId;
@@ -94,7 +107,21 @@ async function createProduct(businessId, userId, data) {
     return wholesalePrice == null ? rest : { ...rest, wholesalePrice };
   });
 
-  if (productData.wholesaleEnabled) await assertWholesaleFeatureOn(businessId);
+  if (productData.pricingMode === 'WHOLESALE_FIRST') {
+    // Wholesale is the default price; the MOQ-discount mechanism (wholesaleEnabled) is not used in this mode.
+    productData.wholesaleEnabled = false;
+    delete productData.moq;
+    productData.retailEnabled = productData.retailEnabled !== false;
+    if (productData.sellingPrice === undefined) {
+      // Wholesale-only product: no retail price exists, keep a harmless placeholder (wholesale value per base unit).
+      const wu = (productData.units || []).find((u) => u.isWholesaleDefault && u.status !== 'inactive');
+      productData.sellingPrice = Math.round((wu ? wu.wholesalePrice / wu.factor : productData.wholesalePrice) || 0);
+    }
+    assertWholesaleFirst({ retailEnabled: productData.retailEnabled, wholesalePrice: productData.wholesalePrice, sellingPrice: productData.sellingPrice, units: productData.units });
+  } else {
+    productData.retailEnabled = true;
+    if (productData.wholesaleEnabled) await assertWholesaleFeatureOn(businessId);
+  }
 
   let product;
   try {
@@ -143,6 +170,8 @@ async function createProduct(businessId, userId, data) {
       wholesaleEnabled: product.wholesaleEnabled,
       moq: product.moq,
       wholesalePrice: product.wholesalePrice,
+      pricingMode: product.pricingMode,
+      retailEnabled: product.retailEnabled,
       variantCount: createdVariants.length,
     },
   });
@@ -167,6 +196,7 @@ async function updateProduct(businessId, userId, id, updates) {
     wholesaleEnabled: product.wholesaleEnabled,
     moq: product.moq,
     wholesalePrice: product.wholesalePrice,
+    retailEnabled: product.retailEnabled,
     status: product.status,
   };
 
@@ -175,6 +205,18 @@ async function updateProduct(businessId, userId, id, updates) {
   const cleaned = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
   Object.assign(product, cleaned);
   product.updatedBy = userId;
+
+  // Wholesale-first products: the MOQ-discount mechanism is off, and the merged set-up is re-checked when a
+  // price / unit / retail switch is touched. A retail-first product is always retail-enabled.
+  const wholesaleFirst = product.pricingMode === 'WHOLESALE_FIRST';
+  if (wholesaleFirst) {
+    product.wholesaleEnabled = false;
+    if (['pricingMode', 'retailEnabled', 'wholesalePrice', 'sellingPrice', 'units'].some((k) => k in cleaned)) {
+      assertWholesaleFirst({ retailEnabled: product.retailEnabled, wholesalePrice: product.wholesalePrice, sellingPrice: product.sellingPrice, units: product.units });
+    }
+  } else {
+    product.retailEnabled = true;
+  }
 
   // The per-unit discount may never exceed the unit price. Checked on the
   // MERGED values so lowering the price below an existing discount is caught
@@ -186,8 +228,8 @@ async function updateProduct(businessId, userId, id, updates) {
 
   // Wholesale: turning it ON needs the business feature; the set-up is re-checked on MERGED values, but only when this
   // request touches a wholesale-related field (so a rename is never blocked by an older price change).
-  if (product.wholesaleEnabled && !wasWholesale) await assertWholesaleFeatureOn(businessId);
-  if (product.wholesaleEnabled && ['wholesaleEnabled', 'moq', 'wholesalePrice', 'sellingPrice'].some((k) => k in cleaned)) {
+  if (!wholesaleFirst && product.wholesaleEnabled && !wasWholesale) await assertWholesaleFeatureOn(businessId);
+  if (!wholesaleFirst && product.wholesaleEnabled && ['wholesaleEnabled', 'moq', 'wholesalePrice', 'sellingPrice'].some((k) => k in cleaned)) {
     const activeVariants = product.hasVariants
       ? await ProductVariant.find({ businessId, productId: product._id, status: 'active' }).lean()
       : [];
@@ -220,6 +262,7 @@ async function updateProduct(businessId, userId, id, updates) {
       wholesaleEnabled: product.wholesaleEnabled,
       moq: product.moq,
       wholesalePrice: product.wholesalePrice,
+      retailEnabled: product.retailEnabled,
       status: product.status,
     },
   });

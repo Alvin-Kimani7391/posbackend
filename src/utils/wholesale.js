@@ -84,4 +84,41 @@ function wholesaleConfigIssues({ wholesaleEnabled, moq, wholesalePrice, sellingP
   return issues;
 }
 
-module.exports = { PRICE_TYPES, effectiveWholesalePrice, resolveUnitPrice, sumQuantityByProduct, wholesaleConfigIssues };
+/**
+ * Validates a WHOLESALE_FIRST product (wholesale is the default, retail is optional). All money in integer cents.
+ * Stock is counted in the BASE unit; `units` are bigger/other units (factor = base units in one).
+ * The wholesale unit is the unit flagged isWholesaleDefault, otherwise the base unit itself.
+ * Returns [{ path:[...], message }] (empty = fine).
+ */
+function wholesaleFirstIssues({ retailEnabled = true, wholesalePrice, sellingPrice, units = [] }) {
+  const issues = [];
+  const active = (units || []).filter((u) => u.status !== 'inactive');
+  const wu = active.find((u) => u.isWholesaleDefault);
+  const wFactor = wu && pos(wu.factor) ? wu.factor : 1;
+  const wholesaleUnitPrice = wu ? (pos(wu.wholesalePrice) ? wu.wholesalePrice : null) : (pos(wholesalePrice) ? wholesalePrice : null);
+
+  if (wholesaleUnitPrice === null) {
+    issues.push({ path: wu ? ['units'] : ['wholesalePrice'], message: 'Wholesale price is required' });
+    return issues;
+  }
+  if (!retailEnabled) return issues;
+
+  const floorPerBase = wholesaleUnitPrice / wFactor;
+  const unitRetail = active.filter((u) => pos(u.retailPrice));
+  if (!pos(sellingPrice) && !unitRetail.length) {
+    issues.push({ path: ['sellingPrice'], message: 'Set a retail price (per single unit or per whole unit) or turn retail off' });
+    return issues;
+  }
+  // 0.5 cent of tolerance: a per-base price derived from a whole-unit price is rounded to a cent.
+  if (pos(sellingPrice) && sellingPrice + 0.5 < floorPerBase) {
+    issues.push({ path: ['sellingPrice'], message: 'Retail price per single unit must be higher than the wholesale price per single unit' });
+  }
+  active.forEach((u, i) => {
+    if (pos(u.retailPrice) && pos(u.wholesalePrice) && u.retailPrice <= u.wholesalePrice) {
+      issues.push({ path: ['units', i, 'retailPrice'], message: `${u.name}: the retail price must be higher than its wholesale price` });
+    }
+  });
+  return issues;
+}
+
+module.exports = { PRICE_TYPES, effectiveWholesalePrice, resolveUnitPrice, sumQuantityByProduct, wholesaleConfigIssues, wholesaleFirstIssues };
