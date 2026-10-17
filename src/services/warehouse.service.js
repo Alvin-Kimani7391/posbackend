@@ -218,10 +218,15 @@ async function transferBetweenLocations(businessId, user, { branchId, fromLocati
         // ---- warehouse -> retail: the owner sells to himself, so he sets the new RETAIL price (per base unit) ----
         let pricing = null;
         if (kind === 'TO_RETAIL') {
-          if (product.retailEnabled === false) throw ApiError.badRequest(`${product.name} is a wholesale-only product. Turn on "Also sell as retail" on the product first.`, 'WHOLESALE_ONLY_PRODUCT');
+          // A wholesale-only product has no retail price yet: the owner types one here and the product becomes retail-enabled.
+          const wasWholesaleOnly = product.retailEnabled === false;
+          if (wasWholesaleOnly && (line.retailPrice === undefined || line.retailPrice === null)) {
+            throw ApiError.badRequest(`${product.name} is wholesale-only: enter the retail price to start selling it at retail`, 'RETAIL_PRICE_REQUIRED');
+          }
           const existing = variant ? variant.sellingPrice : product.sellingPrice;
           pricing = retailPricingFor({ product, variant, requested: line.retailPrice, cost: unitCostPerBase });
           if (pricing.error) throw ApiError.badRequest(`${product.name}: ${pricing.error.message}`, pricing.error.code);
+          if (wasWholesaleOnly) { product.retailEnabled = true; await product.save({ session }); }
           if (pricing.changed) {
             if (variant) { variant.sellingPrice = pricing.priceCents; await variant.save({ session }); } else { product.sellingPrice = pricing.priceCents; await product.save({ session }); }
           }
@@ -477,7 +482,7 @@ async function previewTransfer(businessId, user, { branchId, fromLocation, toLoc
       if (qty <= 0) out.errors.push({ code: 'NO_STOCK_TO_MOVE', message: 'There is no stock to move' });
       else if (qty > available) out.errors.push({ code: 'INSUFFICIENT_STOCK', message: `Only ${available} ${product.unit} available (${round3(available / unit.factor)} ${unit.name})` });
       if (kind === 'TO_RETAIL') {
-        if (product.retailEnabled === false) out.errors.push({ code: 'WHOLESALE_ONLY_PRODUCT', message: 'This is a wholesale-only product. Turn on "Also sell as retail" on the product first.' });
+        const wholesaleOnly = product.retailEnabled === false && (line.retailPrice === undefined || line.retailPrice === null);
         const pr = retailPricingFor({ product, variant, requested: line.retailPrice, cost });
         const wholesale = pr.floorKind === 'WHOLESALE' ? pr.floorCents : null;
         Object.assign(out, {
@@ -488,7 +493,11 @@ async function previewTransfer(businessId, user, { branchId, fromLocation, toLoc
           wholesaleValueCents: wholesale === null ? null : Math.round(qty * wholesale),
           upliftOverWholesaleCents: wholesale === null ? null : Math.round(qty * (pr.priceCents - wholesale)),
         });
-        if (pr.error) out.errors.push({ code: pr.error.code, message: pr.error.message });
+        if (wholesaleOnly) {
+          // No retail price configured yet: leave the price box empty (no misleading placeholder) and ask for one.
+          Object.assign(out, { retailPriceCents: null, retailValueCents: 0, expectedProfitCents: 0, marginPercent: 0, upliftOverWholesaleCents: null });
+          out.errors.push({ code: 'RETAIL_PRICE_REQUIRED', message: 'Wholesale-only product: enter the retail price to start selling it at retail' });
+        } else if (pr.error) out.errors.push({ code: pr.error.code, message: pr.error.message });
       }
     } catch (e) { out.errors.push({ code: e.code || 'ERROR', message: e.message }); }
     out.ok = out.errors.length === 0;
