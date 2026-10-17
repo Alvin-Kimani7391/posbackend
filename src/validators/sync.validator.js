@@ -103,7 +103,7 @@ const pushSchema = z.object({
 
 const deviceQuery = z.object({ deviceId: deviceIdStr });
 const catalogQuery = deviceQuery.extend({
-  type: z.enum(['products', 'variants', 'categories', 'stock', 'batches', 'serials', 'customers', 'warehouses', 'warehouseStock']),
+  type: z.enum(['products', 'variants', 'categories', 'stock', 'batches', 'serials', 'customers', 'warehouses', 'warehouseStock', 'medicines']),
   cursor: z.string().trim().max(80).optional(),
   since: z.coerce.date().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),

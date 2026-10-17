@@ -45,7 +45,7 @@ function computeSaleTotals(lineItems, cartDiscount = 0) {
 function maxDiscountPercentForRole(role, business) {
   if (role === ROLES.OWNER || role === ROLES.ADMIN) return 100;
   if (role === ROLES.MANAGER) return business?.settings?.maxManagerDiscountPercent ?? 20;
-  if (role === ROLES.CASHIER) return business?.settings?.maxCashierDiscountPercent ?? 5;
+  if (role === ROLES.CASHIER || role === ROLES.PHARMACIST) return business?.settings?.maxCashierDiscountPercent ?? 5;
   return 0; // other roles (storekeeper, accountant) don't sell, so no discount authority
 }
 

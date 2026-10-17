@@ -103,6 +103,44 @@ async function markSold({ businessId, branchId, product, serials, saleId, custom
   return missing;
 }
 
+/** Hold specific units for a layaway: they stay in the shop but cannot be sold, transferred or swapped. */
+async function reserveForLayaway({ businessId, branchId, product, serials, layawayId, userId, session }) {
+  const missing = [];
+  for (const sn of serials) {
+    const u = await SerialNumber.findOneAndUpdate(
+      { businessId, serialNumber: sn, productId: product._id, branchId, status: 'in_stock', location: { $ne: 'WAREHOUSE' } },
+      { $set: { status: 'reserved', reservedFor: layawayId }, $push: { history: event('RESERVED', { by: userId, refType: 'Layaway', refId: layawayId }) } },
+      { session, new: true }
+    );
+    if (!u) missing.push(sn);
+  }
+  if (missing.length) throw ApiError.badRequest(`Serial number(s) not available to reserve for ${product.name} at this branch: ${missing.join(', ')}`, 'SERIAL_NOT_AVAILABLE');
+}
+
+/** Layaway cancelled: the units go back on sale. */
+async function releaseFromLayaway({ businessId, layawayId, serials, userId, session }) {
+  await SerialNumber.updateMany(
+    { businessId, serialNumber: { $in: serials }, status: 'reserved', reservedFor: layawayId },
+    { $set: { status: 'in_stock' }, $unset: { reservedFor: 1 }, $push: { history: event('RESERVATION_RELEASED', { by: userId, refType: 'Layaway', refId: layawayId }) } },
+    { session }
+  );
+}
+
+/** Layaway collected: reserved units become sold on the invoice; the shop warranty starts now. */
+async function markSoldFromLayaway({ businessId, branchId, product, serials, layawayId, saleId, customerId, soldAt = new Date(), userId, session }) {
+  for (const sn of serials) {
+    const set = { status: 'sold', saleId, soldAt };
+    if (customerId) set.customerId = customerId;
+    if (product.warrantyMonths) { set.warrantyStart = soldAt; set.warrantyEnd = addMonths(soldAt, product.warrantyMonths); }
+    const u = await SerialNumber.findOneAndUpdate(
+      { businessId, serialNumber: sn, productId: product._id, branchId, status: 'reserved', reservedFor: layawayId },
+      { $set: set, $unset: { reservedFor: 1 }, $push: { history: event('SOLD', { by: userId, refType: 'Sale', refId: saleId, note: 'layaway collected' }) } },
+      { session, new: true }
+    );
+    if (!u) throw ApiError.conflict(`Serial ${sn} is no longer reserved for this layaway`, 'RESERVATION_MISSING');
+  }
+}
+
 /** Sale cancelled: the units go straight back on the shelf (they never left the shop). */
 async function releaseFromSale({ businessId, saleId, serials, userId, session }) {
   await SerialNumber.updateMany(
@@ -200,4 +238,4 @@ async function warrantiesExpiring(businessId, { days = 30, branchId }) {
   return SerialNumber.find(filter).select('serialNumber warrantyEnd customerId productId').populate('productId', 'name').populate('customerId', 'name phone').sort({ warrantyEnd: 1 }).limit(500);
 }
 
-module.exports = { addMonths, event, cleanSerials, registerSerials, moveLocation, markSold, releaseFromSale, markReturned, inspectReturned, lookup, listSerials, warrantiesExpiring, warrantyState };
+module.exports = { reserveForLayaway, releaseFromLayaway, markSoldFromLayaway, addMonths, event, cleanSerials, registerSerials, moveLocation, markSold, releaseFromSale, markReturned, inspectReturned, lookup, listSerials, warrantiesExpiring, warrantyState };

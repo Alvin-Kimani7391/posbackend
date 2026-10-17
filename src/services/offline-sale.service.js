@@ -12,6 +12,7 @@
  * totals that do not add up, reused local sequence number.
  */
 const mongoose = require('mongoose');
+const pharmacyGuard = require('./pharmacy-guard.service');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const ProductVariant = require('../models/ProductVariant');
@@ -167,6 +168,9 @@ async function ingestOfflineSale(ctx) {
   ]);
   const pMap = new Map(products.map((p) => [String(p._id), p]));
   const vMap = new Map(variants.map((v) => [String(v._id), v]));
+
+  // Pharmacy: prescription / dispenser / restricted checks cannot run on an offline till, so such sales are escalated to review.
+  try { (await pharmacyGuard.offlineFlags(business, products)).forEach((f) => flags.push(flag(f.code, f.level, f.message))); } catch (e) { console.error('[pharmacy] offline check failed', e.message); }
 
   const taxInclusive = !!(business.taxSettings && business.taxSettings.taxInclusive);
   const maxDiscountPercent = caps.maxDiscountPercent == null ? 0 : caps.maxDiscountPercent;

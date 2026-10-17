@@ -48,6 +48,7 @@ const mpesaTransactionSchema = new Schema(
 
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', default: null }, // set once consumed by a completed sale
     jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard', default: null }, // set once consumed by a garage deposit/payment
+    layawayId: { type: Schema.Types.ObjectId, ref: 'Layaway', default: null }, // set once consumed by a layaway deposit/instalment
     repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob', default: null }, // set once consumed by a repair deposit/payment
     lastCheckedAt: { type: Date },
     escalatedAt: { type: Date }, // set once a genuinely-unresolved PENDING transaction has been flagged to management (see reapAbandoned)

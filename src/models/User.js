@@ -35,6 +35,12 @@ const userSchema = new Schema(
 
         offlinePin: { type: { salt: String, iterations: Number, hash: String, setAt: Date }, select: false },
 
+    // Pharmacy: the professional standing of this person (PPB registration). Set/verified through /pharmacy/staff, not self-service.
+    pharmacyCredential: {
+      type: new Schema({ role: { type: String, enum: ['PHARMACIST', 'DISPENSER', 'ASSISTANT'] }, registrationNumber: String, verifiedAt: Date, verifiedBy: Schema.Types.ObjectId, expiresAt: Date }, { _id: false }),
+      default: undefined,
+    },
+
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }

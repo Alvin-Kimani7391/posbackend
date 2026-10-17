@@ -74,6 +74,33 @@ const businessSchema = new Schema(
       showUnitSwitcher: { type: Boolean, default: true },
     },
 
+    // Pharmacy rules. Classes and limits are CONFIGURABLE on purpose: set them to match the current PPB schedules with your
+    // pharmacist. Empty `classes` = the defaults in constants/pharmacy.js (a starting point, not legal advice).
+    pharmacySettings: {
+      classes: {
+        type: [new Schema({
+          code: { type: String, uppercase: true, trim: true, required: true },
+          label: String,
+          requiresPrescription: { type: Boolean, default: false },
+          dispenserOnly: { type: Boolean, default: false },   // behind-the-counter: only an authorised dispenser may sell it
+          restricted: { type: Boolean, default: false },      // needs pharmacy.restricted + goes in the controlled register
+          maxQtyPerDispense: { type: Number, min: 0 },        // 0/unset = no limit
+          poisonsBook: { type: Boolean, default: false },      // a Poisons Book entry (purchaser name, address, purpose, signature) is needed when sold without a prescription
+        }, { _id: false })],
+        default: [],
+      },
+      classesConfirmed: { type: new Schema({ at: Date, by: Schema.Types.ObjectId, byName: String, registrationNumber: String, fingerprint: String }, { _id: false }), default: undefined }, // a pharmacist's sign-off that the classes match the current Poisons List; cleared when classes change
+      prescriptionValidDays: { type: Number, min: 1, max: 730 },      // unset = the country's default (KE 180, TZ 7)
+      refillValidDays: { type: Number, min: 1, max: 730 },
+      noRefillsForRestricted: Boolean, oneRestrictedPerPrescription: Boolean, requireCountersign: Boolean, // unset = the country's default
+      recordRetentionYears: { type: Number, default: 7, min: 1, max: 30 },   // patient records are not erased inside this period (set per current law)
+      requireDispenserCredential: { type: Boolean, default: true }, // dispensing needs a verified PPB credential on the user
+      allowOfflineOtc: { type: Boolean, default: false },
+      requireApprovedSuppliers: { type: Boolean, default: true },   // medicines can only be bought from approved suppliers with a current licence           // over-the-counter sales at an offline till (never Rx/restricted)
+      expiryWarnDays: { type: [Number], default: [30, 60, 90] },
+      rooms: { type: [new Schema({ place: String, minC: Number, maxC: Number }, { _id: false })], default: [] }, // storage places and their ranges
+    },
+
     receiptSettings: {
       footerMessage: { type: String, default: 'Thank you for your business!' },
       headerMessage: { type: String, default: '' },
@@ -142,6 +169,18 @@ const businessSchema = new Schema(
 
     },
 
+    layawaySettings: {
+      minDepositPercent: { type: Number, default: 20, min: 0, max: 100 },     // first payment must be at least this % of the total
+      maxDays: { type: Number, default: 60, min: 7, max: 365 },               // longest a layaway may run
+      cancellationFeePercent: { type: Number, default: 10, min: 0, max: 100 }, // kept from what the customer paid if THEY cancel
+      graceDays: { type: Number, default: 7, min: 0, max: 60 },               // reminders continue this long after the due date
+    },
+    tradeInSettings: {
+      approvalAboveCents: { type: Number, min: 0 },                            // offers above this need a manager (unset = KES 30,000 / TZS 600,000)
+      validDays: { type: Number, default: 7, min: 1, max: 30 },               // how long an accepted offer stays usable
+      warrantyMonths: { type: Number, default: 3, min: 0, max: 24 },          // shop warranty on resold trade-in devices
+    },
+
     // Automatic SMS to customers. Everything is OFF until the owner switches it on (each text costs SMS credits).
     smsAlerts: {
       senderId: { type: String, trim: true },             // must be one of the business's approved sender IDs; blank = first approved
@@ -158,6 +197,7 @@ const businessSchema = new Schema(
       },
       warrantyExpiring: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 14, min: 1, max: 90 }, template: { type: String, maxlength: 320 } },
       insuranceExpiring: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 14, min: 1, max: 90 }, template: { type: String, maxlength: 320 } },
+      layawayDue: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 3, min: 0, max: 30 }, template: { type: String, maxlength: 320 }, overdueTemplate: { type: String, maxlength: 320 } },
     },
 
     subscriptionPlan: { type: String, default: 'trial' },

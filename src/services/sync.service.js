@@ -21,6 +21,8 @@ const SyncRejection = require('../models/SyncRejection');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../constants/roles');
 const { getPolicy } = require('../utils/offlinePolicy');
+const MedicineDetails = require('../models/MedicineDetails');
+const pharmacyGuard = require('./pharmacy-guard.service');
 const deviceService = require('./device.service');
 const { REGISTRY, typeOf } = require('./offline-events');
 const { verifyGrantForDevice, IngestRejection } = require('./offline-sale.service');
@@ -174,6 +176,7 @@ async function getContext(businessId, user, deviceId, secret) {
       },
       taxInclusive: !!(business.taxSettings && business.taxSettings.taxInclusive),
       wholesalePricing: !!(business.featureSettings && business.featureSettings.wholesalePricing),
+      pharmacy: business.featureSettings && business.featureSettings.pharmacyDispensing ? { enabled: true, allowOfflineOtc: !!(business.pharmacySettings && business.pharmacySettings.allowOfflineOtc), requiresMedicinesFeed: true } : { enabled: false },
       multiWarehouse: !!(business.featureSettings && business.featureSettings.multiWarehouse),
       unitConversions: !!(business.featureSettings && business.featureSettings.unitConversions),
       wholesaleSettings: {
@@ -223,6 +226,17 @@ const mapSerial = (s) => ({ id: String(s._id), serialNumber: s.serialNumber, pro
 const mapCustomer = (c) => ({ id: String(c._id), name: c.name, phone: c.phone, phoneNormalized: c.phoneNormalized, creditLimitCents: c.creditLimit || 0, outstandingBalanceCents: c.outstandingBalance || 0, loyaltyPoints: c.loyaltyPoints || 0, status: c.status, updatedAt: c.updatedAt });
 
 /**
+ * Pharmacy: which products are medicines and what rules they carry, so an offline till can REFUSE a sale it may not make.
+ * `sellOffline` is true only for an active, non-restricted medicine, and only when the business allows offline OTC sales.
+ */
+const mapMedicine = (m, ctx) => {
+  const cls = pharmacyGuard.classFor(ctx.classes, m);
+  const gated = !!(cls.requiresPrescription || cls.dispenserOnly || cls.restricted || cls.poisonsBook);
+  return { productId: String(m.productId), classification: m.classification, requiresPrescription: !!cls.requiresPrescription, dispenserOnly: !!cls.dispenserOnly, restricted: !!cls.restricted, poisonsBook: !!cls.poisonsBook, status: m.status, sellOffline: m.status === 'active' && !gated && ctx.allowOfflineOtc };
+};
+const medicinesCtx = async (businessId) => { const b = await Business.findById(businessId).select('pharmacySettings countryCode featureSettings'); return { classes: pharmacyGuard.classesOf(b), allowOfflineOtc: b?.pharmacySettings?.allowOfflineOtc === true, on: pharmacyGuard.isOn(b) }; };
+
+/**
  * key 'updatedAt' = true delta feed. key 'id' = small/static feed: the till re-downloads it whole and REPLACES its copy
  * (mode:'full'), which also removes anything deleted on the server.
  */
@@ -237,6 +251,7 @@ const FEEDS = {
   categories: { model: Category, map: mapCategory, key: 'id' },
   batches: { model: Batch, map: mapBatch, key: 'id', branch: true, active: { quantity: { $gt: 0 } } },
   serials: { model: SerialNumber, map: mapSerial, key: 'id', active: { status: 'in_stock' } },
+  medicines: { model: MedicineDetails, map: mapMedicine, key: 'id', ctx: medicinesCtx, needsPharmacy: true },
 };
 
 async function getCatalogPage(businessId, user, { deviceId, secret, type, cursor, since, limit }) {
@@ -247,6 +262,8 @@ async function getCatalogPage(businessId, user, { deviceId, secret, type, cursor
     if (!getPolicy(business)[feed.needs]) throw ApiError.forbidden('Customer data is not enabled for tills in this business', 'CUSTOMERS_NOT_SYNCED');
   }
 
+  const ctx = feed.ctx ? await feed.ctx(businessId) : null;
+  if (feed.needsPharmacy && !ctx.on) throw ApiError.forbidden('Pharmacy is not enabled for this business', 'FEATURE_DISABLED');
   const q = { businessId };
   if (feed.branch) q.branchId = device.branchId;
   let effective = cursor;
@@ -278,7 +295,7 @@ async function getCatalogPage(businessId, user, { deviceId, secret, type, cursor
   const stamp = last && feed.key === 'updatedAt' ? new Date(last.updatedAt).toISOString() : '0';
   return {
     type, mode: feed.key === 'id' || !effective ? 'full' : 'delta',
-    items: page.map(feed.map), hasMore,
+    items: page.map((r) => feed.map(r, ctx)), hasMore,
     nextCursor: last ? `${stamp}|${last._id}` : effective || null,
     serverTime: new Date().toISOString(),
   };

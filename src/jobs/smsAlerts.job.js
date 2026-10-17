@@ -15,7 +15,7 @@ async function tick() {
   try {
     const cursor = Business.find({
       status: 'active',
-      $or: ['readyReminder', 'serviceDue', 'warrantyExpiring', 'insuranceExpiring'].map((k) => ({ [`smsAlerts.${k}.enabled`]: true })),
+      $or: ['readyReminder', 'serviceDue', 'warrantyExpiring', 'insuranceExpiring', 'layawayDue'].map((k) => ({ [`smsAlerts.${k}.enabled`]: true })),
     }).select('_id').lean().cursor();
     for await (const b of cursor) {
       try { await alerts.runReminders(b._id); } catch (e) { console.error('[sms alerts job] business failed', String(b._id), e.message); }

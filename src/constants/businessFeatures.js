@@ -30,6 +30,8 @@ const FEATURE_KEYS = [
   'jobCards',
   'wholesalePricing',
   'multiWarehouse',
+  'layaway',
+  'tradeIn',
   // pharmacy
   'pharmacyDispensing',
   'prescriptionManagement',
@@ -46,15 +48,15 @@ const LOCKED_ON = {
 
 const BUSINESS_FEATURE_DEFAULTS = {
   supermarket: { expiryTracking: true, batchTracking: true, unitConversions: true, loyaltyProgram: true },
-  electronics: { serialNumberTracking: true, warrantyManagement: true, repairManagement: true },
-  clothing: { productVariants: true, loyaltyProgram: true },
+  electronics: { serialNumberTracking: true, warrantyManagement: true, repairManagement: true, layaway: true, tradeIn: true },
+  clothing: { productVariants: true, loyaltyProgram: true, layaway: true },
   hardware: { unitConversions: true, quotationManagement: true, deliveryManagement: true },
   cosmetics: {
     expiryTracking: true, batchTracking: true, productVariants: true, loyaltyProgram: true,
     quarantineManagement: true, recallManagement: true,
   },
   restaurant: { tableManagement: true, kitchenDisplay: true, recipeManagement: true, batchTracking: true },
-  general_shop: {},
+  general_shop: { layaway: true },
   wholesale: {
     wholesalePricing: true, unitConversions: true, quotationManagement: true,
     deliveryManagement: true, multiWarehouse: true, customerCredit: true,

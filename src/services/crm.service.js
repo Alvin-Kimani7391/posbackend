@@ -223,7 +223,9 @@ async function syncSaleBatch(businessId, sales, settings) {
   const productIds = new Set();
   sales.forEach((s) => saleItems(s).forEach((i) => { const p = itemProductId(i); if (p) productIds.add(String(p)); }));
   const catByProduct = new Map();
-  if (productIds.size) {
+  // Pharmacy: what a person buys is health information. CRM keeps spend and visit counts but NO product categories.
+  const isPharmacy = !!((await require('../models/Business').findById(businessId).select('featureSettings').lean())?.featureSettings?.pharmacyDispensing);
+  if (productIds.size && !isPharmacy) {
     try {
       const products = await Product.find({ _id: { $in: [...productIds] } }).select('categoryId category').lean();
       const catIds = [...new Set(products.map((p) => String(p.categoryId || p.category || '')).filter(Boolean))];

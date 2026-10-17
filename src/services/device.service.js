@@ -46,6 +46,12 @@ function userCanUseBranch(user, branchId) {
  * Exported because the sync endpoints (next phase) reuse it.
  * Revoked devices get DEVICE_REVOKED so the sync engine can HOLD their sales instead of discarding them.
  */
+/** Offline caps for pharmacies. The till must refuse prescription / dispenser-only / restricted items regardless. */
+function pharmacyCaps(business) {
+  return business && business.featureSettings && business.featureSettings.pharmacyDispensing
+    ? { pharmacy: { requireMedicinesFeed: true, allowDispensing: false, allowOtc: !!(business.pharmacySettings && business.pharmacySettings.allowOfflineOtc) } } : {};
+}
+
 async function authenticateDevice(businessId, deviceId, secret) {
   const device = await Device.findOne({ businessId, deviceId }).select('+secretHash');
   if (!device) throw ApiError.forbidden('This device is not enrolled', 'DEVICE_UNKNOWN');
@@ -189,6 +195,7 @@ async function issueGrant(businessId, user, deviceId, secret) {
     allowManualMpesa: policy.allowManualMpesa,
     allowCard: policy.allowCard,
     allowRefunds: policy.allowRefunds,
+    ...pharmacyCaps(business), // pharmacy: dispensing is never allowed offline; OTC only if the pharmacy allows it
   };
   const limits = {
     maxPendingSales: policy.maxPendingSales,
@@ -317,6 +324,7 @@ async function issueRoster(businessId, manager, deviceId, secret) {
       maxDiscountPercent: Math.min(maxDiscountPercentForRole(u.role, business), policy.maxDiscountPercent), canOverridePrice: false,
       canOpenShift: !!userHasPermission(u, 'shifts.open'), canCloseShift: !!userHasPermission(u, 'shifts.close'),
       allowCredit: policy.allowCredit, allowManualMpesa: policy.allowManualMpesa, allowCard: policy.allowCard, allowRefunds: policy.allowRefunds,
+      ...pharmacyCaps(business),
     };
     const limits = { maxPendingSales: policy.maxPendingSales, maxPendingValueCents: policy.maxPendingValueCents, sessionHours: policy.sessionHours,
       maxManualMpesaCents: policy.maxManualMpesaCents, manualMpesaApproval: policy.manualMpesaApproval, allowShiftCloseWithPending: policy.allowShiftCloseWithPending };

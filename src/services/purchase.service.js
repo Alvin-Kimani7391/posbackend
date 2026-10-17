@@ -133,10 +133,11 @@ async function createPurchase(
   const supplier = await Supplier.findOne({ _id: supplierId, businessId });
   if (!supplier) throw ApiError.badRequest('Supplier not found', 'INVALID_SUPPLIER');
 
-  const biz = await Business.findById(businessId).select('featureSettings');
+  const biz = await Business.findById(businessId).select('featureSettings pharmacySettings');
   if (warehouseId) await resolveWarehouse(businessId, { warehouseId }); // must exist and be active
   const products = await Product.find({ businessId, _id: { $in: items.map((i) => i.productId) } });
   const productById = new Map(products.map((p) => [p._id.toString(), p]));
+  await require('./pharmacy-supplier.service').assertApprovedForPurchase({ business: biz, supplier, products }); // pharmacy: medicines only from approved, licensed suppliers
 
   let subtotal = 0;
   let discountTotal = 0;

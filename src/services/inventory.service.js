@@ -55,6 +55,7 @@ async function applyStockChange({
   businessId, branchId, productId, variantId = null,
   quantityDelta, type, referenceType, referenceId, reason, performedBy,
   session, allowNegative = false, occurredAt = undefined, location = 'RETAIL', warehouseId = null,
+  fromReserved = false, // consuming units that were reserved (layaway): takes them out of quantity AND reservedQuantity (retail stock only)
 }) {
   if (!session) throw new Error('applyStockChange requires an active mongoose session');
   if (!quantityDelta) throw new Error('applyStockChange requires a non-zero quantityDelta');
@@ -71,16 +72,25 @@ async function applyStockChange({
   }
   let updated;
 
-  if (quantityDelta > 0 || allowNegative) {
+  if (fromReserved) {
+    if (quantityDelta >= 0 || location !== 'RETAIL') throw new Error('fromReserved only applies to a retail decrement');
+    updated = await Inventory.findOneAndUpdate(
+      { ...filter, quantity: { $gte: -quantityDelta }, reservedQuantity: { $gte: -quantityDelta } },
+      { $inc: { quantity: quantityDelta, reservedQuantity: quantityDelta } },
+      { new: true, session }
+    );
+    if (!updated) throw ApiError.conflict('The reserved stock for this item is no longer there. Please contact support.', 'RESERVATION_MISSING');
+  } else if (quantityDelta > 0 || allowNegative) {
     updated = await Inventory.findOneAndUpdate(
       filter,
       { $inc: { quantity: quantityDelta }, ...(insertOnly ? { $setOnInsert: insertOnly } : {}) },
       { upsert: true, new: true, session, setDefaultsOnInsert: true }
     );
   } else {
-    // Atomic conditional decrement - see concurrency note above.
+    // Atomic conditional decrement - see concurrency note above. Units reserved for a layaway are not for sale:
+    // only (quantity - reservedQuantity) can be taken.
     updated = await Inventory.findOneAndUpdate(
-      { ...filter, quantity: { $gte: -quantityDelta } },
+      { ...filter, $expr: { $gte: [{ $subtract: ['$quantity', { $ifNull: ['$reservedQuantity', 0] }] }, -quantityDelta] } },
       { $inc: { quantity: quantityDelta } },
       { new: true, session }
     );
@@ -127,6 +137,38 @@ async function applyStockChange({
   }
 
   return { branchInventory: updated, movement };
+}
+
+/**
+ * Set units aside for a layaway (retail stock). They stay in `quantity` (they are physically still in the shop, so a stocktake
+ * count matches) but leave the available quantity, so nothing else can sell, transfer or adjust them away.
+ * Atomic: two layaways cannot both reserve the last unit.
+ */
+async function reserveStock({ businessId, branchId, productId, variantId = null, quantity, session }) {
+  if (!session) throw new Error('reserveStock requires an active mongoose session');
+  const updated = await BranchInventory.findOneAndUpdate(
+    { businessId, branchId, productId, variantId, $expr: { $gte: [{ $subtract: ['$quantity', { $ifNull: ['$reservedQuantity', 0] }] }, quantity] } },
+    { $inc: { reservedQuantity: quantity } },
+    { new: true, session }
+  );
+  if (!updated) {
+    const existing = await BranchInventory.findOne({ businessId, branchId, productId, variantId }).session(session);
+    const available = existing ? existing.quantity - (existing.reservedQuantity || 0) : 0;
+    throw ApiError.badRequest(`Insufficient stock to reserve (available: ${available}, requested: ${quantity})`, 'INSUFFICIENT_STOCK');
+  }
+  return updated;
+}
+
+/** Give reserved units back to sale (layaway cancelled). */
+async function releaseReserved({ businessId, branchId, productId, variantId = null, quantity, session }) {
+  if (!session) throw new Error('releaseReserved requires an active mongoose session');
+  const updated = await BranchInventory.findOneAndUpdate(
+    { businessId, branchId, productId, variantId, reservedQuantity: { $gte: quantity } },
+    { $inc: { reservedQuantity: -quantity } },
+    { new: true, session }
+  );
+  if (!updated) throw ApiError.conflict('The reserved stock for this item is no longer there. Please contact support.', 'RESERVATION_MISSING');
+  return updated;
 }
 
 /**
@@ -319,6 +361,8 @@ module.exports = {
   inventoryModel,
   assertWarehouseEnabled,
   applyStockChange,
+  reserveStock,
+  releaseReserved,
   getStockLevel,
   listBranchInventory,
   getLowStockAlerts,

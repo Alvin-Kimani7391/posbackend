@@ -29,7 +29,7 @@ const serialNumberSchema = new Schema(
     location: { type: String, enum: ['RETAIL', 'WAREHOUSE'], default: 'RETAIL' },
 
     serialNumber: { type: String, required: true, trim: true, uppercase: true },
-    status: { type: String, enum: ['in_stock', 'sold', 'damaged', 'returned'], default: 'in_stock' },
+    status: { type: String, enum: ['in_stock', 'sold', 'damaged', 'returned', 'reserved', 'withdrawn'], default: 'in_stock' }, // reserved = held for a layaway; withdrawn = a trade-in handed back to the customer
     condition: { type: String, enum: ['new', 'used', 'refurbished'], default: 'new' },
 
     purchaseId: { type: Schema.Types.ObjectId, ref: 'Purchase' },
@@ -37,6 +37,8 @@ const serialNumberSchema = new Schema(
     costPrice: { type: Number, default: 0 }, // integer cents (raw)
     receivedAt: { type: Date },
 
+    reservedFor: { type: Schema.Types.ObjectId, ref: 'Layaway' },   // set while status = reserved
+    tradeInId: { type: Schema.Types.ObjectId, ref: 'TradeIn' },      // set when the unit came in as a trade-in
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale' },
     customerId: { type: Schema.Types.ObjectId, ref: 'Customer' },
     soldAt: { type: Date },

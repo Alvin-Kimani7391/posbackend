@@ -6,6 +6,7 @@ const ROLES = Object.freeze({
   CASHIER: 'CASHIER',
   STOREKEEPER: 'STOREKEEPER',
   ACCOUNTANT: 'ACCOUNTANT',
+  PHARMACIST: 'PHARMACIST',     // pharmacy: dispensing and clinical review. Still needs a verified pharmacyCredential to dispense.
 });
 
 module.exports = { ROLES };

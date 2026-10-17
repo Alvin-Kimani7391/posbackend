@@ -2,6 +2,8 @@ const Product = require('../models/Product');
 const ProductVariant = require('../models/ProductVariant');
 const Category = require('../models/Category');
 const Business = require('../models/Business');
+const BranchInventory = require('../models/BranchInventory');
+const WarehouseInventory = require('../models/WarehouseInventory');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { wholesaleConfigIssues, wholesaleFirstIssues } = require('../utils/wholesale');
@@ -66,7 +68,37 @@ async function attachVariants(businessId, products) {
   });
 }
 
-async function listProducts(businessId, { page, limit, search, categoryId, status, channel }) {
+/**
+ * Where is each product's stock? For businesses with warehouses: shop-floor quantity in this branch plus the warehouses
+ * of this branch that hold it. The retail till uses it to say "not on the shop floor yet - move it from <warehouse>".
+ * Returns Map<productId, { retailQuantity, warehouses:[{ _id, name, quantity }] }> (empty when not applicable).
+ */
+async function stockHintsFor(businessId, branchId, productIds) {
+  const out = new Map();
+  if (!branchId || !productIds.length) return out;
+  const business = await Business.findById(businessId).select('featureSettings').lean();
+  if (!business?.featureSettings?.multiWarehouse) return out;
+  const [retailRows, whRows] = await Promise.all([
+    BranchInventory.find({ businessId, branchId, productId: { $in: productIds } }).select('productId quantity reservedQuantity').lean(),
+    WarehouseInventory.find({ businessId, branchId, productId: { $in: productIds }, quantity: { $gt: 0 } }).populate('warehouseId', 'name status').lean(),
+  ]);
+  const hint = (id) => { const k = String(id); if (!out.has(k)) out.set(k, { retailQuantity: 0, warehouses: [] }); return out.get(k); };
+  productIds.forEach(hint);
+  retailRows.forEach((r) => { hint(r.productId).retailQuantity += (r.quantity || 0) - (r.reservedQuantity || 0); });
+  const byWh = new Map();
+  whRows.filter((r) => r.warehouseId && r.warehouseId.status === 'active').forEach((r) => {
+    const h = hint(r.productId);
+    const key = `${r.productId}:${r.warehouseId._id}`;
+    const avail = (r.quantity || 0) - (r.reservedQuantity || 0);
+    if (avail <= 0) return;
+    if (byWh.has(key)) byWh.get(key).quantity += avail;
+    else { const e = { _id: r.warehouseId._id, name: r.warehouseId.name, quantity: avail }; byWh.set(key, e); h.warehouses.push(e); }
+  });
+  out.forEach((h) => { h.retailQuantity = Math.round(h.retailQuantity * 1000) / 1000; h.warehouses.forEach((w) => { w.quantity = Math.round(w.quantity * 1000) / 1000; }); });
+  return out;
+}
+
+async function listProducts(businessId, { page, limit, search, categoryId, status, channel, branchId }) {
   const filter = { businessId };
   if (channel === 'retail') filter.retailEnabled = { $ne: false }; // hides wholesale-only products from retail selling
   if (status) filter.status = status;
@@ -83,13 +115,21 @@ async function listProducts(businessId, { page, limit, search, categoryId, statu
   ]);
 
   const withVariants = await attachVariants(businessId, items);
+  if (channel === 'retail' && branchId) {
+    const hints = await stockHintsFor(businessId, branchId, items.map((p) => p._id));
+    withVariants.forEach((p) => { const h = hints.get(String(p._id)); if (h) p.stockHint = h; });
+  }
   return { items: withVariants, total, page, limit, pages: Math.ceil(total / limit) };
 }
 
-async function getProduct(businessId, id) {
+async function getProduct(businessId, id, { branchId } = {}) {
   const product = await Product.findOne({ _id: id, businessId }).populate('categoryId', 'name');
   if (!product) throw ApiError.notFound('Product not found');
   const [withVariants] = await attachVariants(businessId, [product]);
+  if (branchId) {
+    const h = (await stockHintsFor(businessId, branchId, [product._id])).get(String(product._id));
+    if (h) withVariants.stockHint = h;
+  }
   return withVariants;
 }
 

@@ -19,6 +19,7 @@ const JobCard = require('../../models/JobCard');
 const RepairJob = require('../../models/RepairJob');
 const SerialNumber = require('../../models/SerialNumber');
 const Product = require('../../models/Product');
+const Layaway = require('../../models/Layaway');
 const Notification = require('../../models/Notification');
 const M = require('../../models/sms.models');
 const ApiError = require('../../utils/ApiError');
@@ -35,6 +36,8 @@ const DEFAULT_TEMPLATES = {
   serviceOverdue: 'Hi {name}, your {item} is overdue for service. Visit {shop}{shopPhoneText} to book.',
   warrantyExpiring: 'Hi {name}, the warranty on your {item} ends on {date}. Bring it to {shop} for a check before then.',
   insuranceExpiring: 'Hi {name}, the insurance for {item} expires on {date}. Renew in time to stay covered. {shop}',
+  layawayDue: 'Hi {name}, your layaway {job} at {shop} is due on {date}. Balance: KES {balance}. Please complete payment to collect your items.',
+  layawayOverdue: 'Hi {name}, your layaway {job} at {shop} is overdue. Balance: KES {balance}. Please pay or call{shopPhoneText} to avoid cancellation.',
 };
 const PLACEHOLDERS = ['name', 'shop', 'shopPhone', 'shopPhoneText', 'item', 'job', 'plate', 'balance', 'balanceText', 'date', 'dueText', 'days'];
 const SAMPLE = {
@@ -73,6 +76,7 @@ function effective(b) {
     serviceDue: { enabled: !!a.serviceDue?.enabled, daysBefore: a.serviceDue?.daysBefore ?? 7, kmWindow: a.serviceDue?.kmWindow ?? 500, template: a.serviceDue?.template || '', overdueTemplate: a.serviceDue?.overdueTemplate || '' },
     warrantyExpiring: { enabled: !!a.warrantyExpiring?.enabled, daysBefore: a.warrantyExpiring?.daysBefore ?? 14, template: a.warrantyExpiring?.template || '' },
     insuranceExpiring: { enabled: !!a.insuranceExpiring?.enabled, daysBefore: a.insuranceExpiring?.daysBefore ?? 14, template: a.insuranceExpiring?.template || '' },
+    layawayDue: { enabled: !!a.layawayDue?.enabled, daysBefore: a.layawayDue?.daysBefore ?? 3, template: a.layawayDue?.template || '', overdueTemplate: a.layawayDue?.overdueTemplate || '' },
   };
 }
 
@@ -116,7 +120,7 @@ async function updateSettings(businessId, patch) {
 
 /** What a template will look like (sample data) and how many credits one text costs. */
 function preview(kind, template) {
-  const key = { ready: 'ready', readyReminder: 'readyReminder', serviceDue: 'serviceDue', serviceOverdue: 'serviceOverdue', warrantyExpiring: 'warrantyExpiring', insuranceExpiring: 'insuranceExpiring' }[kind];
+  const key = { ready: 'ready', readyReminder: 'readyReminder', layawayDue: 'layawayDue', layawayOverdue: 'layawayOverdue', serviceDue: 'serviceDue', serviceOverdue: 'serviceOverdue', warrantyExpiring: 'warrantyExpiring', insuranceExpiring: 'insuranceExpiring' }[kind];
   if (!key) throw ApiError.badRequest('Unknown alert type', 'BAD_KIND');
   checkTemplate('template', template);
   const text = render(template || DEFAULT_TEMPLATES[key], SAMPLE);
@@ -296,6 +300,29 @@ async function insuranceReminders(biz, limit) {
   return out;
 }
 
+/* ------------------------------ layaway ------------------------------ */
+/** Remind customers with an unpaid layaway: before the due date, and (for 'graceDays' after) when it is overdue. */
+async function layawayReminders(biz, limit) {
+  const { cfg } = biz; const businessId = biz.b._id; const out = { queued: 0, skipped: 0 };
+  if (!cfg.layawayDue.enabled || !biz.b.featureSettings?.layaway) return out;
+  const now = Date.now(); const horizon = new Date(now + cfg.layawayDue.daysBefore * DAY);
+  const rows = await Layaway.find({ businessId, status: 'ACTIVE', dueDate: { $lte: horizon } }).limit(1000);
+  for (const l of rows) {
+    if (out.queued >= limit) break;
+    if (l.balance <= 0) continue; // fully paid: waiting for the customer to collect, not a payment reminder
+    const overdue = l.dueDate.getTime() < now;
+    if (overdue && now - l.dueDate.getTime() > (l.terms?.graceDays ?? 7) * DAY) continue; // past the grace window: the manager decides
+    const ctx = { ...ctxBase(biz), name: (l.customerName || '').split(/\s+/)[0] || 'Customer', job: l.number, date: dateText(l.dueDate), balance: kes(l.balance), item: l.number };
+    const text = overdue ? render(cfg.layawayDue.overdueTemplate || DEFAULT_TEMPLATES.layawayOverdue, ctx) : render(cfg.layawayDue.template || DEFAULT_TEMPLATES.layawayDue, ctx);
+    const r = await enqueue(businessId, cfg, {
+      phone: l.customerPhone, customerId: l.customerId, name: l.customerName, text, purpose: overdue ? 'LAYAWAY_OVERDUE' : 'LAYAWAY_DUE',
+      dedupeKey: `layaway:${overdue ? 'over' : 'due'}:${l._id}:${l.dueDate.toISOString().slice(0, 10)}`, refType: 'Layaway', refId: l._id,
+    });
+    if (r.queued) out.queued += 1; else if (r.skipped !== 'DUPLICATE') out.skipped += 1;
+  }
+  return out;
+}
+
 /* ------------------------------ electronics warranty ------------------------------ */
 async function warrantyReminders(biz, limit) {
   const { cfg } = biz; const businessId = biz.b._id; const out = { queued: 0, skipped: 0 };
@@ -323,7 +350,7 @@ async function runReminders(businessId, { limit = 200 } = {}) {
   const biz = await loadBusiness(businessId);
   if (!biz || biz.b.status !== 'active' || ['suspended', 'cancelled'].includes(biz.b.subscriptionStatus)) return null;
   const result = {};
-  for (const [name, fn] of [['readyReminder', readyReminders], ['serviceDue', serviceReminders], ['insurance', insuranceReminders], ['warranty', warrantyReminders]]) {
+  for (const [name, fn] of [['readyReminder', readyReminders], ['serviceDue', serviceReminders], ['insurance', insuranceReminders], ['warranty', warrantyReminders], ['layaway', layawayReminders]]) {
     try { result[name] = await fn(biz, limit); } catch (e) { console.error(`[sms alerts] ${name} failed`, String(businessId), e.message); result[name] = { error: e.message }; }
   }
   return result;

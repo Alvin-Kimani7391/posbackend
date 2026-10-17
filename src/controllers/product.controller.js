@@ -8,7 +8,7 @@ exports.list = catchAsync(async (req, res) => {
 });
 
 exports.getOne = catchAsync(async (req, res) => {
-  const product = await productService.getProduct(req.businessId, req.params.id);
+  const product = await productService.getProduct(req.businessId, req.params.id, { branchId: req.query.branchId || undefined });
   return sendSuccess(res, 200, 'Product fetched', { product });
 });
 

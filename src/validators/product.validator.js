@@ -124,6 +124,7 @@ const updateProductSchema = productBase
 const listProductsQuery = paginationQuery.extend({
   categoryId: objectId.optional(),
   status: z.enum(['active', 'archived']).optional(),
+  branchId: objectId.optional(), // with channel=retail: adds a stockHint (shop-floor qty + warehouses holding it) per product
   channel: z.enum(['retail']).optional(), // retail = hide wholesale-only products (retail till / shop-floor sales)
 });
 

@@ -81,7 +81,12 @@ const saleSchema = new Schema(
     paymentStatus: { type: String, enum: ['PAID', 'PARTIAL', 'UNPAID', 'CREDIT'], default: 'PAID' },
     saleStatus: { type: String, enum: ['COMPLETED', 'CANCELLED'], default: 'COMPLETED' },
 
-    source: { type: String, enum: ['POS', 'ONLINE', 'SYNC', 'REPAIR', 'GARAGE'], default: 'POS' },
+    source: { type: String, enum: ['POS', 'ONLINE', 'SYNC', 'REPAIR', 'GARAGE', 'LAYAWAY'], default: 'POS' },
+    prescriptionId: { type: Schema.Types.ObjectId, ref: 'Prescription' }, // pharmacy: set when this sale dispensed a prescription
+    dispensingId: { type: Schema.Types.ObjectId, ref: 'DispensingRecord' },
+    poisonsBookId: { type: Schema.Types.ObjectId, ref: 'PoisonsBookEntry' }, // pharmacy: Part I poison sold without a prescription
+    layawayId: { type: Schema.Types.ObjectId, ref: 'Layaway' }, // set on the invoice created when a layaway is collected (or its cancellation fee is kept)
+    tradeInIds: [{ type: Schema.Types.ObjectId, ref: 'TradeIn' }], // devices taken in part-payment on this sale
     jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard' }, // set on the invoice created when a garage job card is collected
     repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob' }, // set on the invoice created when a repair is collected
     notes: { type: String },

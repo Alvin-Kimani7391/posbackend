@@ -142,7 +142,7 @@ const smsMessageSchema = new Schema({
   providerMessageId: { type: String, index: true },
   error: String, sentAt: Date, deliveredAt: Date,
   // Automatic alerts (ready for collection, service due ...). Campaign messages leave these unset.
-  purpose: { type: String, enum: ['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING'], index: true, sparse: true },
+  purpose: { type: String, enum: ['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE'], index: true, sparse: true },
   dedupeKey: { type: String },   // one alert per (business, key): a re-run of the reminder job can never text twice
   refType: String, refId: ObjectId,
 }, { timestamps: true });

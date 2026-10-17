@@ -30,7 +30,7 @@ const salesQuery = z.object({
 const employeesQuery = z.object({
   ...paging,
   businessId: objectId.optional(),
-  role: z.enum(['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'STOREKEEPER', 'ACCOUNTANT']).optional(),
+  role: z.enum(['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'STOREKEEPER', 'ACCOUNTANT', 'PHARMACIST']).optional(),
   status: z.enum(['active', 'inactive', 'suspended']).optional(),
 });
 

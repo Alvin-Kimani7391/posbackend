@@ -1,7 +1,7 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
-const PAYMENT_METHODS = ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'CREDIT', 'OTHER'];
+const PAYMENT_METHODS = ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'CREDIT', 'OTHER', 'TRADE_IN']; // TRADE_IN = value of a traded-in device, no money moves
 const PAYMENT_STATUSES = ['PENDING', 'SUCCESS', 'FAILED', 'CANCELLED', 'REFUNDED', 'PARTIAL'];
 
 const paymentSchema = new Schema(
@@ -12,6 +12,7 @@ const paymentSchema = new Schema(
     shiftId: { type: Schema.Types.ObjectId, ref: 'CashShift', index: true }, // lets shift close reconcile cash without joining through Sale
     jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard', index: true }, // deposit / payment / refund taken on a garage job card
     repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob', index: true }, // deposit / payment / refund taken on a repair job
+    layawayId: { type: Schema.Types.ObjectId, ref: 'Layaway', index: true }, // deposit / instalment / refund on a layaway
     refundId: { type: Schema.Types.ObjectId, ref: 'Refund' }, // set when this Payment record represents money paid OUT as a refund
     customerId: { type: Schema.Types.ObjectId, ref: 'Customer' },
 

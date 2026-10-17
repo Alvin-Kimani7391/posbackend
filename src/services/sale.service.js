@@ -21,6 +21,8 @@ const CashShift = require('../models/CashShift');
 const serialService = require('./serial.service');
 const { normalizeSerial } = require('../utils/imei');
 const batchService = require('./batch.service');
+const pharmacyGuard = require('./pharmacy-guard.service');
+const tradeInService = require('./tradein.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
@@ -206,6 +208,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     });
   }
 
+  // --- Pharmacy: dispenser / prescription / restricted-medicine rules. Throws when the sale is not allowed; null outside pharmacies. ---
+  const pharmacyCtx = await pharmacyGuard.assess({ business, businessId, user: cashierUser, items: builtItems, prescriptionId: payload.prescriptionId, poisonsBook: payload.poisonsBook, countersign: payload.countersign });
+
   // --- Cart-level discount, validated against the same role limit ---
   const cartDiscount = payload.cartDiscount || 0;
   const subtotalAfterItemDiscount = builtItems.reduce((s, i) => s + i._meta.grossLineTotal - i._meta.discountApplied, 0);
@@ -222,9 +227,17 @@ async function createSale(businessId, branchId, cashierUser, payload) {
   );
   if (totals.total < 0) throw ApiError.badRequest('Discount exceeds the sale total', 'INVALID_DISCOUNT');
 
+  // --- Trade-ins: devices handed in as part-payment. Checked here, claimed atomically inside the transaction. ---
+  let tradeIns = { list: [], total: 0 };
+  if (payload.tradeIns?.length) {
+    if (!business.featureSettings?.tradeIn) throw ApiError.forbidden('Trade-ins are not enabled for this business', 'FEATURE_DISABLED');
+    tradeIns = await tradeInService.prepareForSale(businessId, branchId, payload.tradeIns, customer?._id);
+    if (tradeIns.total > totals.total) throw ApiError.badRequest('The trade-in value is more than the sale total. Choose a more expensive item or take the trade-in separately.', 'TRADE_IN_EXCEEDS_SALE');
+  }
+
   // --- Payments & credit ---
   const payments = payload.payments || [];
-  const paidAmount = payments.reduce((s, p) => s + p.amount, 0);
+  const paidAmount = payments.reduce((s, p) => s + p.amount, 0) + tradeIns.total;
   if (paidAmount > totals.total) throw ApiError.badRequest('Payments exceed the sale total', 'OVERPAYMENT');
   const balance = totals.total - paidAmount;
 
@@ -274,7 +287,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
           items: builtItems.map(({ _meta, ...rest }) => rest),
           subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
           channel, warehouseId: warehouse?._id, dueDate: payload.dueDate || (channel === 'WHOLESALE' && balance > 0 && business.wholesaleSettings?.defaultPaymentTermsDays ? new Date(Date.now() + business.wholesaleSettings.defaultPaymentTermsDays * 86400000) : undefined),
-          amountPaid: paidAmount, balance, paymentStatus, saleStatus: 'COMPLETED', source: 'POS',
+          amountPaid: paidAmount, balance, paymentStatus, saleStatus: 'COMPLETED', source: 'POS', tradeInIds: tradeIns.list.map((t) => t._id),
           notes: payload.notes, clientTransactionId: payload.clientTransactionId, deviceId: payload.deviceId,
         }],
         { session }
@@ -346,6 +359,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         if (Object.keys($set).length) await Sale.updateOne({ _id: sale._id }, { $set }, { session });
       }
 
+      // Pharmacy: dispensing record (prescription + patient + dispenser + sale + batches) in the same transaction.
+      await pharmacyGuard.recordWithinSale({ ctx: pharmacyCtx, sale, user: cashierUser, allocByItem, session });
+
       // Payments - manual recording for CASH/CARD/BANK; MPESA picks up
       // provider/externalTransactionId/metadata resolved above. Swapping in
       // a real gateway for another method later means adding a provider
@@ -364,6 +380,16 @@ async function createSale(businessId, branchId, cashierUser, payload) {
         }
         return doc;
       });
+      // Trade-ins: claim each device (once only), receive it into used stock, and record its value as a TRADE_IN payment.
+      if (tradeIns.list.length) {
+        const tradeLines = await tradeInService.applyToSale({ business, tradeIns: tradeIns.list, saleId: sale._id, user: cashierUser, session });
+        for (const tl of tradeLines) {
+          paymentDocsInput.push({
+            businessId, branchId, saleId: sale._id, customerId: customer?._id, shiftId: shift?._id, method: 'TRADE_IN', provider: 'tradein',
+            amount: tl.amount, reference: tl.reference, metadata: tl.metadata, initiatedBy: cashierUser._id, status: 'SUCCESS', completedAt: new Date(),
+          });
+        }
+      }
       const createdPayments = paymentDocsInput.length ? await Payment.create(paymentDocsInput, { session }) : [];
 
       // Customer credit ledger - never overwrite Customer.outstandingBalance
@@ -549,6 +575,9 @@ async function cancelSale(businessId, userId, id, reason) {
       const sale = await Sale.findOne({ _id: id, businessId }).session(session);
       if (!sale) throw ApiError.notFound('Sale not found');
       if (sale.saleStatus !== 'COMPLETED') throw ApiError.conflict('Only a completed sale can be cancelled', 'INVALID_SALE_STATE');
+      if (sale.source === 'LAYAWAY') throw ApiError.conflict('This is a layaway invoice. The goods were collected, so it cannot be cancelled here. Use a refund for returned goods.', 'LAYAWAY_SALE');
+      if (sale.poisonsBookId) throw ApiError.conflict('This sale is recorded in the Poisons Book. A pharmacist must handle it as a return, not a cancellation.', 'POISONS_BOOK_SALE');
+      if (sale.dispensingId) throw ApiError.conflict('This sale dispensed a prescription. A pharmacist must reverse the dispensing (with a reason) instead of cancelling it.', 'DISPENSED_SALE');
       if (sale.source === 'GARAGE') throw ApiError.conflict('This is a garage invoice. Parts were used on the job, so it cannot be cancelled here. Refund the customer from the job card instead.', 'GARAGE_SALE');
       if (sale.source === 'REPAIR') throw ApiError.conflict('This is a repair invoice. Parts were used on the job, so it cannot be cancelled here. Refund the customer from the repair job instead.', 'REPAIR_SALE');
 
@@ -579,6 +608,9 @@ async function cancelSale(businessId, userId, id, reason) {
           }
         }
       }
+
+      // A device taken in part-payment goes back to the customer (only if it is still in stock).
+      if (sale.tradeInIds?.length) await tradeInService.reverseForSale({ businessId, saleId: sale._id, user: { _id: userId }, session });
 
       if (sale.balance > 0 && sale.customerId) {
         const customer = await Customer.findOne({ _id: sale.customerId, businessId }).session(session);

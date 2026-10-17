@@ -32,6 +32,10 @@ const createSaleSchema = z.object({
   warehouseId: objectId.optional(),                          // WHOLESALE: which warehouse to sell from (default: branch's default)
   dueDate: z.coerce.date().optional(),                       // credit invoices: when payment is due
   customerId: objectId.optional(),
+  tradeIns: z.array(objectId).max(3).optional(), // ACCEPTED trade-in ids used as part-payment
+  poisonsBook: z.object({ purchaserName: z.string().trim().min(2).max(120), purchaserAddress: z.string().trim().min(3).max(200), idNumber: z.string().trim().max(40).optional(), purpose: z.string().trim().min(2).max(200), signed: z.literal(true) }).optional(), // pharmacy: Poisons Book details for a Part I poison sold without a prescription
+  countersign: z.object({ name: z.string().trim().min(2).max(120), relationship: z.string().trim().max(60).optional(), signed: z.literal(true) }).optional(), // pharmacy: patient/representative countersignature for controlled drugs
+  prescriptionId: objectId.optional(),                       // pharmacy: the validated prescription being dispensed
   items: z.array(saleItemSchema).min(1),
   payments: z.array(paymentInputSchema).default([]),
   cartDiscount: moneyInput.optional().default(0),
