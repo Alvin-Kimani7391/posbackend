@@ -21,6 +21,7 @@ const CustomerLedger = require('../models/CustomerLedger');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const Receipt = require('../models/Receipt');
+const { isValidToken } = require('../utils/receiptToken');
 const Branch = require('../models/Branch');
 const CashShift = require('../models/CashShift');
 const SerialNumber = require('../models/SerialNumber');
@@ -338,6 +339,10 @@ async function ingestOfflineSale(ctx) {
   const receiptNumber = `${claims.receiptPrefix || (business.receiptSettings && business.receiptSettings.receiptPrefix) || 'RCT'}-${claims.branchCode || branch.code || 'MAIN'}-${claims.deviceCode || device.deviceCode}-${pad(s.localSeq)}`;
   const saleId = new mongoose.Types.ObjectId();
 
+  // QR verification token. The till printed the receipt BEFORE it could reach us, so its QR already contains the till's
+  // own random clientTransactionId: adopt exactly that as the verify token so the printed QR verifies once synced.
+  const verifyToken = isValidToken(s.clientTransactionId) && !(await Receipt.exists({ verifyToken: s.clientTransactionId })) ? s.clientTransactionId : undefined;
+
   // ---- 8. write everything in ONE transaction ----
   const session = await mongoose.startSession();
   const post = { creditNote: null };
@@ -432,7 +437,7 @@ async function ingestOfflineSale(ctx) {
       const bs = business.receiptSettings || {};
       await Receipt.create(
         [{
-          businessId, branchId, saleId, receiptNumber, invoiceNumber, soldAt, isOffline: true,
+          businessId, branchId, saleId, receiptNumber, invoiceNumber, soldAt, isOffline: true, verifyToken,
           receiptData: {
             business: {
               name: business.name, address: business.address, phone: business.phone, kraPin: business.kraPin,
@@ -491,7 +496,7 @@ async function ingestOfflineSale(ctx) {
   } catch (err) {
     if (err && err.code === 11000) {
       const kp = err.keyPattern || {};
-      if (kp.clientTransactionId) {
+      if (kp.clientTransactionId || kp.verifyToken) {
         const existing = await Sale.findOne({ businessId, branchId, deviceId: device.deviceId, clientTransactionId: s.clientTransactionId });
         if (existing) return { status: 'duplicate', saleId: existing._id, receiptNumber: existing.receiptNumber, invoiceNumber: existing.invoiceNumber, reviewStatus: existing.reviewStatus };
       }

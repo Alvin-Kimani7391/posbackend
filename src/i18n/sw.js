@@ -36,6 +36,7 @@ module.exports = {
     titlePaymentOwn: 'Malipo ya upungufu yamepokelewa',
     msgOwn: '{{actor}} ameandika malipo yako ya {{method}} ya {{amount}}{{ref}} kwa upungufu wa {{total}}. {{balanceLine}}',
   },
+  receiptVerify: { fakeTitle: 'Risiti bandia imechanganuliwa', fakeMsg: '{{name}} amechanganua QR ya risiti isiyolingana na mauzo yoyote kwenye mfumo wako. Risiti inaweza kuwa bandia.' },
   sale: { cancelledTitle: 'Mauzo yamefutwa - {{receipt}}', cancelledMsg: '{{name}} amefuta mauzo {{receipt}} ({{amount}}).', aCashier: 'Mhudumu wa malipo' },
   refund: {
     requestedTitle: 'Ombi la kurejesha pesa - {{number}}',
@@ -83,7 +84,7 @@ module.exports = {
     discount: 'Punguzo', vat: 'VAT', amount: 'Kiasi', paymentsReceived: 'Malipo yaliyopokelewa', amountInWords: 'Kiasi kwa maneno', notes: 'Maelezo',
     subtotal: 'Jumla ndogo', itemDiscounts: 'Punguzo la bidhaa', discountLine: 'Punguzo', vatIncluded: ' (imejumuishwa)', total: 'JUMLA', paid: 'Kilicholipwa', balanceDue: 'Salio la kulipwa',
     preparedBy: 'Imeandaliwa na', deliveredBy: 'Imewasilishwa na', receivedBy: 'Imepokelewa na (jina, sahihi, tarehe)', thanks: 'Asante kwa kufanya biashara nasi!',
-    goodsRemain: 'Bidhaa zinabaki kuwa mali ya {{name}} hadi zilipwe kikamilifu.', print: 'Chapisha / Hifadhi kama PDF', payViaTill: 'Lipa kwa M-PESA Till',
+    verifyScan: 'Changanua ili kuthibitisha hati hii', goodsRemain: 'Bidhaa zinabaki kuwa mali ya {{name}} hadi zilipwe kikamilifu.', print: 'Chapisha / Hifadhi kama PDF', payViaTill: 'Lipa kwa M-PESA Till',
     statusPaid: 'IMELIPWA', statusPart: 'IMELIPWA SEHEMU', statusUnpaid: 'HAIJALIPWA',
   },
   offline: { syncedSale: 'Mauzo {{receipt}} ({{amount}}) yamepokelewa kutoka {{device}}' },

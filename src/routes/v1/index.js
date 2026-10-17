@@ -24,6 +24,7 @@ router.use('/pharmacy', require('../pharmacy.routes'));
 router.use('/layaways', require('../layaway.routes'));
 router.use('/trade-ins', require('../tradein.routes'));
 router.use('/sales', require('../sale.routes'));
+router.use('/receipts', require('../receipt.routes'));
 router.use('/customers', require('../customer.routes'));
 router.use('/crm', require('../crm.routes'));
 router.use('/registers', require('../register.routes'));

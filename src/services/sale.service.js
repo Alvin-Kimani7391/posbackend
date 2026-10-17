@@ -520,10 +520,11 @@ async function getSale(businessId, id) {
     .populate('branchId', 'name code');
   if (!sale) throw ApiError.notFound('Sale not found');
 
-  const [receipt, payments] = await Promise.all([
+  const [rawReceipt, payments] = await Promise.all([
     Receipt.findOne({ saleId: sale._id }),
     Payment.find({ saleId: sale._id }),
   ]);
+  const receipt = rawReceipt ? await require('./receipt.service').ensureVerifyToken(rawReceipt) : rawReceipt;
   return { sale, receipt, payments };
 }
 

@@ -13,6 +13,10 @@ const Warehouse = require('../models/Warehouse');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const IntegrationSettings = require('../models/IntegrationSettings');
+const Receipt = require('../models/Receipt');
+const receiptService = require('./receipt.service');
+const QR = require('../utils/qr');
+const { verifyUrl } = require('../utils/receiptToken');
 const ApiError = require('../utils/ApiError');
 const { formatMoney, amountInWords: amountInWordsI18n } = require('../utils/currency');
 const { t } = require('../i18n');
@@ -39,7 +43,13 @@ async function getInvoiceData(businessId, saleId) {
     User.findById(sale.cashierId).select('name').lean(),
     IntegrationSettings.findOne({ businessId }).select('mpesa.tillNumber').lean(),
   ]);
-  return { sale, business: business || {}, branch, customer, warehouse, payments, cashier, tillNumber: integ?.mpesa?.tillNumber || null };
+  // QR verification token (created now for older sales). A missing receipt must never stop an invoice printing: no QR then.
+  let verifyToken = null;
+  try {
+    const receipt = await Receipt.findOne({ saleId: sale._id, businessId }).select('verifyToken');
+    if (receipt) verifyToken = (await receiptService.ensureVerifyToken(receipt)).verifyToken || null;
+  } catch (err) { console.error('invoice verify token failed', err.message); }
+  return { sale, business: business || {}, branch, customer, warehouse, payments, cashier, tillNumber: integ?.mpesa?.tillNumber || null, verifyToken };
 }
 
 function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = false, lang: langOpt } = {}) {
@@ -58,6 +68,7 @@ function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = fal
   const bs = b.receiptSettings || {};
   const taxId = b.kraPin || b.taxPin;                 // KRA PIN (Kenya) / TIN (Tanzania)
   const taxIdLabel = ctx.country.taxIdLabel[lang];
+  const vUrl = verifyUrl(d.verifyToken);
   const vrnLine = b.vrn ? `<div>VRN: <strong>${esc(b.vrn)}</strong></div>` : '';
 
   const rows = (sale.items || []).map((i, idx) => {
@@ -95,6 +106,7 @@ function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = fal
     .words{margin-top:8px;font-style:italic} .stamp{position:absolute;right:30px;top:120px;transform:rotate(-12deg);font-size:26px;font-weight:bold;border:3px solid;padding:2px 14px;opacity:.28}
     .stamp.paid{color:#15803d;border-color:#15803d} .stamp.part{color:#b45309;border-color:#b45309} .stamp.due{color:#b91c1c;border-color:#b91c1c}
     .sign{display:flex;gap:30px;margin-top:34px} .sign div{flex:1;border-top:1px solid #111;padding-top:4px;font-size:10px;color:#475569}
+    .vq{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px;color:#475569;font-size:10px;text-align:left}.vq svg{width:78px;height:78px;flex:none}
     .foot{margin-top:14px;text-align:center;color:#475569;font-size:10px} .actions{max-width:210mm;margin:10px auto;text-align:right}
     .actions button{padding:8px 16px;font-size:13px;cursor:pointer}
     @media print{body{background:#fff}.page{margin:0;padding:0;max-width:none}.actions{display:none}}`;
@@ -138,6 +150,7 @@ function renderInvoiceHtml(d, { copy = 'ORIGINAL', paper = 'A4', autoPrint = fal
     </table></div>
   </div>
   <div class="sign"><div>${esc(L('preparedBy'))}</div><div>${esc(L('deliveredBy'))}</div><div>${esc(L('receivedBy'))}</div></div>
+  ${vUrl ? `<div class="vq">${QR.toSvg(vUrl, { ecl: 'M', border: 1, title: L('verifyScan') })}<div><strong>${esc(L('verifyScan'))}</strong><br>${esc(L('receipt'))}: ${esc(sale.receiptNumber)}</div></div>` : ''}
   <div class="foot">${esc(bs.footerMessage && bs.footerMessage !== 'Thank you for your business!' ? bs.footerMessage : L('thanks'))}${(bs.customLines || []).map((l) => `<br>${esc(l)}`).join('')}<br>${esc(L('goodsRemain', { name: b.name }))}</div>
 </div>
 ${autoPrint ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},300)})</script>' : ''}

@@ -21,6 +21,8 @@ services:
         value: 30d
       - key: FRONTEND_URL
         sync: false
+      - key: VERIFY_BASE_URL
+        sync: false
       - key: MPESA_ENVIRONMENT
         value: sandbox
       - key: MPESA_CONSUMER_KEY

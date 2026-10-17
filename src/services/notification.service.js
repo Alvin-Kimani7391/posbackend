@@ -269,6 +269,20 @@ async function notifySaleCancelled(businessId, branchId, sale, cashier) {
   });
 }
 
+/** A receipt QR code that matches no sale was scanned: tell owner / admin / manager (the theft signal). */
+async function notifyFakeReceipt(businessId, scanner, { inputHint, branchId } = {}) {
+  const nctx = await notifCtx(businessId);
+  return notifyManagement(businessId, {
+    type: 'FAKE_RECEIPT',
+    title: nctx.t('receiptVerify.fakeTitle'),
+    message: nctx.t('receiptVerify.fakeMsg', { name: scanner?.name || '-' }),
+    branchId,
+    sourceUserId: scanner?._id,
+    entityType: 'Receipt',
+    data: { inputHint },
+  });
+}
+
 async function notifyTransferRequested(businessId, transfer, requester) {
   const nctx = await notifCtx(businessId);
   return notifyManagement(businessId, {
@@ -533,6 +547,7 @@ module.exports = {
   notifyShiftClosed,
   notifyShortagePayment,
   notifySaleCancelled,
+  notifyFakeReceipt,
   notifyTransferRequested,
   notifyStockLevel,
   notifyRefundRequested,

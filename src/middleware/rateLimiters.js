@@ -31,4 +31,13 @@ const syncLimiter = rateLimit({
   keyGenerator: (req) => `${req.businessId || ''}:${(req.body && req.body.deviceId) || (req.query && req.query.deviceId) || req.ip}`,
   message: { success: false, message: 'Too many sync requests', code: 'RATE_LIMITED' },
 });
-module.exports = { authLimiter, publicApiLimiter, callbackLimiter, syncLimiter };
+// Receipt verification: a person scanning receipts at a door is fast, but a script guessing tokens must be stopped.
+const receiptVerifyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.businessId || ''}:${req.user ? req.user._id : req.ip}`,
+  message: { success: false, message: 'Too many verifications, wait a moment', code: 'RATE_LIMITED' },
+});
+module.exports = { authLimiter, publicApiLimiter, callbackLimiter, syncLimiter, receiptVerifyLimiter };

@@ -33,6 +33,7 @@ module.exports = {
     titlePaymentOwn: 'Shortage payment received',
     msgOwn: '{{actor}} recorded your {{amount}} {{method}} payment{{ref}} towards the {{total}} shortage. {{balanceLine}}',
   },
+  receiptVerify: { fakeTitle: 'Fake receipt scanned', fakeMsg: '{{name}} scanned a receipt QR code that matches no sale in your system. The receipt may be fake.' },
   sale: { cancelledTitle: 'Sale cancelled - {{receipt}}', cancelledMsg: '{{name}} cancelled sale {{receipt}} ({{amount}}).', aCashier: 'A cashier' },
   refund: {
     requestedTitle: 'Refund requested - {{number}}',
@@ -80,7 +81,7 @@ module.exports = {
     discount: 'Discount', vat: 'VAT', amount: 'Amount', paymentsReceived: 'Payments received', amountInWords: 'Amount in words', notes: 'Notes',
     subtotal: 'Subtotal', itemDiscounts: 'Item discounts', discountLine: 'Discount', vatIncluded: ' (included)', total: 'TOTAL', paid: 'Paid', balanceDue: 'Balance due',
     preparedBy: 'Prepared by', deliveredBy: 'Delivered by', receivedBy: 'Received by (name, signature, date)', thanks: 'Thank you for your business!',
-    goodsRemain: 'Goods remain the property of {{name}} until paid in full.', print: 'Print / Save as PDF', payViaTill: 'Pay via M-PESA Till',
+    verifyScan: 'Scan to verify this document', goodsRemain: 'Goods remain the property of {{name}} until paid in full.', print: 'Print / Save as PDF', payViaTill: 'Pay via M-PESA Till',
     statusPaid: 'PAID', statusPart: 'PART PAID', statusUnpaid: 'UNPAID',
   },
   offline: { syncedSale: 'Sale {{receipt}} ({{amount}}) synced from {{device}}' },

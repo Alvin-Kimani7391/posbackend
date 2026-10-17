@@ -1,4 +1,5 @@
 const { Schema, model } = require('mongoose');
+const { newVerifyToken } = require('../utils/receiptToken');
 
 const receiptSchema = new Schema(
   {
@@ -16,6 +17,16 @@ const receiptSchema = new Schema(
     
     receiptNumber: { type: String, required: true },
     invoiceNumber: { type: String },
+
+    // --- QR verification (anti fake-receipt) ---
+    // Random secret printed in the QR code. Set ONCE at creation (hook below; an offline till supplies its own) and
+    // never changed. Older receipts get one lazily (receipt.service.ensureVerifyToken). Deliberately not a schema
+    // `default`: Mongoose would invent an unsaved token for every legacy receipt it loads.
+    verifyToken: { type: String },
+    verifyCount: { type: Number, default: 0 },
+    firstVerifiedAt: { type: Date },
+    lastVerifiedAt: { type: Date },
+    lastVerifiedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 
     // Fully self-contained snapshot - a thermal/PDF/SMS renderer needs
     // nothing else. Never re-fetch business/product/customer data to
@@ -64,6 +75,11 @@ const receiptSchema = new Schema(
 );
 
 receiptSchema.index({ businessId: 1, receiptNumber: 1 });
+receiptSchema.index({ verifyToken: 1 }, { unique: true, partialFilterExpression: { verifyToken: { $type: 'string' } } });
+receiptSchema.pre('validate', function assignVerifyToken(next) {
+  if (this.isNew && !this.verifyToken) this.verifyToken = newVerifyToken();
+  next();
+});
 
 // receiptData nests its money fields inside an object (and inside its own
 // items/payments arrays), which the generic moneySchemaPlugin doesn't reach
