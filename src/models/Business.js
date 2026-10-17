@@ -198,6 +198,23 @@ const businessSchema = new Schema(
       warrantyExpiring: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 14, min: 1, max: 90 }, template: { type: String, maxlength: 320 } },
       insuranceExpiring: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 14, min: 1, max: 90 }, template: { type: String, maxlength: 320 } },
       layawayDue: { enabled: { type: Boolean, default: false }, daysBefore: { type: Number, default: 3, min: 0, max: 30 }, template: { type: String, maxlength: 320 }, overdueTemplate: { type: String, maxlength: 320 } },
+      // Text to the shop OWNER(s) when stock is expired / about to expire (staff alert, not a customer text).
+      // Text to the shop OWNER(S) when stock is running low / out. Opt-in; each text uses SMS credits.
+      lowStockDigest: { enabled: { type: Boolean, default: false }, frequency: { type: String, enum: ['daily', 'weekly'], default: 'weekly' }, includeOutOfStock: { type: Boolean, default: true }, template: { type: String, maxlength: 320 } },
+      expiryDigest: { enabled: { type: Boolean, default: false }, frequency: { type: String, enum: ['daily', 'weekly'], default: 'weekly' }, daysBefore: { type: Number, default: 30, min: 1, max: 180 }, template: { type: String, maxlength: 320 } },
+    },
+
+    // In-app alert switches the owner controls (Alerts page). Everything defaults ON so existing shops behave as before.
+    alertPrefs: {
+      lowStockNotify: { type: Boolean, default: true },
+      outOfStockNotify: { type: Boolean, default: true },
+    },
+
+    // Expiry watch: how many days ahead a batch turns "critical" (red) / "warning" (orange), and the daily in-app alert.
+    expirySettings: {
+      criticalDays: { type: Number, default: 30, min: 1, max: 365 },
+      warningDays: { type: Number, default: 90, min: 1, max: 730 },
+      notifyEnabled: { type: Boolean, default: true },
     },
 
     subscriptionPlan: { type: String, default: 'trial' },

@@ -20,6 +20,7 @@ const RepairJob = require('../../models/RepairJob');
 const SerialNumber = require('../../models/SerialNumber');
 const Product = require('../../models/Product');
 const Layaway = require('../../models/Layaway');
+const User = require('../../models/User');
 const Notification = require('../../models/Notification');
 const M = require('../../models/sms.models');
 const ApiError = require('../../utils/ApiError');
@@ -38,11 +39,14 @@ const DEFAULT_TEMPLATES = {
   insuranceExpiring: 'Hi {name}, the insurance for {item} expires on {date}. Renew in time to stay covered. {shop}',
   layawayDue: 'Hi {name}, your layaway {job} at {shop} is due on {date}. Balance: KES {balance}. Please complete payment to collect your items.',
   layawayOverdue: 'Hi {name}, your layaway {job} at {shop} is overdue. Balance: KES {balance}. Please pay or call{shopPhoneText} to avoid cancellation.',
+  lowStockDigest: 'Low stock {shop}: {low} item(s) running low and {out} out of stock. Most urgent: {items}. Open Inventory to reorder.',
+  expiryDigest: 'Expiry alert {shop}: {expired} batch(es) expired and {expiring} expiring within {days} days. Soonest: {items}. Open Batches & expiry to act.',
 };
-const PLACEHOLDERS = ['name', 'shop', 'shopPhone', 'shopPhoneText', 'item', 'job', 'plate', 'balance', 'balanceText', 'date', 'dueText', 'days'];
+const PLACEHOLDERS = ['name', 'shop', 'shopPhone', 'shopPhoneText', 'item', 'job', 'plate', 'balance', 'balanceText', 'date', 'dueText', 'days', 'expired', 'expiring', 'items', 'low', 'out'];
 const SAMPLE = {
   name: 'Wanjiru', shop: 'Your Shop', shopPhone: '0712345678', shopPhoneText: ' or call 0712345678', item: 'Samsung A15', job: 'RPR-000123', plate: 'KDG 123A',
   balance: '2,500', balanceText: ' Balance: KES 2,500.', date: '12 Nov', dueText: 'is due for service on 12 Nov', days: '3',
+  expired: '2', expiring: '5', items: 'Amoxicillin 500mg (12 Nov), Panadol (20 Nov)', low: '6', out: '2',
 };
 
 const dateText = (d) => new Date(d).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Africa/Nairobi' });
@@ -77,6 +81,8 @@ function effective(b) {
     warrantyExpiring: { enabled: !!a.warrantyExpiring?.enabled, daysBefore: a.warrantyExpiring?.daysBefore ?? 14, template: a.warrantyExpiring?.template || '' },
     insuranceExpiring: { enabled: !!a.insuranceExpiring?.enabled, daysBefore: a.insuranceExpiring?.daysBefore ?? 14, template: a.insuranceExpiring?.template || '' },
     layawayDue: { enabled: !!a.layawayDue?.enabled, daysBefore: a.layawayDue?.daysBefore ?? 3, template: a.layawayDue?.template || '', overdueTemplate: a.layawayDue?.overdueTemplate || '' },
+    lowStockDigest: { enabled: !!a.lowStockDigest?.enabled, frequency: a.lowStockDigest?.frequency === 'daily' ? 'daily' : 'weekly', includeOutOfStock: a.lowStockDigest?.includeOutOfStock !== false, template: a.lowStockDigest?.template || '' },
+    expiryDigest: { enabled: !!a.expiryDigest?.enabled, frequency: a.expiryDigest?.frequency === 'daily' ? 'daily' : 'weekly', daysBefore: a.expiryDigest?.daysBefore ?? 30, template: a.expiryDigest?.template || '' },
   };
 }
 
@@ -120,7 +126,7 @@ async function updateSettings(businessId, patch) {
 
 /** What a template will look like (sample data) and how many credits one text costs. */
 function preview(kind, template) {
-  const key = { ready: 'ready', readyReminder: 'readyReminder', layawayDue: 'layawayDue', layawayOverdue: 'layawayOverdue', serviceDue: 'serviceDue', serviceOverdue: 'serviceOverdue', warrantyExpiring: 'warrantyExpiring', insuranceExpiring: 'insuranceExpiring' }[kind];
+  const key = { ready: 'ready', readyReminder: 'readyReminder', layawayDue: 'layawayDue', layawayOverdue: 'layawayOverdue', serviceDue: 'serviceDue', serviceOverdue: 'serviceOverdue', warrantyExpiring: 'warrantyExpiring', insuranceExpiring: 'insuranceExpiring', expiryDigest: 'expiryDigest', lowStockDigest: 'lowStockDigest' }[kind];
   if (!key) throw ApiError.badRequest('Unknown alert type', 'BAD_KIND');
   checkTemplate('template', template);
   const text = render(template || DEFAULT_TEMPLATES[key], SAMPLE);
@@ -345,6 +351,80 @@ async function warrantyReminders(biz, limit) {
   return out;
 }
 
+/* ------------------------------ expiry digest (staff alert) ------------------------------ */
+const asciiOnly = (s) => String(s || '').replace(/[^\x20-\x7E]/g, '').trim();
+
+/**
+ * Text the shop OWNER(S) a short expiry summary. `summary` comes from batch.service#expirySummary (computed for
+ * cfg.expiryDigest.daysBefore). Sent at most once per day (daily) or per week (weekly) per owner, only when something
+ * is expired or expiring. Never throws. Returns { queued, skipped }.
+ */
+async function sendExpiryDigest(businessId, summary) {
+  const out = { queued: 0, skipped: 0 };
+  try {
+    const biz = await loadBusiness(businessId);
+    if (!biz || !biz.cfg.expiryDigest.enabled) return out;
+    const d = biz.cfg.expiryDigest;
+    const expired = summary.expired?.batches || 0;
+    const expiring = (summary.critical?.batches || 0) + (summary.warning?.batches || 0);
+    if (!expired && !expiring) return out;
+
+    const eatNow = new Date(Date.now() + EAT_OFFSET);
+    const ymd = eatNow.toISOString().slice(0, 10);
+    const monday = new Date(eatNow); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+    const periodKey = d.frequency === 'daily' ? ymd : `wk-${monday.toISOString().slice(0, 10)}`;
+
+    const items = (summary.top || []).slice(0, 3).map((t) => `${asciiOnly(t.name).slice(0, 22)} (${new Date(t.expiryDate).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', timeZone: 'UTC' })})`).join(', ') || '-';
+    const text = render(d.template || DEFAULT_TEMPLATES.expiryDigest, { ...ctxBase(biz), expired, expiring, days: d.daysBefore, items });
+
+    const owners = await User.find({ businessId, role: 'OWNER', status: 'active' }).select('_id name phone').lean();
+    for (const o of owners) {
+      const r = await enqueue(businessId, biz.cfg, {
+        phone: o.phone, name: o.name, text, purpose: 'EXPIRY_DIGEST', dedupeKey: `expiry:${businessId}:${periodKey}:${o._id}`,
+        refType: 'Business', refId: businessId, respectOptOut: false,
+      });
+      if (r.queued) out.queued += 1; else if (r.skipped !== 'DUPLICATE') out.skipped += 1;
+    }
+  } catch (e) { console.error('[sms alerts] expiry digest failed', String(businessId), e.message); }
+  return out;
+}
+
+/* ------------------------------ low stock digest (staff alert) ------------------------------ */
+/**
+ * Text the shop OWNER(S) which products are running low / out of stock. Opt-in; every text uses SMS credits
+ * (same wallet, sender ID, quiet hours and dedupe rules as the other alerts). `summary` comes from
+ * lowStockAlerts.service#lowStockSummary. `manual` = the owner pressed "Send now" (limited to once an hour).
+ */
+async function sendLowStockDigest(businessId, summary, { manual = false } = {}) {
+  const out = { queued: 0, skipped: 0 };
+  try {
+    const biz = await loadBusiness(businessId);
+    if (!biz || !biz.cfg.lowStockDigest.enabled) return { ...out, skipped: 0, reason: 'DISABLED' };
+    const d = biz.cfg.lowStockDigest;
+    const low = summary.low || 0; const outCount = d.includeOutOfStock ? (summary.out || 0) : 0;
+    if (!low && !outCount) return { ...out, reason: 'NOTHING' };
+
+    const eatNow = new Date(Date.now() + EAT_OFFSET);
+    const ymd = eatNow.toISOString().slice(0, 10);
+    const monday = new Date(eatNow); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+    const periodKey = manual ? `now-${eatNow.toISOString().slice(0, 13)}` : d.frequency === 'daily' ? ymd : `wk-${monday.toISOString().slice(0, 10)}`;
+
+    const pool = (summary.top || []).filter((t) => d.includeOutOfStock || t.quantity > 0).slice(0, 3);
+    const items = pool.map((t) => `${asciiOnly(t.name).slice(0, 20)} (${t.quantity})`).join(', ') || '-';
+    const text = render(d.template || DEFAULT_TEMPLATES.lowStockDigest, { ...ctxBase(biz), low, out: outCount, items });
+
+    const owners = await User.find({ businessId, role: 'OWNER', status: 'active' }).select('_id name phone').lean();
+    for (const o of owners) {
+      const r = await enqueue(businessId, biz.cfg, {
+        phone: o.phone, name: o.name, text, purpose: 'LOW_STOCK_DIGEST', dedupeKey: `lowstock:${businessId}:${periodKey}:${o._id}`,
+        refType: 'Business', refId: businessId, respectOptOut: false,
+      });
+      if (r.queued) out.queued += 1; else if (r.skipped !== 'DUPLICATE') { out.skipped += 1; out.reason = r.skipped; }
+    }
+  } catch (e) { console.error('[sms alerts] low stock digest failed', String(businessId), e.message); }
+  return out;
+}
+
 /** One business, all enabled reminder types. Capped so one tick cannot flood the SMS queue. */
 async function runReminders(businessId, { limit = 200 } = {}) {
   const biz = await loadBusiness(businessId);
@@ -367,4 +447,4 @@ async function listMessages(businessId, { purpose, status, page = 1, limit = 20 
   return { items, total, page, limit, pages: Math.ceil(total / limit) };
 }
 
-module.exports = { DEFAULT_TEMPLATES, PLACEHOLDERS, render, nextSendTime, effective, getSettings, updateSettings, preview, enqueue, onReady, runReminders, listMessages, readyAtOf };
+module.exports = { DEFAULT_TEMPLATES, PLACEHOLDERS, render, nextSendTime, effective, getSettings, updateSettings, preview, enqueue, onReady, runReminders, listMessages, readyAtOf, sendExpiryDigest, sendLowStockDigest };

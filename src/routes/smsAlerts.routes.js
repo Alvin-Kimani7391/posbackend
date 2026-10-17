@@ -21,6 +21,12 @@ router.put('/settings', requirePermission('settings.update'), validate({ body: v
 
 router.post('/preview', requirePermission('settings.view'), validate({ body: v.previewSchema }), catchAsync(async (req, res) => sendSuccess(res, 200, 'Preview', alerts.preview(req.body.kind, req.body.template))));
 
+// "Send now": texts the owner(s) the current low-stock summary (once an hour at most; uses SMS credits).
+router.post('/low-stock/send-now', requirePermission('settings.update'), catchAsync(async (req, res) => {
+  const lowStockAlerts = require('../services/lowStockAlerts.service');
+  sendSuccess(res, 200, 'Low stock check done', await lowStockAlerts.runForBusiness(req.businessId, { manual: true }));
+}));
+
 router.get('/messages', requirePermission('reports.view'), validate({ query: v.messagesQuery }), catchAsync(async (req, res) => sendSuccess(res, 200, 'Alert messages fetched', await alerts.listMessages(req.businessId, req.query))));
 
 module.exports = router;

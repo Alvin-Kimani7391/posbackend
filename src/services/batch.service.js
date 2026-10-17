@@ -1,6 +1,7 @@
 const Batch = require('../models/Batch');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
+const Business = require('../models/Business');
 const ProductVariant = require('../models/ProductVariant');
 const AuditLog = require('../models/AuditLog');
 const mongoose = require('mongoose');
@@ -500,7 +501,88 @@ async function normalizeExpiryProducts() {
   return r.modifiedCount || 0;
 }
 
+// ---------------------------------------------------------------- expiry alerts (dashboard, till, daily job)
+
+const DEFAULT_THRESHOLDS = { criticalDays: 30, warningDays: 90, notifyEnabled: true };
+
+async function getAlertSettings(businessId) {
+  const b = await Business.findById(businessId).select('expirySettings').lean();
+  if (!b) throw ApiError.notFound('Business not found');
+  const e = b.expirySettings || {};
+  const criticalDays = e.criticalDays || DEFAULT_THRESHOLDS.criticalDays;
+  return { criticalDays, warningDays: Math.max(e.warningDays || DEFAULT_THRESHOLDS.warningDays, criticalDays), notifyEnabled: e.notifyEnabled !== false };
+}
+
+async function updateAlertSettings(businessId, { criticalDays, warningDays, notifyEnabled }) {
+  const cur = await getAlertSettings(businessId);
+  const next = {
+    criticalDays: criticalDays ?? cur.criticalDays,
+    warningDays: warningDays ?? cur.warningDays,
+    notifyEnabled: notifyEnabled ?? cur.notifyEnabled,
+  };
+  if (next.warningDays < next.criticalDays) throw ApiError.badRequest('The warning period must be at least as long as the critical period', 'BAD_THRESHOLDS');
+  await Business.updateOne({ _id: businessId }, { $set: { expirySettings: next } });
+  return next;
+}
+
+/**
+ * One call that answers "what is expired or about to expire?" - used by the dashboard, the daily alert job and the
+ * Batches page banner. Only batches that still hold sellable stock count (active, quantity > 0, with an expiry date).
+ *   expired  = expiry before today            critical = expires within criticalDays (default 30)
+ *   warning  = within warningDays (default 90) but not critical
+ * Each bucket: { batches, units, costValue (integer cents) }. `top` = the soonest-expiring rows, expired first.
+ */
+async function expirySummary(businessId, { branchId, criticalDays, warningDays, top = 5, thresholds } = {}) {
+  const t = thresholds || await getAlertSettings(businessId);
+  const crit = criticalDays || t.criticalDays;
+  const warn = Math.max(warningDays || t.warningDays, crit);
+  const today = startOfToday();
+  const filter = {
+    businessId: new mongoose.Types.ObjectId(String(businessId)), status: 'active', quantity: { $gt: 0 },
+    expiryDate: { $ne: null, $lt: new Date(today.getTime() + (warn + 1) * 86400000) },
+  };
+  if (branchId) filter.branchId = new mongoose.Types.ObjectId(String(branchId));
+  const rows = await Batch.find(filter).select('productId branchId batchNumber quantity costPrice expiryDate').sort({ expiryDate: 1 }).limit(3000).lean();
+
+  const bucket = () => ({ batches: 0, units: 0, costValue: 0 });
+  const out = { criticalDays: crit, warningDays: warn, expired: bucket(), critical: bucket(), warning: bucket(), byBranch: {}, top: [] };
+  for (const b of rows) {
+    const days = Math.round((new Date(b.expiryDate).getTime() - today.getTime()) / 86400000);
+    const key = days < 0 ? 'expired' : days <= crit ? 'critical' : days <= warn ? 'warning' : null;
+    if (!key) continue;
+    out[key].batches += 1; out[key].units = round3(out[key].units + b.quantity); out[key].costValue += Math.round(b.quantity * (b.costPrice || 0));
+    const bb = out.byBranch[b.branchId] || (out.byBranch[b.branchId] = { expired: 0, critical: 0, warning: 0 });
+    bb[key] += 1;
+  }
+  const soonest = rows.filter((b) => Math.round((new Date(b.expiryDate).getTime() - today.getTime()) / 86400000) <= warn).slice(0, top);
+  if (soonest.length) {
+    const prods = await Product.find({ _id: { $in: soonest.map((b) => b.productId) } }).select('name').lean();
+    const nameOf = new Map(prods.map((p) => [String(p._id), p.name]));
+    out.top = soonest.map((b) => ({
+      batchId: b._id, branchId: b.branchId, productId: b.productId, name: nameOf.get(String(b.productId)) || 'Product',
+      batchNumber: b.batchNumber, quantity: b.quantity, expiryDate: b.expiryDate,
+      daysLeft: Math.round((new Date(b.expiryDate).getTime() - today.getTime()) / 86400000),
+    }));
+  }
+  return out;
+}
+
+/**
+ * Sellable batches of one product at a branch, earliest expiry first (FEFO) - what the till shows the cashier.
+ * Only RETAIL batches that are active, in date and not empty (the same rule the sale itself applies).
+ */
+async function listAvailable(businessId, { branchId, productId, variantId = null }) {
+  const now = new Date();
+  const rows = (await Batch.find(eligibleFilter({ businessId, branchId, productId, variantId }, now)).select('batchNumber quantity expiryDate createdAt').lean()).sort(fefoSort);
+  const today = startOfToday(now).getTime();
+  return rows.map((b) => ({
+    _id: b._id, batchNumber: b.batchNumber, quantity: b.quantity, expiryDate: b.expiryDate || null,
+    daysLeft: b.expiryDate ? Math.round((new Date(b.expiryDate).getTime() - today) / 86400000) : null,
+  }));
+}
+
 module.exports = {
+  getAlertSettings, updateAlertSettings, expirySummary, listAvailable,
   listUnbatched, backfillBatch, normalizeExpiryProducts,
   startOfToday, isExpired, eligibleFilter,
   allocateForSale, restoreAllocations, receiveIntoBatch, quarantineReturn, moveBetweenLocations, locQuery, locOf,

@@ -13,15 +13,17 @@ const updateSettingsSchema = z.object({
   warrantyExpiring: z.object({ enabled: z.boolean().optional(), daysBefore: hour(1, 90).optional(), template: tpl }).optional(),
   insuranceExpiring: z.object({ enabled: z.boolean().optional(), daysBefore: hour(1, 90).optional(), template: tpl }).optional(),
   layawayDue: z.object({ enabled: z.boolean().optional(), daysBefore: hour(0, 30).optional(), template: tpl, overdueTemplate: tpl }).optional(),
+  lowStockDigest: z.object({ enabled: z.boolean().optional(), frequency: z.enum(['daily', 'weekly']).optional(), includeOutOfStock: z.boolean().optional(), template: tpl }).optional(),
+  expiryDigest: z.object({ enabled: z.boolean().optional(), frequency: z.enum(['daily', 'weekly']).optional(), daysBefore: hour(1, 180).optional(), template: tpl }).optional(),
 }).strict();
 
 const previewSchema = z.object({
-  kind: z.enum(['ready', 'readyReminder', 'layawayDue', 'layawayOverdue', 'serviceDue', 'serviceOverdue', 'warrantyExpiring', 'insuranceExpiring']),
+  kind: z.enum(['ready', 'readyReminder', 'layawayDue', 'layawayOverdue', 'serviceDue', 'serviceOverdue', 'warrantyExpiring', 'insuranceExpiring', 'expiryDigest', 'lowStockDigest']),
   template: z.string().trim().max(320).optional(),
 });
 
 const messagesQuery = paginationQuery.extend({
-  purpose: z.enum(['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE']).optional(),
+  purpose: z.enum(['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE', 'EXPIRY_DIGEST', 'LOW_STOCK_DIGEST']).optional(),
   status: z.enum(['queued', 'sending', 'sent', 'delivered', 'failed']).optional(),
 });
 

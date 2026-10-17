@@ -283,9 +283,26 @@ async function notifyTransferRequested(businessId, transfer, requester) {
   });
 }
 
+// The owner can switch the in-app low-stock / out-of-stock notifications off (Alerts page). Cached for 30 s: this runs on stock changes.
+const prefsCache = new Map();
+async function stockAlertPrefs(businessId) {
+  const key = String(businessId);
+  const hit = prefsCache.get(key);
+  if (hit && Date.now() - hit.at < 30000) return hit.v;
+  const b = await require('../models/Business').findById(businessId).select('alertPrefs').lean();
+  const v = { low: b?.alertPrefs?.lowStockNotify !== false, out: b?.alertPrefs?.outOfStockNotify !== false };
+  prefsCache.set(key, { at: Date.now(), v });
+  return v;
+}
+function forgetStockAlertPrefs(businessId) { prefsCache.delete(String(businessId)); }
+
 async function notifyStockLevel(businessId, branchId, { productId, variantId, productName, quantity, threshold }) {
-  const nctx = await notifCtx(businessId);
   const outOfStock = quantity <= 0;
+  try {
+    const prefs = await stockAlertPrefs(businessId);
+    if (outOfStock ? !prefs.out : !prefs.low) return [];
+  } catch (e) { /* never lose an alert because the preference could not be read */ }
+  const nctx = await notifCtx(businessId);
   return notifyManagement(businessId, {
     type: outOfStock ? 'OUT_OF_STOCK' : 'LOW_STOCK',
     title: nctx.t(outOfStock ? 'stock.outTitle' : 'stock.lowTitle', { product: productName }),
@@ -508,6 +525,7 @@ async function remove(businessId, userId, id) {
 }
 
 module.exports = {
+  forgetStockAlertPrefs,
   notifyUser,
   notifyManagement,
   notifyActorAndManagement,

@@ -28,3 +28,16 @@ exports.unbatched = catchAsync(async (req, res) =>
 
 exports.backfill = catchAsync(async (req, res) =>
   sendSuccess(res, 201, 'Expiry recorded for existing stock', { batch: await batchService.backfillBatch(req.businessId, req.user._id, req.body) }));
+
+exports.available = catchAsync(async (req, res) =>
+  sendSuccess(res, 200, 'Available batches fetched', { batches: await batchService.listAvailable(req.businessId, req.query) }));
+
+exports.getAlertSettings = catchAsync(async (req, res) =>
+  sendSuccess(res, 200, 'Expiry alert settings fetched', await batchService.getAlertSettings(req.businessId)));
+
+exports.updateAlertSettings = catchAsync(async (req, res) =>
+  sendSuccess(res, 200, 'Expiry alert settings saved', await batchService.updateAlertSettings(req.businessId, req.body)));
+
+// "Run it now": recomputes and notifies management immediately (the daily job does the same on a schedule).
+exports.runAlertsNow = catchAsync(async (req, res) =>
+  sendSuccess(res, 200, 'Expiry check done', await require('../services/expiryAlerts.service').runForBusiness(req.businessId, { force: true })));

@@ -50,6 +50,7 @@ router.use('/admin', require('../admin.routes'));
 router.use('/sms', require('../sms.routes'));
 router.use('/sms-hooks', require('../sms.webhook.routes'));
 router.use('/sms-alerts', require('../smsAlerts.routes'));
+router.use('/alert-prefs', require('../alertPrefs.routes'));
 
 router.use('/devices', require('../device.routes'));
 

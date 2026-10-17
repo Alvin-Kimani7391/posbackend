@@ -29,6 +29,8 @@ async function start() {
     require('./jobs/smsQueue.job').start();
   require('./jobs/smsAlerts.job').start();
       require('./jobs/offlineWatch.job').start();
+  require('./jobs/expiryAlerts.job').start();
+  require('./jobs/lowStockAlerts.job').start();
 }
 
 async function shutdown(signal) {

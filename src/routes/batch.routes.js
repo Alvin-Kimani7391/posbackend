@@ -8,6 +8,10 @@ router.use(authenticate);
 
 router.get('/', requirePermission('batches.view'), validate({ query: v.listBatchesQuery }), controller.list);
 router.get('/expiring', requirePermission('batches.view'), validate({ query: v.expiringQuery }), controller.expiring);
+router.get('/available', requirePermission('batches.view'), validate({ query: v.availableQuery }), controller.available);
+router.get('/alert-settings', requirePermission('batches.view'), controller.getAlertSettings);
+router.put('/alert-settings', requirePermission('batches.manage'), validate({ body: v.alertSettingsBody }), controller.updateAlertSettings);
+router.post('/alerts/run', requirePermission('batches.manage'), controller.runAlertsNow);
 router.get('/unbatched', requirePermission('batches.view'), validate({ query: v.unbatchedQuery }), controller.unbatched);
 router.get('/:id/sales', requirePermission('batches.view'), validate({ params: v.idParamSchema }), controller.trace);
 

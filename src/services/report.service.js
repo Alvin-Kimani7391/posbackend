@@ -362,6 +362,11 @@ async function getInventoryReport(businessId, { branchId }) {
   };
 }
 
+/** Expired / expiring stock for the dashboard. Never lets an expiry problem break the dashboard. */
+async function expiryForDashboard(businessId, branchId) {
+  try { return await require('./batch.service').expirySummary(businessId, { branchId, top: 5 }); } catch (e) { return null; }
+}
+
 async function getDashboard(businessId, { branchId, from, to }) {
   const range = from || to ? { from, to } : { from: new Date(new Date().setHours(0, 0, 0, 0)), to: new Date() };
 
@@ -383,7 +388,7 @@ async function getDashboard(businessId, { branchId, from, to }) {
       paymentBreakdown: sales.paymentBreakdown, topProducts: sales.topProducts.slice(0, 5),
     },
     profit,
-    inventory: { lowStockCount: inventory.lowStockCount, outOfStockCount: inventory.outOfStockCount, inventoryValuation: inventory.inventoryValuation },
+    inventory: { lowStockCount: inventory.lowStockCount, outOfStockCount: inventory.outOfStockCount, inventoryValuation: inventory.inventoryValuation, expiry: await expiryForDashboard(businessId, branchId) },
     outstandingCustomerCredit: customerCredit.totalOutstanding,
     supplierPayables: supplierBalances.totalPayable,
     topCashiers: cashierReport.slice(0, 5),
@@ -462,7 +467,7 @@ async function getMyDashboard(businessId, userId, { branchId, from, to } = {}, {
 
   if (includeInventory && branchId) {
     const alerts = await getLowStockAlerts(businessId, branchId);
-    result.inventory = { lowStockCount: alerts.lowStockCount, outOfStockCount: alerts.outOfStockCount };
+    result.inventory = { lowStockCount: alerts.lowStockCount, outOfStockCount: alerts.outOfStockCount, expiry: await expiryForDashboard(businessId, branchId) };
   }
 
   return result;
