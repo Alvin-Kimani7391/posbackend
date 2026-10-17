@@ -14,6 +14,21 @@ const expiringQuery = z.object({
   location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
 });
 
+const unbatchedQuery = z.object({
+  branchId: objectId,
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
+});
+const backfillBody = z.object({
+  branchId: objectId,
+  productId: objectId,
+  variantId: objectId.nullish(),
+  batchNumber: z.string().trim().min(1, 'Enter a batch number'),
+  expiryDate: z.coerce.date().optional(),
+  manufacturingDate: z.coerce.date().optional(),
+  quantity: z.coerce.number().positive(),
+  location: z.enum(['RETAIL', 'WAREHOUSE']).optional(),
+});
+
 const reasonBody = z.object({ reason: z.string().trim().min(3, 'Give a reason') });
 const quarantineBody = reasonBody;
 const releaseBody = reasonBody;
@@ -26,4 +41,4 @@ const recallBody = z.object({
 });
 const idParamSchema = z.object({ id: objectId });
 
-module.exports = { listBatchesQuery, expiringQuery, quarantineBody, releaseBody, disposeBody, recallBody, idParamSchema };
+module.exports = { unbatchedQuery, backfillBody, listBatchesQuery, expiringQuery, quarantineBody, releaseBody, disposeBody, recallBody, idParamSchema };

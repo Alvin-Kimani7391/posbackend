@@ -1,9 +1,11 @@
 const Batch = require('../models/Batch');
 const Sale = require('../models/Sale');
+const Product = require('../models/Product');
+const ProductVariant = require('../models/ProductVariant');
 const AuditLog = require('../models/AuditLog');
 const mongoose = require('mongoose');
 const ApiError = require('../utils/ApiError');
-const { applyStockChange } = require('./inventory.service');
+const { applyStockChange, inventoryModel } = require('./inventory.service');
 
 /**
  * Batch / expiry engine. Shared by supermarket, cosmetics, restaurant (ingredients), pharmacy, wholesale.
@@ -415,7 +417,91 @@ async function listExpiring(businessId, { branchId, days = 30, location }) {
   return { days, expired, expiring, expiredCostValue: value(expired), expiringCostValue: value(expiring) };
 }
 
+/**
+ * Stock on hand that has NO batch / expiry recorded, for products that track expiry or batches.
+ * (Stock received before expiry tracking worked, or before the product was set to track it.)
+ * One row per product/variant where on-hand quantity exceeds the quantity held in active batches.
+ */
+async function listUnbatched(businessId, { branchId, location = 'RETAIL' }) {
+  if (!branchId) throw ApiError.badRequest('Select a branch first', 'BRANCH_REQUIRED');
+  const products = await Product.find({ businessId, status: { $ne: 'archived' }, $or: [{ trackExpiry: true }, { trackBatch: true }] })
+    .select('name sku trackExpiry trackBatch').limit(2000).lean();
+  if (!products.length) return { items: [] };
+  const ids = products.map((p) => p._id);
+  const [inv, batches] = await Promise.all([
+    inventoryModel(location).find({ businessId, branchId, productId: { $in: ids }, quantity: { $gt: 0 } }).select('productId variantId quantity').lean(),
+    Batch.aggregate([
+      { $match: { businessId: new mongoose.Types.ObjectId(String(businessId)), branchId: new mongoose.Types.ObjectId(String(branchId)), productId: { $in: ids }, location: locQuery(location), status: 'active' } },
+      { $group: { _id: { p: '$productId', v: '$variantId' }, qty: { $sum: '$quantity' } } },
+    ]),
+  ]);
+  const key = (p, v) => `${p}|${v || ''}`;
+  const batched = new Map(batches.map((b) => [key(b._id.p, b._id.v), b.qty]));
+  const onHand = new Map();
+  for (const r of inv) onHand.set(key(r.productId, r.variantId), (onHand.get(key(r.productId, r.variantId)) || 0) + r.quantity);
+  const pById = new Map(products.map((p) => [String(p._id), p]));
+  const variantIds = inv.map((r) => r.variantId).filter(Boolean);
+  const variants = variantIds.length ? await ProductVariant.find({ _id: { $in: variantIds } }).select('attributes').lean() : [];
+  const vById = new Map(variants.map((v) => [String(v._id), v]));
+  const items = [];
+  for (const r of inv) {
+    const k = key(r.productId, r.variantId);
+    if (!onHand.has(k)) continue; // already emitted for this product/variant
+    const unbatched = round3(onHand.get(k) - (batched.get(k) || 0));
+    onHand.delete(k);
+    if (unbatched <= 0) continue;
+    const p = pById.get(String(r.productId));
+    const v = r.variantId ? vById.get(String(r.variantId)) : null;
+    const attrs = v?.attributes ? (v.attributes instanceof Map ? [...v.attributes.values()] : Object.values(v.attributes)) : [];
+    items.push({
+      productId: r.productId, variantId: r.variantId || null, name: p?.name || '-', sku: p?.sku,
+      variantLabel: attrs.join(', ') || undefined, trackExpiry: !!p?.trackExpiry, quantityUnbatched: unbatched,
+    });
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name));
+  return { items };
+}
+
+/**
+ * Attach a batch + expiry date to stock that is ALREADY on hand but was never batched. Inventory quantity does
+ * not change (the units are already counted); it only creates / tops up the batch. Cannot exceed the unbatched quantity.
+ * Already-expired dates are accepted here on purpose, so old stock shows up under "Already expired".
+ */
+async function backfillBatch(businessId, userId, { branchId, productId, variantId = null, batchNumber, expiryDate, manufacturingDate, quantity, location = 'RETAIL' }) {
+  return inTx(async (session) => {
+    const product = await Product.findOne({ _id: productId, businessId }).session(session);
+    if (!product) throw ApiError.notFound('Product not found');
+    if (!product.trackBatch && !product.trackExpiry) throw ApiError.badRequest(`${product.name} does not track batches or expiry`, 'NOT_BATCH_TRACKED');
+    if (product.trackExpiry && !expiryDate) throw ApiError.badRequest(`${product.name}: expiry date is required`, 'EXPIRY_REQUIRED');
+
+    const inv = await inventoryModel(location).find({ businessId, branchId, productId, variantId: variantId || null }).session(session).lean();
+    const onHand = inv.reduce((s, r) => s + (r.quantity || 0), 0);
+    const held = await Batch.aggregate([
+      { $match: { businessId: new mongoose.Types.ObjectId(String(businessId)), branchId: new mongoose.Types.ObjectId(String(branchId)), productId: new mongoose.Types.ObjectId(String(productId)), variantId: variantId ? new mongoose.Types.ObjectId(String(variantId)) : null, location: locQuery(location), status: 'active' } },
+      { $group: { _id: null, qty: { $sum: '$quantity' } } },
+    ]).session(session);
+    const unbatched = round3(onHand - (held[0]?.qty || 0));
+    const qty = round3(quantity);
+    if (!(qty > 0)) throw ApiError.badRequest('Enter a quantity greater than zero', 'INVALID_QUANTITY');
+    if (qty > unbatched) throw ApiError.badRequest(`${product.name}: only ${unbatched} unit(s) are on hand without a batch`, 'EXCEEDS_UNBATCHED');
+
+    const batch = await receiveIntoBatch({
+      businessId, branchId, product, variantId, quantity: qty, batchNumber, expiryDate, manufacturingDate,
+      session, allowExpired: true, location,
+    });
+    await AuditLog.create([{ businessId, branchId, userId, action: 'batch.backfill', entityType: 'Batch', entityId: batch._id, newValue: { batchNumber, expiryDate, quantity: qty } }], { session });
+    return batch;
+  });
+}
+
+/** Startup repair: products that track expiry must also track batches (see Product model). Returns how many were fixed. */
+async function normalizeExpiryProducts() {
+  const r = await Product.updateMany({ trackExpiry: true, trackBatch: { $ne: true } }, { $set: { trackBatch: true } });
+  return r.modifiedCount || 0;
+}
+
 module.exports = {
+  listUnbatched, backfillBatch, normalizeExpiryProducts,
   startOfToday, isExpired, eligibleFilter,
   allocateForSale, restoreAllocations, receiveIntoBatch, quarantineReturn, moveBetweenLocations, locQuery, locOf,
   quarantineBatch, releaseBatch, disposeBatch, recallByBatchNumber, tracedSales,

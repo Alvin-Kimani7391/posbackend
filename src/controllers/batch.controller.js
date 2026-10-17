@@ -22,3 +22,9 @@ exports.recall = catchAsync(async (req, res) =>
 
 exports.trace = catchAsync(async (req, res) =>
   sendSuccess(res, 200, 'Sales traced', { sales: await batchService.tracedSales(req.businessId, [req.params.id]) }));
+
+exports.unbatched = catchAsync(async (req, res) =>
+  sendSuccess(res, 200, 'Stock without batch fetched', await batchService.listUnbatched(req.businessId, req.query)));
+
+exports.backfill = catchAsync(async (req, res) =>
+  sendSuccess(res, 201, 'Expiry recorded for existing stock', { batch: await batchService.backfillBatch(req.businessId, req.user._id, req.body) }));

@@ -315,6 +315,14 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
 
       if (product.trackBatch) {
         const biz = await Business.findById(businessId).select('featureSettings').session(session);
+        // Expiry-tracked stock must always land in a batch (that is where the expiry date lives). If the person gave
+        // an expiry but no batch number, derive one from the expiry date: same expiry => same batch.
+        if (!batchNumber && !biz?.featureSettings?.batchTracking && (product.trackExpiry || expiryDate)) {
+          if (product.trackExpiry && !expiryDate) throw ApiError.badRequest(`${product.name} tracks expiry: an expiry date is required`, 'EXPIRY_REQUIRED');
+          const d = new Date(expiryDate);
+          if (Number.isNaN(d.getTime())) throw ApiError.badRequest(`${product.name}: invalid expiry date`, 'INVALID_EXPIRY');
+          batchNumber = `EXP-${d.toISOString().slice(0, 10).replace(/-/g, '')}`;
+        }
         if (batchNumber) {
           const batchService = require('./batch.service'); // lazy: batch.service requires this module
           await batchService.receiveIntoBatch({

@@ -15,6 +15,12 @@ const supplierSchema = new Schema(
 
     currentBalance: { type: Number, default: 0 }, // integer cents - what THIS BUSINESS owes the supplier (payable)
 
+    // Pharmacy: a supplier must be approved (licence on file, not expired) before medicines can be bought from them.
+    pharmacyApproval: {
+      type: new Schema({ approved: { type: Boolean, default: false }, licenseNumber: String, licenseExpiry: Date, approvedBy: Schema.Types.ObjectId, approvedAt: Date, note: String }, { _id: false }),
+      default: undefined,
+    },
+
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   },
   { timestamps: true }

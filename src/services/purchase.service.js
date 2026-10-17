@@ -306,6 +306,9 @@ async function receivePurchase(businessId, userId, id, batchLines = [], serialLi
             if (strictBatches) {
               throw ApiError.badRequest(`${product.name}: supplier batch number${product.trackExpiry ? ' and expiry date are' : ' is'} required to receive this line`, 'BATCH_DETAILS_REQUIRED');
             }
+            if (product.trackExpiry) {
+              throw ApiError.badRequest(`${product.name}: batch number and expiry date are required to receive this line`, 'EXPIRY_REQUIRED');
+            }
             await batchService.receiveIntoBatch({
               businessId, branchId: purchase.branchId, product, variantId: item.variantId || null, quantity: baseOutstanding,
               batchNumber: purchase.purchaseNumber, costPrice: baseUnitCost, supplierId: purchase.supplierId, purchaseId: purchase._id,

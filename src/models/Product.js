@@ -104,6 +104,13 @@ productSchema.pre('validate', function enforceWholesaleConfig(next) {
   return next();
 });
 
+// An expiry date only ever lives on a Batch, so a product that tracks expiry MUST be batch-tracked too. Without this a
+// product with "Expiry dates" ticked but "Batch tracking" unticked never created a batch, and nothing could expire.
+productSchema.pre('validate', function expiryImpliesBatch(next) {
+  if (this.trackExpiry && !this.trackBatch) this.trackBatch = true;
+  return next();
+});
+
 moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defaultDiscount'], { units: ['wholesalePrice', 'retailPrice'] });
 
 module.exports = model('Product', productSchema);

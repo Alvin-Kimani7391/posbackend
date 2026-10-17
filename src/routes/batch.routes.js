@@ -8,8 +8,10 @@ router.use(authenticate);
 
 router.get('/', requirePermission('batches.view'), validate({ query: v.listBatchesQuery }), controller.list);
 router.get('/expiring', requirePermission('batches.view'), validate({ query: v.expiringQuery }), controller.expiring);
+router.get('/unbatched', requirePermission('batches.view'), validate({ query: v.unbatchedQuery }), controller.unbatched);
 router.get('/:id/sales', requirePermission('batches.view'), validate({ params: v.idParamSchema }), controller.trace);
 
+router.post('/backfill', requirePermission('batches.manage'), validate({ body: v.backfillBody }), controller.backfill);
 router.post('/recall', requirePermission('batches.manage'), validate({ body: v.recallBody }), controller.recall);
 router.post('/:id/quarantine', requirePermission('batches.manage'), validate({ params: v.idParamSchema, body: v.quarantineBody }), controller.quarantine);
 router.post('/:id/release', requirePermission('batches.manage'), validate({ params: v.idParamSchema, body: v.releaseBody }), controller.release);

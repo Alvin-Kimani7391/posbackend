@@ -8,6 +8,14 @@ let server;
 
 async function start() {
   await connectDB();
+  // Repair products saved with Expiry ticked but Batch tracking off (their expiry dates could never be stored). Idempotent.
+  try {
+    const { normalizeExpiryProducts } = require('./services/batch.service');
+    const fixed = await normalizeExpiryProducts();
+    if (fixed) logger.info(`Expiry tracking: switched on batch tracking for ${fixed} product(s)`);
+  } catch (err) {
+    logger.warn('Expiry tracking repair skipped', { error: err.message });
+  }
   server = app.listen(port, () => {
     logger.info(`POS backend listening on port ${port}`);
   });
