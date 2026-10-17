@@ -4,8 +4,9 @@
  * Rules that keep this safe:
  *  - OFF by default per business (each text costs SMS credits); the owner switches each alert on.
  *  - Every alert has a dedupeKey, enforced by a unique index, so reruns of the job or a double click never text twice.
- *  - Needs an approved sender ID and credits. If either is missing the alert is skipped (and the owner told once a day
- *    about credits); nothing is sent and nothing is charged.
+ *  - Needs a Sender ID and credits. The shop's own approved Sender ID is used when it has one; otherwise the platform's
+ *    shared default Sender ID (Admin > Alerts & SMS). If either is missing the alert is skipped (and the owner told once
+ *    a day about credits); nothing is sent and nothing is charged.
  *  - Customers who opted out (Customer.smsOptOut) only get the "ready for collection" notice (it is about their own
  *    property); reminders are never sent to them.
  *  - Quiet hours (Nairobi time): texts created at night are held until morning.
@@ -94,13 +95,23 @@ function checkTemplate(label, t) {
 }
 
 async function getSettings(businessId) {
-  const [b, wallet, senders] = await Promise.all([
+  const [b, wallet, senders, def] = await Promise.all([
     Business.findById(businessId).select('name phone smsAlerts featureSettings'),
     sms.getWallet(businessId),
     M.SmsSenderId.find({ businessId, status: 'active' }).distinct('senderId'),
+    sms.getDefaultSender(),
   ]);
   if (!b) throw ApiError.notFound('Business not found');
-  return { settings: effective(b), defaults: DEFAULT_TEMPLATES, placeholders: PLACEHOLDERS, approvedSenderIds: senders, credits: wallet.availableCredits, ready: senders.length > 0 && wallet.availableCredits > 0 };
+  // Why texts would not go out right now (empty list = all good). The screen shows these in plain words.
+  const blockers = [];
+  if (!def.alertsEnabled) blockers.push('ALERTS_PAUSED');
+  if (!senders.length && !def.enabled) blockers.push('NO_SENDER_ID');
+  if (!(wallet.availableCredits > 0)) blockers.push('NO_CREDITS');
+  return {
+    settings: effective(b), defaults: DEFAULT_TEMPLATES, placeholders: PLACEHOLDERS, approvedSenderIds: senders,
+    defaultSenderId: !senders.length && def.enabled ? def.senderId : '', // shown to the owner only when it is the one in use
+    credits: wallet.availableCredits, ready: blockers.length === 0, blockers,
+  };
 }
 
 async function updateSettings(businessId, patch) {
@@ -140,8 +151,8 @@ async function lowCreditsNotice(businessId) {
   if (recent) return;
   try {
     await require('../notification.service').notifyManagement(businessId, {
-      type: 'SYSTEM_ALERT', title: 'Customer SMS alerts are paused', data: { kind: 'SMS_NO_CREDITS' },
-      message: 'Your SMS credits have run out, so automatic customer texts (ready for collection, service reminders) were not sent. Top up SMS credits to resume.',
+      type: 'SYSTEM_ALERT', title: 'SMS alerts are paused', data: { kind: 'SMS_NO_CREDITS', link: 'sms.html' },
+      message: 'You have no SMS credits left, so automatic texts (low stock, expiry, customer reminders) were not sent. Top up SMS credits to resume.',
     });
   } catch (e) { console.error('[sms alerts] notice failed', e.message); }
 }
@@ -150,16 +161,18 @@ async function lowCreditsNotice(businessId) {
  * Queue one alert text. Never throws: returns { queued: true } or { skipped: REASON }.
  * `respectOptOut=false` is only for notices about the customer's own item that is waiting for them.
  */
-async function enqueue(businessId, cfg, { phone, customerId, name, text, purpose, dedupeKey, refType, refId, respectOptOut = true }) {
+async function enqueue(businessId, cfg, { phone, customerId, name, text, purpose, dedupeKey, refType, refId, respectOptOut = true, bypassQuiet = false }) {
   try {
+    const gate = await sms.getDefaultSender();
+    if (!gate.alertsEnabled) return { skipped: 'ALERTS_PAUSED' };
     const to = normalizePhone(phone);
     if (!to) return { skipped: 'BAD_PHONE' };
     if (await M.SmsMessage.exists({ businessId, dedupeKey })) return { skipped: 'DUPLICATE' };
     if (respectOptOut && await Customer.exists({ businessId, phoneNormalized: to, smsOptOut: true })) return { skipped: 'OPTED_OUT' };
 
-    const senders = await M.SmsSenderId.find({ businessId, status: 'active' }).distinct('senderId');
-    if (!senders.length) return { skipped: 'NO_SENDER_ID' };
-    const senderId = cfg.senderId && senders.includes(cfg.senderId) ? cfg.senderId : senders[0];
+    const sender = await sms.resolveSender(businessId, cfg.senderId);
+    if (!sender.senderId) return { skipped: 'NO_SENDER_ID' };
+    const senderId = sender.senderId;
 
     const segments = sms.segmentsOf(text);
     await sms.getWallet(businessId);
@@ -169,8 +182,8 @@ async function enqueue(businessId, cfg, { phone, customerId, name, text, purpose
 
     try {
       await M.SmsMessage.create({
-        businessId, customerId, name, phone: to, text, senderId, segments, status: 'queued', nextAttemptAt: nextSendTime(new Date(), cfg.quietHours),
-        purpose, dedupeKey, refType, refId,
+        businessId, customerId, name, phone: to, text, senderId, segments, status: 'queued', nextAttemptAt: bypassQuiet ? new Date() : nextSendTime(new Date(), cfg.quietHours),
+        purpose, dedupeKey, refType, refId, senderSource: sender.source,
       });
     } catch (e) {
       await sms.creditWallet(businessId, segments, { type: 'CAMPAIGN_REFUND', reference: `alert-undo:${dedupeKey}:${Date.now()}`, note: 'Alert not queued' });
@@ -351,6 +364,35 @@ async function warrantyReminders(biz, limit) {
   return out;
 }
 
+/* ------------------------------ owner phone numbers + test text ------------------------------ */
+/** Active owners with a usable mobile number. Falls back to the business phone when no owner phone is valid. */
+async function ownersToText(businessId) {
+  const owners = await User.find({ businessId, role: 'OWNER', status: 'active' }).select('_id name phone').lean();
+  const good = owners.filter((o) => normalizePhone(o.phone));
+  if (good.length) return good;
+  const b = await Business.findById(businessId).select('name phone').lean();
+  if (b && normalizePhone(b.phone)) return [{ _id: businessId, name: b.name, phone: b.phone }];
+  return [];
+}
+
+const maskPhone = (p) => { const l = toLocalPhone(normalizePhone(p)); return l ? `${l.slice(0, 4)} *** ${l.slice(-3)}` : ''; };
+
+/** The owner presses "Send me a test text": proves the whole chain (sender, credits, TalkSasa, phone) works. Costs 1 credit. */
+async function sendOwnerTest(businessId, userId) {
+  const user = await User.findOne({ _id: userId, businessId }).select('name phone').lean();
+  if (!user || !normalizePhone(user.phone)) return { skipped: 'BAD_PHONE' };
+  const biz = await loadBusiness(businessId);
+  if (!biz) return { skipped: 'NO_BUSINESS' };
+  const since = new Date(Date.now() - 3600000);
+  if (await M.SmsMessage.countDocuments({ businessId, purpose: 'OWNER_TEST', createdAt: { $gte: since } }) >= 5) return { skipped: 'RATE_LIMIT' };
+  const text = render('Test from {shop}: your SMS alerts are working. Low stock and expiry texts will come to this number.', ctxBase(biz));
+  const r = await enqueue(businessId, biz.cfg, {
+    phone: user.phone, name: user.name, text, purpose: 'OWNER_TEST', dedupeKey: `test:${userId}:${Date.now()}`,
+    refType: 'Business', refId: businessId, respectOptOut: false, bypassQuiet: true,
+  });
+  return r.queued ? { ...r, to: maskPhone(user.phone) } : r;
+}
+
 /* ------------------------------ expiry digest (staff alert) ------------------------------ */
 const asciiOnly = (s) => String(s || '').replace(/[^\x20-\x7E]/g, '').trim();
 
@@ -363,11 +405,11 @@ async function sendExpiryDigest(businessId, summary) {
   const out = { queued: 0, skipped: 0 };
   try {
     const biz = await loadBusiness(businessId);
-    if (!biz || !biz.cfg.expiryDigest.enabled) return out;
+    if (!biz || !biz.cfg.expiryDigest.enabled) return { ...out, reason: 'DISABLED' };
     const d = biz.cfg.expiryDigest;
     const expired = summary.expired?.batches || 0;
     const expiring = (summary.critical?.batches || 0) + (summary.warning?.batches || 0);
-    if (!expired && !expiring) return out;
+    if (!expired && !expiring) return { ...out, reason: 'NOTHING' };
 
     const eatNow = new Date(Date.now() + EAT_OFFSET);
     const ymd = eatNow.toISOString().slice(0, 10);
@@ -377,13 +419,14 @@ async function sendExpiryDigest(businessId, summary) {
     const items = (summary.top || []).slice(0, 3).map((t) => `${asciiOnly(t.name).slice(0, 22)} (${new Date(t.expiryDate).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', timeZone: 'UTC' })})`).join(', ') || '-';
     const text = render(d.template || DEFAULT_TEMPLATES.expiryDigest, { ...ctxBase(biz), expired, expiring, days: d.daysBefore, items });
 
-    const owners = await User.find({ businessId, role: 'OWNER', status: 'active' }).select('_id name phone').lean();
+    const owners = await ownersToText(businessId);
+    if (!owners.length) out.reason = 'NO_OWNER';
     for (const o of owners) {
       const r = await enqueue(businessId, biz.cfg, {
         phone: o.phone, name: o.name, text, purpose: 'EXPIRY_DIGEST', dedupeKey: `expiry:${businessId}:${periodKey}:${o._id}`,
         refType: 'Business', refId: businessId, respectOptOut: false,
       });
-      if (r.queued) out.queued += 1; else if (r.skipped !== 'DUPLICATE') out.skipped += 1;
+      if (r.queued) out.queued += 1; else { out.skipped += 1; out.reason = r.skipped; }
     }
   } catch (e) { console.error('[sms alerts] expiry digest failed', String(businessId), e.message); }
   return out;
@@ -413,13 +456,14 @@ async function sendLowStockDigest(businessId, summary, { manual = false } = {}) 
     const items = pool.map((t) => `${asciiOnly(t.name).slice(0, 20)} (${t.quantity})`).join(', ') || '-';
     const text = render(d.template || DEFAULT_TEMPLATES.lowStockDigest, { ...ctxBase(biz), low, out: outCount, items });
 
-    const owners = await User.find({ businessId, role: 'OWNER', status: 'active' }).select('_id name phone').lean();
+    const owners = await ownersToText(businessId);
+    if (!owners.length) out.reason = 'NO_OWNER';
     for (const o of owners) {
       const r = await enqueue(businessId, biz.cfg, {
         phone: o.phone, name: o.name, text, purpose: 'LOW_STOCK_DIGEST', dedupeKey: `lowstock:${businessId}:${periodKey}:${o._id}`,
-        refType: 'Business', refId: businessId, respectOptOut: false,
+        refType: 'Business', refId: businessId, respectOptOut: false, bypassQuiet: manual, // "Send now" must not wait for morning
       });
-      if (r.queued) out.queued += 1; else if (r.skipped !== 'DUPLICATE') { out.skipped += 1; out.reason = r.skipped; }
+      if (r.queued) out.queued += 1; else { out.skipped += 1; out.reason = r.skipped; }
     }
   } catch (e) { console.error('[sms alerts] low stock digest failed', String(businessId), e.message); }
   return out;
@@ -441,10 +485,10 @@ async function listMessages(businessId, { purpose, status, page = 1, limit = 20 
   const filter = { businessId, purpose: purpose || { $type: 'string' } };
   if (status) filter.status = status;
   const [items, total] = await Promise.all([
-    M.SmsMessage.find(filter).select('purpose name phone text status segments error sentAt deliveredAt createdAt nextAttemptAt refType refId').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    M.SmsMessage.find(filter).select('purpose name phone text status segments error sentAt deliveredAt createdAt nextAttemptAt refType refId senderId senderSource').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     M.SmsMessage.countDocuments(filter),
   ]);
   return { items, total, page, limit, pages: Math.ceil(total / limit) };
 }
 
-module.exports = { DEFAULT_TEMPLATES, PLACEHOLDERS, render, nextSendTime, effective, getSettings, updateSettings, preview, enqueue, onReady, runReminders, listMessages, readyAtOf, sendExpiryDigest, sendLowStockDigest };
+module.exports = { DEFAULT_TEMPLATES, PLACEHOLDERS, render, nextSendTime, effective, getSettings, updateSettings, preview, enqueue, onReady, runReminders, listMessages, readyAtOf, sendExpiryDigest, sendLowStockDigest, sendOwnerTest, ownersToText };

@@ -25,7 +25,7 @@ const arr = (v) => [].concat(v || []);
 
 router.get('/overview', view, catchAsync(async (req, res) => {
   const b = req.businessId;
-  const [wallet, senderIds, applications, offers, settings, campaigns, ledger, payment] = await Promise.all([
+  const [wallet, senderIds, applications, offers, settings, campaigns, ledger, payment, defSender] = await Promise.all([
     sms.getWallet(b),
     M.SmsSenderId.find({ businessId: b, status: 'active' }).lean(),
     M.SmsSenderIdApplication.find({ businessId: b }).select('-documents').sort({ createdAt: -1 }).limit(20).lean(),
@@ -33,10 +33,12 @@ router.get('/overview', view, catchAsync(async (req, res) => {
     M.SmsCampaign.find({ businessId: b }).sort({ createdAt: -1 }).limit(30).lean(),
     M.SmsLedger.find({ businessId: b }).sort({ createdAt: -1 }).limit(20).lean(),
     adapter.paymentOptions(),
+    sms.getDefaultSender(),
   ]);
   const { networks, retailPriceCents, minTopupCents, stkEnabled, manualEnabled, paybill, manualInstructions } = settings;
   ok(res, {
     wallet, senderIds, applications, offers, campaigns, ledger, payment, placeholders: sms.PLACEHOLDERS,
+    defaultSender: { senderId: defSender.senderId, enabled: defSender.enabled },
     pricing: {
       networks: networks.filter((n) => n.enabled).map((n) => ({ key: n.key, name: n.name, totalCents: n.providerCostCents + n.serviceFeeCents, providerCostCents: n.providerCostCents, serviceFeeCents: n.serviceFeeCents })),
       retailPriceCents, minTopupCents, stkEnabled, manualEnabled, paybill, manualInstructions,

@@ -81,6 +81,21 @@ router.delete('/offers/:id', catchAsync(async (req, res) => { await M.SmsOffer.d
 router.get('/settings', catchAsync(async (req, res) => ok(res, await sms.getSettings())));
 router.put('/settings', catchAsync(async (req, res) => ok(res, await sms.updateSettings(req.body), 'Saved')));
 
+/* alerts & SMS: is everything in place, test send, and what actually went out */
+router.get('/alerts/health', catchAsync(async (req, res) => ok(res, await sms.alertsHealth())));
+router.post('/alerts/test', catchAsync(async (req, res) => {
+  const r = await sms.sendAdminTest({ phone: req.body.phone, message: req.body.message, senderId: req.body.senderId });
+  ok(res, r, r.ok ? 'Test SMS sent to TalkSasa' : 'TalkSasa rejected the test SMS');
+}));
+router.get('/alerts/messages', catchAsync(async (req, res) => {
+  const q = { purpose: { $type: 'string' } };
+  if (req.query.status) q.status = req.query.status;
+  if (req.query.businessId) q.businessId = req.query.businessId;
+  const items = await M.SmsMessage.find(q).sort({ createdAt: -1 }).limit(100)
+    .select('businessId purpose name phone text status segments error senderId senderSource sentAt deliveredAt createdAt nextAttemptAt attempts').lean();
+  ok(res, await withNames(items));
+}));
+
 /* wallets */
 router.get('/wallets', catchAsync(async (req, res) => ok(res, await withNames(await M.SmsWallet.find().sort({ availableCredits: -1 }).limit(200).lean()))));
 router.post('/wallets/:businessId/adjust', catchAsync(async (req, res) => ok(res, await sms.adminAdjust(req.params.businessId, Math.round(Number(req.body.credits)), req.body.note || 'Admin adjustment'), 'Wallet adjusted')));

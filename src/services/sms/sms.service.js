@@ -22,9 +22,15 @@ async function getSettings() {
   return M.SmsSettings.findOneAndUpdate({ key: 'global' }, { $setOnInsert: { key: 'global' } }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
 }
 async function updateSettings(patch) {
-  const allowed = ['networks', 'retailPriceCents', 'wholesaleCostCents', 'minTopupCents', 'stkEnabled', 'manualEnabled', 'paybill', 'manualInstructions'];
+  const allowed = ['networks', 'retailPriceCents', 'wholesaleCostCents', 'minTopupCents', 'stkEnabled', 'manualEnabled', 'paybill', 'manualInstructions', 'alertsEnabled', 'defaultSenderId', 'useDefaultSender'];
   const $set = {};
   allowed.forEach((k) => { if (patch[k] !== undefined) $set[k] = patch[k]; });
+  if ($set.defaultSenderId !== undefined) {
+    const id = String($set.defaultSenderId || '').trim();
+    if (id && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,10}$/.test(id)) throw ApiError.badRequest('Default Sender ID: up to 11 letters, numbers, space . - _', 'BAD_SENDER_ID');
+    $set.defaultSenderId = id;
+  }
+  ['alertsEnabled', 'useDefaultSender', 'stkEnabled', 'manualEnabled'].forEach((k) => { if ($set[k] !== undefined) $set[k] = $set[k] === true || $set[k] === 'true' || $set[k] === 1; });
   await getSettings();
   return M.SmsSettings.findOneAndUpdate({ key: 'global' }, { $set }, { new: true }).lean();
 }
@@ -34,6 +40,76 @@ async function activeOffers() {
     active: true,
     $and: [{ $or: [{ startsAt: null }, { startsAt: { $lte: now } }] }, { $or: [{ endsAt: null }, { endsAt: { $gte: now } }] }],
   }).sort({ sortOrder: 1, priceCents: 1 }).lean();
+}
+
+/* ------------------------------ default (shared) sender ------------------------------ */
+/**
+ * Until a shop has its own approved Sender ID, automatic alert texts go out under the platform's shared Sender ID
+ * (set by the admin in Alerts & SMS, e.g. TalkSasa's free one; env SMS_DEFAULT_SENDER_ID is the fallback).
+ * A shop with its own approved Sender ID always uses that instead, so upgrading later needs no code change.
+ */
+async function getDefaultSender() {
+  const s = await getSettings();
+  const fromDb = String(s.defaultSenderId || '').trim();
+  const fromEnv = String(process.env.SMS_DEFAULT_SENDER_ID || '').trim();
+  const senderId = fromDb || fromEnv;
+  return {
+    senderId,
+    source: fromDb ? 'settings' : fromEnv ? 'env' : 'none',
+    enabled: s.useDefaultSender !== false && !!senderId,
+    alertsEnabled: s.alertsEnabled !== false,
+  };
+}
+
+/** Which Sender ID may this shop's alert texts use? { senderId, source: 'OWN' | 'DEFAULT' | null, own: [...] } */
+async function resolveSender(businessId, preferred) {
+  const own = await M.SmsSenderId.find({ businessId, status: 'active' }).distinct('senderId');
+  if (own.length) return { senderId: preferred && own.includes(preferred) ? preferred : own[0], source: 'OWN', own };
+  const d = await getDefaultSender();
+  if (d.enabled) return { senderId: d.senderId, source: 'DEFAULT', own };
+  return { senderId: null, source: null, own };
+}
+
+/** Admin "send a test SMS": goes straight to TalkSasa (costs the platform account, not a shop wallet). */
+async function sendAdminTest({ phone, message, senderId }) {
+  const to = normalizePhone(phone);
+  if (!to) throw ApiError.badRequest('Enter a valid Kenyan mobile number (e.g. 0712345678)');
+  if (!provider.isConfigured()) throw ApiError.badRequest('TALKSASA_API_TOKEN is not set on the server. Add it to the backend environment and redeploy.', 'SMS_PROVIDER_NOT_CONFIGURED');
+  const d = await getDefaultSender();
+  const sid = String(senderId || d.senderId || '').trim();
+  if (!sid) throw ApiError.badRequest('Set a default Sender ID first (or type one for this test)', 'NO_SENDER_ID');
+  const text = String(message || '').trim() || 'Six Star POS test: SMS alerts are working.';
+  const r = await provider.sendSms({ to, senderId: sid, message: text.slice(0, 300) });
+  return { ok: !!r.ok, to: toLocalPhone(to), senderId: sid, providerMessageId: r.providerMessageId || '', error: r.ok ? undefined : r.error };
+}
+
+/** What the admin screen shows: is everything needed for alerts in place, and what happened in the last 24 hours. */
+async function alertsHealth() {
+  const since = new Date(Date.now() - 24 * 3600 * 1000);
+  const d = await getDefaultSender();
+  const keys = ['ready', 'readyReminder', 'serviceDue', 'warrantyExpiring', 'insuranceExpiring', 'layawayDue', 'lowStockDigest', 'expiryDigest'];
+  const [rows, lastFailed, waiting, shops] = await Promise.all([
+    M.SmsMessage.aggregate([{ $match: { purpose: { $type: 'string' }, createdAt: { $gte: since } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+    M.SmsMessage.findOne({ purpose: { $type: 'string' }, status: 'failed' }).sort({ updatedAt: -1 }).select('error updatedAt').lean(),
+    M.SmsMessage.countDocuments({ purpose: { $type: 'string' }, status: 'queued' }),
+    Business.find({ status: 'active', $or: keys.map((k) => ({ [`smsAlerts.${k}.enabled`]: true })) }).select('_id').lean(),
+  ]);
+  const ids = shops.map((b) => b._id);
+  const [funded, ownSender] = ids.length ? await Promise.all([
+    M.SmsWallet.countDocuments({ businessId: { $in: ids }, availableCredits: { $gt: 0 } }),
+    M.SmsSenderId.distinct('businessId', { businessId: { $in: ids }, status: 'active' }),
+  ]) : [0, []];
+  const by = Object.fromEntries(rows.map((r) => [r._id, r.n]));
+  return {
+    provider: { configured: provider.isConfigured() },
+    defaultSender: { senderId: d.senderId, source: d.source, enabled: d.enabled },
+    alertsEnabled: d.alertsEnabled,
+    webhookSecretSet: !!process.env.SMS_WEBHOOK_SECRET,
+    last24h: { queued: by.queued || 0, sending: by.sending || 0, sent: by.sent || 0, delivered: by.delivered || 0, failed: by.failed || 0 },
+    waiting,
+    lastError: lastFailed ? { error: lastFailed.error, at: lastFailed.updatedAt } : null,
+    shops: { alertsOn: ids.length, withCredits: funded, withOwnSender: ownSender.length },
+  };
 }
 
 /* ------------------------------ wallet ------------------------------ */
@@ -414,17 +490,32 @@ async function campaignStats(campaignId) {
 }
 
 /* ------------------------------ queue worker ------------------------------ */
-let running = false;
+let running = false; let warnedNoToken = false; const touchedDead = new Set();
 async function processQueue() {
   if (running) return; running = true;
   try {
     const now = new Date();
+    if (!provider.isConfigured()) {
+      // Nothing can be sent without the TalkSasa token. Keep every text queued (credits stay reserved) instead of failing them.
+      if (!warnedNoToken) { console.error('[sms] TALKSASA_API_TOKEN is not set: SMS are being held in the queue until it is added.'); warnedNoToken = true; }
+      return;
+    }
+    warnedNoToken = false;
+    // A text stuck in "sending" (server restarted mid-send) goes back in the queue, or fails and is refunded after 3 attempts.
+    const stuckBefore = new Date(Date.now() - 10 * 60 * 1000);
+    await M.SmsMessage.updateMany({ status: 'sending', updatedAt: { $lt: stuckBefore }, attempts: { $lt: 3 } }, { $set: { status: 'queued', nextAttemptAt: now } });
+    const dead = await M.SmsMessage.find({ status: 'sending', updatedAt: { $lt: stuckBefore }, attempts: { $gte: 3 } });
+    for (const m of dead) {
+      await M.SmsMessage.updateOne({ _id: m._id, status: 'sending' }, { $set: { status: 'failed', error: 'Sending was interrupted' } });
+      await refundMessage(m);
+      if (m.campaignId) touchedDead.add(String(m.campaignId));
+    }
     const due = await M.SmsCampaign.find({ status: 'scheduled', scheduledAt: { $lte: now } }).select('_id').lean();
     for (const c of due) {
       await M.SmsMessage.updateMany({ campaignId: c._id, status: 'held' }, { $set: { status: 'queued', nextAttemptAt: now } });
       await M.SmsCampaign.updateOne({ _id: c._id }, { $set: { status: 'queued' } });
     }
-    const touched = new Set();
+    const touched = new Set(touchedDead); touchedDead.clear();
     for (let round = 0; round < 25; round++) {
       const batch = [];
       for (let i = 0; i < 10; i++) {
@@ -439,6 +530,9 @@ async function processQueue() {
         if (r.ok) {
           await M.SmsMessage.updateOne({ _id: m._id }, { $set: { status: 'sent', providerMessageId: r.providerMessageId, sentAt: new Date() } });
           await M.SmsWallet.updateOne({ businessId: m.businessId }, { $inc: { totalSent: m.segments } });
+        } else if (r.platform && Date.now() - new Date(m.createdAt).getTime() < 24 * 3600 * 1000) {
+          // Our TalkSasa account has a problem (token / balance): not the shop's fault. Keep the text, try again in 15 minutes.
+          await M.SmsMessage.updateOne({ _id: m._id }, { $set: { status: 'queued', error: r.error, nextAttemptAt: new Date(Date.now() + 15 * 60 * 1000) }, $inc: { attempts: -1 } });
         } else if (r.retry && m.attempts < 3) {
           await M.SmsMessage.updateOne({ _id: m._id }, { $set: { status: 'queued', error: r.error, nextAttemptAt: new Date(Date.now() + 60000 * m.attempts) } });
         } else {
@@ -484,7 +578,7 @@ async function reconcilePayments() {
 }
 
 module.exports = {
-  segmentsOf, creditWallet,
+  segmentsOf, creditWallet, getDefaultSender, resolveSender, sendAdminTest, alertsHealth,
   PLACEHOLDERS, getSettings, updateSettings, activeOffers, getWallet, adminAdjust,
   feeQuote, saveApplication, setNetworkStatus, readDocument,
   createPayment, settlePayment, refreshPayment, rejectPayment,

@@ -20,6 +20,10 @@ const SmsSettings = model('SmsSettings', new Schema({
   manualEnabled: { type: Boolean, default: true },
   paybill: { type: String, default: '' },
   manualInstructions: { type: String, default: '' },
+  // Automatic alert delivery (Admin > Alerts & SMS)
+  alertsEnabled: { type: Boolean, default: true },          // master switch: false pauses EVERY automatic alert text
+  defaultSenderId: { type: String, default: '', trim: true }, // shared sender (e.g. the free TalkSasa one) used when a shop has no approved Sender ID of its own
+  useDefaultSender: { type: Boolean, default: true },        // off = shops without their own approved Sender ID get no alert texts
 }, { timestamps: true }));
 
 /* Admin-created dynamic offers */
@@ -142,7 +146,8 @@ const smsMessageSchema = new Schema({
   providerMessageId: { type: String, index: true },
   error: String, sentAt: Date, deliveredAt: Date,
   // Automatic alerts (ready for collection, service due ...). Campaign messages leave these unset.
-  purpose: { type: String, enum: ['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE', 'EXPIRY_DIGEST', 'LOW_STOCK_DIGEST'], index: true, sparse: true },
+  purpose: { type: String, enum: ['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE', 'EXPIRY_DIGEST', 'LOW_STOCK_DIGEST', 'OWNER_TEST'], index: true, sparse: true },
+  senderSource: { type: String, enum: ['OWN', 'DEFAULT'] },   // which Sender ID was used (shop's own approved one, or the platform default)
   dedupeKey: { type: String },   // one alert per (business, key): a re-run of the reminder job can never text twice
   refType: String, refId: ObjectId,
 }, { timestamps: true });

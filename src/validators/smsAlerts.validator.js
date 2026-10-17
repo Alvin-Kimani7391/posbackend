@@ -23,7 +23,7 @@ const previewSchema = z.object({
 });
 
 const messagesQuery = paginationQuery.extend({
-  purpose: z.enum(['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE', 'EXPIRY_DIGEST', 'LOW_STOCK_DIGEST']).optional(),
+  purpose: z.enum(['READY', 'READY_REMINDER', 'SERVICE_DUE', 'SERVICE_OVERDUE', 'WARRANTY_EXPIRING', 'INSURANCE_EXPIRING', 'LAYAWAY_DUE', 'LAYAWAY_OVERDUE', 'EXPIRY_DIGEST', 'LOW_STOCK_DIGEST', 'OWNER_TEST']).optional(),
   status: z.enum(['queued', 'sending', 'sent', 'delivered', 'failed']).optional(),
 });
 

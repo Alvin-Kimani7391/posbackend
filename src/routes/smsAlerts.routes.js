@@ -5,6 +5,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const catchAsync = require('../utils/catchAsync');
 const { sendSuccess } = require('../utils/ApiResponse');
 const alerts = require('../services/sms/alerts.service');
+const { smsResult } = require('../utils/smsResult');
 const AuditLog = require('../models/AuditLog');
 const v = require('../validators/smsAlerts.validator');
 
@@ -25,6 +26,14 @@ router.post('/preview', requirePermission('settings.view'), validate({ body: v.p
 router.post('/low-stock/send-now', requirePermission('settings.update'), catchAsync(async (req, res) => {
   const lowStockAlerts = require('../services/lowStockAlerts.service');
   sendSuccess(res, 200, 'Low stock check done', await lowStockAlerts.runForBusiness(req.businessId, { manual: true }));
+}));
+
+// "Send me a test text": one credit, goes to the logged-in owner's own phone, ignores quiet hours.
+router.post('/test', requirePermission('settings.update'), catchAsync(async (req, res) => {
+  const r = await alerts.sendOwnerTest(req.businessId, req.user._id);
+  const out = smsResult(r);
+  if (r.queued) out.message = `A test text is on its way to ${r.to}. It should arrive within a minute.`;
+  sendSuccess(res, 200, out.sent ? 'Test text queued' : 'Test text not sent', out);
 }));
 
 router.get('/messages', requirePermission('reports.view'), validate({ query: v.messagesQuery }), catchAsync(async (req, res) => sendSuccess(res, 200, 'Alert messages fetched', await alerts.listMessages(req.businessId, req.query))));
