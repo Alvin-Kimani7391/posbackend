@@ -1,20 +1,23 @@
-/** Ingredient units. Each ingredient has ONE base unit (g, ml, piece); all stored quantities are in it. */
-const UNITS = Object.freeze({
-  g: { dim: 'mass', f: 1 }, kg: { dim: 'mass', f: 1000 },
-  ml: { dim: 'volume', f: 1 }, litre: { dim: 'volume', f: 1000 }, tsp: { dim: 'volume', f: 5 }, tbsp: { dim: 'volume', f: 15 }, cup: { dim: 'volume', f: 240 },
-  piece: { dim: 'count', f: 1 }, dozen: { dim: 'count', f: 12 },
-});
-const BASE_UNIT = Object.freeze({ mass: 'g', volume: 'ml', count: 'piece' });
-const UNIT_NAMES = Object.keys(UNITS);
-const round4 = (n) => Math.round((Number(n) + Number.EPSILON) * 10000) / 10000;
-const isUnit = (u) => Object.prototype.hasOwnProperty.call(UNITS, u);
-const dimensionOf = (u) => UNITS[u]?.dim;
-const baseUnitFor = (u) => BASE_UNIT[dimensionOf(u)];
-function toBase(quantity, unit) { if (!isUnit(unit)) throw new Error(`Unknown unit "${unit}"`); return round4(Number(quantity) * UNITS[unit].f); }
-function convert(quantity, from, to) {
-  if (!isUnit(from) || !isUnit(to)) throw new Error('Unknown unit');
-  if (UNITS[from].dim !== UNITS[to].dim) throw new Error(`Cannot convert ${from} to ${to}`);
-  return round4((Number(quantity) * UNITS[from].f) / UNITS[to].f);
+/** Timezone-aware helpers for menu periods / happy hours. The business timezone decides what "7pm Friday" means. */
+const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+function localParts(date, timeZone = 'Africa/Nairobi') {
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const p = Object.fromEntries(fmt.formatToParts(date).map((x) => [x.type, x.value]));
+  return { dow: DOW[p.weekday], minutes: Number(p.hour) * 60 + Number(p.minute), ymd: `${p.year}${p.month}${p.day}`, isoDate: `${p.year}-${p.month}-${p.day}` };
 }
-const compatible = (a, b) => isUnit(a) && isUnit(b) && UNITS[a].dim === UNITS[b].dim;
-module.exports = { UNITS, BASE_UNIT, UNIT_NAMES, isUnit, dimensionOf, baseUnitFor, toBase, convert, compatible, round4 };
+const toMinutes = (hhmm) => { const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+/** window = { days?: [0-6], start?, end?, startDate?, endDate? }. Missing parts = always. end < start = overnight (days = day it STARTS). */
+function inWindow(now, timeZone, w = {}) {
+  const t = localParts(now, timeZone);
+  if (w.startDate && now < new Date(w.startDate)) return false;
+  if (w.endDate && now > new Date(w.endDate)) return false;
+  const s = toMinutes(w.start); const e = toMinutes(w.end);
+  const days = w.days && w.days.length ? w.days : null;
+  if (s === null || e === null) return days ? days.includes(t.dow) : true;
+  if (s <= e) return (!days || days.includes(t.dow)) && t.minutes >= s && t.minutes < e;
+  if (t.minutes >= s) return !days || days.includes(t.dow);
+  if (t.minutes < e) return !days || days.includes((t.dow + 6) % 7);
+  return false;
+}
+const inAnyWindow = (now, tz, windows) => !windows || windows.length === 0 || windows.some((w) => inWindow(now, tz, w));
+module.exports = { localParts, inWindow, inAnyWindow, toMinutes };
