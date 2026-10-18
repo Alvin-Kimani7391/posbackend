@@ -87,7 +87,7 @@ const voidLineBody = z.object({ reason });
 
 // ---- housekeeping tasks
 const taskQuery = z.object({ branchId: objectId.optional(), status: str(60).optional(), assignedTo: objectId.optional(), mine: z.coerce.boolean().optional() });
-const taskCreate = z.object({ roomId: objectId, type: z.enum(H.HK_TASK_TYPES), priority: z.enum(['NORMAL', 'URGENT']).optional(), note: str(500).optional(), assignedTo: objectId.optional(), dueAt: z.coerce.date().optional() });
+const taskCreate = z.object({ roomId: objectId, type: z.enum(H.HK_TASK_TYPES), priority: z.enum(['NORMAL', 'URGENT']).optional(), note: str(500).optional(), assignedTo: z.preprocess((v) => (v === '' || v === null ? undefined : v), objectId.optional()), dueAt: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.coerce.date().optional()) });
 const taskUpdate = z.object({ action: z.enum(['assign', 'start', 'complete', 'cancel']), assignedTo: objectId.optional(), note: str(500).optional() }).refine((b) => b.action !== 'assign' || b.assignedTo, { message: 'Choose who', path: ['assignedTo'] });
 
 // ---- reports

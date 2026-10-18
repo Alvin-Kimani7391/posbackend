@@ -24,8 +24,10 @@ function errorHandler(err, req, res, next) {
     } else if (err.code === 11000) {
       statusCode = 409;
       code = 'DUPLICATE_KEY';
-      const field = Object.keys(err.keyPattern || {}).join(', ');
-      message = `Duplicate value for field: ${field}`;
+      const keys = Object.keys(err.keyPattern || err.keyValue || {}).filter((k) => k !== 'businessId' && k !== 'branchId');
+      const field = keys.join(', ') || 'this record';
+      const val = keys.map((k) => (err.keyValue || {})[k]).filter((v) => v !== undefined).join(', ');
+      message = `That ${field}${val ? ` ("${val}")` : ''} is already in use. Choose a different one.`;
     } else {
       message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message;
     }

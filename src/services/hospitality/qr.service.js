@@ -46,7 +46,11 @@ async function resolve(token) {
   return { kind, doc, ctx, mode: mode || 'OFF', stay };
 }
 
-function baseUrl(ctx) { return (ctx.settings.guestOrdering?.baseUrl || process.env.GUEST_APP_URL || '').replace(/\/+$/, ''); }
+function baseUrl(ctx) {
+  // owner setting -> GUEST_APP_URL -> FRONTEND_URL (the web app itself; ignore the '*' wildcard) -> '' (the staff app then adds its own address)
+  const fe = process.env.FRONTEND_URL && process.env.FRONTEND_URL !== '*' ? process.env.FRONTEND_URL.split(',')[0].trim() : '';
+  return (ctx.settings.guestOrdering?.baseUrl || process.env.GUEST_APP_URL || fe || '').replace(/\/+$/, '');
+}
 const urlFor = (ctx, token) => (baseUrl(ctx) ? `${baseUrl(ctx)}/q/${token}` : `/q/${token}`);
 
 async function listQr(businessId, user, { kind, branchId }) {
