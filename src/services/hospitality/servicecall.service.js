@@ -1,7 +1,7 @@
 /** "Call the waiter", "bring the bill", "clean my room": raised from a QR code (or logged by staff), answered by staff. */
 const ServiceCall = require('../../models/ServiceCall');
 const RestaurantOrder = require('../../models/RestaurantOrder');
-const HousekeepingTask = require('../../models/HousekeepingTaskk');
+const HousekeepingTask = require('../../models/HousekeepingTask');
 const ApiError = require('../../utils/ApiError');
 const { ROLES } = require('../../constants/roles');
 const H = require('../../constants/hospitality');
