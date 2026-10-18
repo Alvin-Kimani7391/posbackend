@@ -20,3 +20,4 @@ s.index({ businessId: 1, branchId: 1, status: 1, createdAt: -1 });
 s.index({ businessId: 1, roomId: 1, status: 1 });
 s.index({ businessId: 1, assignedTo: 1, status: 1 });
 module.exports = model('HousekeepingTask', s);
+
