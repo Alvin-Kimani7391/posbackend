@@ -30,6 +30,8 @@ async function requestRefund(businessId, branchId, user, { saleId, items, reason
   const sale = await Sale.findOne({ _id: saleId, businessId });
   if (!sale) throw ApiError.notFound('Sale not found');
   if (sale.saleStatus !== 'COMPLETED') throw ApiError.conflict('Only a completed sale can be refunded', 'INVALID_SALE_STATE');
+  if (sale.source === 'ACCOMMODATION') throw ApiError.conflict('This is a guest stay invoice. Adjust or refund it from the stay.', 'ACCOMMODATION_SALE');
+      if (sale.source === 'RESTAURANT') throw ApiError.conflict('This is a restaurant bill. Refund the customer from the restaurant bill instead.', 'RESTAURANT_SALE');
   if (sale.dispensingId && !opts.dispensingReversal) throw ApiError.conflict('This sale dispensed a prescription. A pharmacist must reverse the dispensing (with a reason) instead of refunding it.', 'DISPENSED_SALE');
   if (sale.tradeInIds?.length) throw ApiError.conflict('A device was traded in on this sale. Cancel the sale (same day) or ask a manager to settle the return.', 'TRADE_IN_SALE');
   if (sale.source === 'LAYAWAY' && sale.items.length === 1 && sale.items[0].skuSnapshot === 'LAYAWAY-FEE') throw ApiError.conflict('This invoice is a retained layaway fee and cannot be refunded.', 'LAYAWAY_FEE_SALE');

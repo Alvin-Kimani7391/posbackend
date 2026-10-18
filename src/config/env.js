@@ -22,6 +22,7 @@ module.exports = {
     refreshExpiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || '30d',
   },
   frontendUrl: process.env.FRONTEND_URL || '*',
+  verifyBaseUrl: process.env.VERIFY_BASE_URL || '',
   mpesa: {
     environment: process.env.MPESA_ENVIRONMENT || 'sandbox',
     consumerKey: process.env.MPESA_CONSUMER_KEY,

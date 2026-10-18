@@ -9,9 +9,11 @@ const paymentSchema = new Schema(
     businessId: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
     branchId: { type: Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', index: true },
+    restaurantBillId: { type: Schema.Types.ObjectId, ref: 'RestaurantBill', index: true }, // payment / tip / refund on a restaurant bill (or the reservation id for a deposit)
     shiftId: { type: Schema.Types.ObjectId, ref: 'CashShift', index: true }, // lets shift close reconcile cash without joining through Sale
     jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard', index: true }, // deposit / payment / refund taken on a garage job card
     repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob', index: true }, // deposit / payment / refund taken on a repair job
+    stayId: { type: Schema.Types.ObjectId, ref: 'Stay', index: true }, // deposit / payment / refund on a guest's stay folio
     layawayId: { type: Schema.Types.ObjectId, ref: 'Layaway', index: true }, // deposit / instalment / refund on a layaway
     refundId: { type: Schema.Types.ObjectId, ref: 'Refund' }, // set when this Payment record represents money paid OUT as a refund
     customerId: { type: Schema.Types.ObjectId, ref: 'Customer' },

@@ -31,6 +31,7 @@ async function start() {
       require('./jobs/offlineWatch.job').start();
   require('./jobs/expiryAlerts.job').start();
   require('./jobs/lowStockAlerts.job').start();
+  require('./jobs/restaurant.job').start();
 }
 
 async function shutdown(signal) {

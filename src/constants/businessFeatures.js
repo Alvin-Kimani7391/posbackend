@@ -26,6 +26,10 @@ const FEATURE_KEYS = [
   'tableManagement',
   'kitchenDisplay',
   'recipeManagement',
+  'restaurantOrdering', // master switch for the restaurant module (tables / kitchen / recipes / reservations are optional add-ons)
+  'reservations',
+  'guestQrOrdering',  // QR codes on tables and rooms: guests view the menu, order and call a waiter
+  'accommodation',    // rooms, check-in / check-out, folios (restaurants that also offer rooms)
   'vehicleManagement',
   'jobCards',
   'wholesalePricing',
@@ -55,7 +59,10 @@ const BUSINESS_FEATURE_DEFAULTS = {
     expiryTracking: true, batchTracking: true, productVariants: true, loyaltyProgram: true,
     quarantineManagement: true, recallManagement: true,
   },
-  restaurant: { tableManagement: true, kitchenDisplay: true, recipeManagement: true, batchTracking: true },
+  restaurant: {
+    restaurantOrdering: true, tableManagement: true, kitchenDisplay: true, recipeManagement: true,
+    reservations: true, batchTracking: true, guestQrOrdering: true,
+  },
   general_shop: { layaway: true },
   wholesale: {
     wholesalePricing: true, unitConversions: true, quotationManagement: true,

@@ -1,0 +1,61 @@
+/**
+ * Hospitality constants shared by guest (QR) ordering and accommodation. One place for every enum so models,
+ * validators, services and reports agree.
+ */
+
+// What the owner runs. RESTAURANT = tables + kitchen. ACCOMMODATION = rooms (guests order from their room).
+// BOTH = a restaurant with rooms. Switching mode updates the accommodation feature flag; nothing is deleted.
+const SERVICE_MODES = ['RESTAURANT', 'ACCOMMODATION', 'BOTH'];
+
+// What a guest can do after scanning a QR code.
+//   OFF            the QR code is switched off
+//   MENU_ONLY      guest can read the menu and call the waiter, but cannot send an order
+//   ORDER_CONFIRM  guest builds an order; a waiter must accept it before the kitchen sees it
+//   ORDER_AUTO     guest orders go straight to the kitchen (a waiter is still notified)
+const GUEST_MODES = ['OFF', 'MENU_ONLY', 'ORDER_CONFIRM', 'ORDER_AUTO'];
+
+const QR_KINDS = ['TABLE', 'ROOM'];
+
+const GUEST_REQUEST_STATUS = ['PENDING', 'ACCEPTED', 'REJECTED', 'AUTO_ACCEPTED', 'EXPIRED', 'CANCELLED', 'FAILED'];
+
+const CALL_KINDS = ['WAITER', 'BILL', 'ASSISTANCE', 'CLEANING', 'HOUSEKEEPING', 'MAINTENANCE', 'RECEPTION', 'CHECKOUT', 'OTHER'];
+const CALL_STATUS = ['OPEN', 'ACKNOWLEDGED', 'RESOLVED', 'CANCELLED'];
+// Which staff are told, per call kind.
+const CALL_AUDIENCE = {
+  WAITER: 'FLOOR', BILL: 'CASHIER', ASSISTANCE: 'FLOOR', CLEANING: 'HOUSEKEEPING', HOUSEKEEPING: 'HOUSEKEEPING',
+  MAINTENANCE: 'MANAGEMENT', RECEPTION: 'FRONT_DESK', CHECKOUT: 'FRONT_DESK', OTHER: 'FLOOR',
+};
+
+// ---- accommodation
+// status = operational state; housekeeping = cleanliness. A room can be sold when status is AVAILABLE and housekeeping is CLEAN/INSPECTED.
+const ROOM_STATUS = ['AVAILABLE', 'OCCUPIED', 'OUT_OF_ORDER'];
+const HOUSEKEEPING_STATUS = ['CLEAN', 'DIRTY', 'CLEANING', 'INSPECTED'];
+const HK_TASK_TYPES = ['DEPARTURE_CLEAN', 'STAYOVER_CLEAN', 'TURNDOWN', 'DEEP_CLEAN', 'INSPECTION', 'MAINTENANCE', 'REQUEST'];
+const HK_TASK_STATUS = ['PENDING', 'IN_PROGRESS', 'DONE', 'CANCELLED'];
+
+const STAY_STATUS = ['RESERVED', 'CHECKED_IN', 'CHECKED_OUT', 'CANCELLED', 'NO_SHOW'];
+const BLOCKING_STAY_STATUS = ['RESERVED', 'CHECKED_IN'];
+const BOOKING_SOURCES = ['WALK_IN', 'PHONE', 'ONLINE', 'AGENT', 'CORPORATE', 'OTHER'];
+const ID_TYPES = ['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'OTHER'];
+const MEAL_PLANS = ['ROOM_ONLY', 'BED_BREAKFAST', 'HALF_BOARD', 'FULL_BOARD'];
+
+const FOLIO_TYPES = [
+  'ROOM', 'EARLY_CHECKIN', 'LATE_CHECKOUT', 'LEVY', 'FNB', 'MINIBAR', 'LAUNDRY', 'TRANSPORT', 'SERVICE', 'DAMAGE',
+  'CANCELLATION', 'NO_SHOW', 'EXTRA_PERSON', 'OTHER', 'ADJUSTMENT',
+];
+const STAY_PAY_METHODS = ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'CREDIT', 'OTHER'];
+
+const ROOM_SKU = 'ACCOMMODATION-ROOM';
+const levySku = (n) => `ACCOMMODATION-${n}`;
+const FOLIO_SKU = Object.freeze({
+  ROOM: ROOM_SKU, EARLY_CHECKIN: 'ACCOMMODATION-EARLY-CHECKIN', LATE_CHECKOUT: 'ACCOMMODATION-LATE-CHECKOUT', LEVY: 'ACCOMMODATION-LEVY',
+  MINIBAR: 'ACCOMMODATION-MINIBAR', LAUNDRY: 'ACCOMMODATION-LAUNDRY', TRANSPORT: 'ACCOMMODATION-TRANSPORT', SERVICE: 'ACCOMMODATION-SERVICE',
+  DAMAGE: 'ACCOMMODATION-DAMAGE', CANCELLATION: 'ACCOMMODATION-CANCELLATION', NO_SHOW: 'ACCOMMODATION-NOSHOW', EXTRA_PERSON: 'ACCOMMODATION-EXTRA-PERSON',
+  OTHER: 'ACCOMMODATION-OTHER', FNB: 'ACCOMMODATION-FNB', ADJUSTMENT: 'ACCOMMODATION-ADJUSTMENT',
+});
+
+module.exports = {
+  SERVICE_MODES, GUEST_MODES, QR_KINDS, GUEST_REQUEST_STATUS, CALL_KINDS, CALL_STATUS, CALL_AUDIENCE,
+  ROOM_STATUS, HOUSEKEEPING_STATUS, HK_TASK_TYPES, HK_TASK_STATUS, STAY_STATUS, BLOCKING_STAY_STATUS, BOOKING_SOURCES, ID_TYPES, MEAL_PLANS,
+  FOLIO_TYPES, STAY_PAY_METHODS, ROOM_SKU, FOLIO_SKU, levySku,
+};

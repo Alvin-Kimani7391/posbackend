@@ -81,7 +81,12 @@ const saleSchema = new Schema(
     paymentStatus: { type: String, enum: ['PAID', 'PARTIAL', 'UNPAID', 'CREDIT'], default: 'PAID' },
     saleStatus: { type: String, enum: ['COMPLETED', 'CANCELLED'], default: 'COMPLETED' },
 
-    source: { type: String, enum: ['POS', 'ONLINE', 'SYNC', 'REPAIR', 'GARAGE', 'LAYAWAY'], default: 'POS' },
+    source: { type: String, enum: ['POS', 'ONLINE', 'SYNC', 'REPAIR', 'GARAGE', 'LAYAWAY', 'RESTAURANT', 'ACCOMMODATION'], default: 'POS' },
+
+    restaurantBillId: { type: Schema.Types.ObjectId, ref: 'RestaurantBill' }, // set on the Sale created when a restaurant bill is paid
+
+    restaurantOrderId: { type: Schema.Types.ObjectId, ref: 'RestaurantOrder' },
+    stayId: { type: Schema.Types.ObjectId, ref: 'Stay' }, // set on the invoice issued when a guest checks out
     prescriptionId: { type: Schema.Types.ObjectId, ref: 'Prescription' }, // pharmacy: set when this sale dispensed a prescription
     dispensingId: { type: Schema.Types.ObjectId, ref: 'DispensingRecord' },
     poisonsBookId: { type: Schema.Types.ObjectId, ref: 'PoisonsBookEntry' }, // pharmacy: Part I poison sold without a prescription

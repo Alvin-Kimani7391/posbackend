@@ -648,7 +648,7 @@ async function consumeForSale(businessId, reference, expectedAmountCents, saleId
   const txn = await MpesaTransaction.findOne({ businessId, reference }).session(session);
   if (!txn) throw ApiError.badRequest('M-PESA reference not recognized', 'MPESA_REFERENCE_NOT_FOUND');
   if (txn.status !== 'SUCCESS') throw ApiError.badRequest('This M-PESA payment has not been confirmed as successful yet', 'MPESA_NOT_CONFIRMED');
-  if (txn.saleId || txn.repairJobId || txn.jobCardId || txn.layawayId) throw ApiError.conflict('This M-PESA payment has already been used', 'MPESA_ALREADY_CONSUMED');
+  if (txn.saleId || txn.repairJobId || txn.jobCardId || txn.layawayId || txn.restaurantBillId || txn.stayId) throw ApiError.conflict('This M-PESA payment has already been used', 'MPESA_ALREADY_CONSUMED');
   if (txn.amount !== expectedAmountCents) throw ApiError.badRequest('The M-PESA amount confirmed does not match this sale', 'MPESA_AMOUNT_MISMATCH');
   txn.saleId = saleId;
   await txn.save({ session });
@@ -660,7 +660,7 @@ async function consumeForRepair(businessId, reference, expectedAmountCents, repa
   const txn = await MpesaTransaction.findOne({ businessId, reference }).session(session);
   if (!txn) throw ApiError.badRequest('M-PESA reference not recognized', 'MPESA_REFERENCE_NOT_FOUND');
   if (txn.status !== 'SUCCESS') throw ApiError.badRequest('This M-PESA payment has not been confirmed as successful yet', 'MPESA_NOT_CONFIRMED');
-  if (txn.saleId || txn.repairJobId || txn.jobCardId || txn.layawayId) throw ApiError.conflict('This M-PESA payment has already been used', 'MPESA_ALREADY_CONSUMED');
+  if (txn.saleId || txn.repairJobId || txn.jobCardId || txn.layawayId || txn.restaurantBillId || txn.stayId) throw ApiError.conflict('This M-PESA payment has already been used', 'MPESA_ALREADY_CONSUMED');
   if (txn.amount !== expectedAmountCents) throw ApiError.badRequest('The M-PESA amount confirmed does not match this payment', 'MPESA_AMOUNT_MISMATCH');
   txn[field] = repairJobId; // 'repairJobId' (repairs) or 'jobCardId' (garage)
   await txn.save({ session });

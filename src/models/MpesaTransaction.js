@@ -47,7 +47,10 @@ const mpesaTransactionSchema = new Schema(
     rawCallback: { type: Schema.Types.Mixed },
 
     saleId: { type: Schema.Types.ObjectId, ref: 'Sale', default: null }, // set once consumed by a completed sale
+
+    restaurantBillId: { type: Schema.Types.ObjectId, default: null }, // set once consumed by a restaurant bill payment, tip or reservation deposit
     jobCardId: { type: Schema.Types.ObjectId, ref: 'JobCard', default: null }, // set once consumed by a garage deposit/payment
+    stayId: { type: Schema.Types.ObjectId, default: null }, // set once consumed by a guest stay payment
     layawayId: { type: Schema.Types.ObjectId, ref: 'Layaway', default: null }, // set once consumed by a layaway deposit/instalment
     repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob', default: null }, // set once consumed by a repair deposit/payment
     lastCheckedAt: { type: Date },

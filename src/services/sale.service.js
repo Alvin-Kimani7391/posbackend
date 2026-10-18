@@ -576,6 +576,8 @@ async function cancelSale(businessId, userId, id, reason) {
       const sale = await Sale.findOne({ _id: id, businessId }).session(session);
       if (!sale) throw ApiError.notFound('Sale not found');
       if (sale.saleStatus !== 'COMPLETED') throw ApiError.conflict('Only a completed sale can be cancelled', 'INVALID_SALE_STATE');
+      if (sale.source === 'ACCOMMODATION') throw ApiError.conflict('This is a guest stay invoice. Adjust or refund it from the stay.', 'ACCOMMODATION_SALE');
+      if (sale.source === 'RESTAURANT') throw ApiError.conflict('This is a restaurant bill. Refund the customer from the restaurant bill instead.', 'RESTAURANT_SALE');
       if (sale.source === 'LAYAWAY') throw ApiError.conflict('This is a layaway invoice. The goods were collected, so it cannot be cancelled here. Use a refund for returned goods.', 'LAYAWAY_SALE');
       if (sale.poisonsBookId) throw ApiError.conflict('This sale is recorded in the Poisons Book. A pharmacist must handle it as a return, not a cancellation.', 'POISONS_BOOK_SALE');
       if (sale.dispensingId) throw ApiError.conflict('This sale dispensed a prescription. A pharmacist must reverse the dispensing (with a reason) instead of cancelling it.', 'DISPENSED_SALE');
