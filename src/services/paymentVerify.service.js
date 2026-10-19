@@ -38,6 +38,11 @@ async function verify(Model, kind, businessId, user, id, entryId, { approve, not
   if (!approve) C.notifyRoles(businessId, doc.branchId, [...C.FLOOR_LEAD_ROLES], { type: 'PAYMENT_REJECTED', title: 'Mobile-money payment not verified', message: `${kind === 'BILL' ? doc.billNumber : doc.stayNumber}: ${p.network || 'Mobile money'} ${p.reference || ''} - ${note}`, entityType: kind === 'BILL' ? 'RestaurantBill' : 'Stay', entityId: doc._id });
   return row(kind, doc, p);
 }
+
+
+
+
+
 module.exports = { listUnverified,
   verifyBill: (b, u, id, e, body) => verify(RestaurantBill, 'BILL', b, u, id, e, body),
   verifyStay: (b, u, id, e, body) => verify(Stay, 'STAY', b, u, id, e, body) };
