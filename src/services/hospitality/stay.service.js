@@ -60,7 +60,7 @@ async function availability(businessId, user, { branchId, checkInDate, checkOutD
   }
   const byType = {};
   for (const o of out) { byType[o.roomType] = byType[o.roomType] || { roomTypeId: o.roomTypeId, roomType: o.roomType, available: 0, from: o.quote.total }; byType[o.roomType].available += 1; }
-  return { checkInDate, checkOutDate, expectedCheckIn: w.from, expectedCheckOut: w.to, rooms: out, byType: Object.values(byType) };
+  return { checkInDate, checkOutDate, today: T.todayIn(ctx.timeZone), timeZone: ctx.timeZone, expectedCheckIn: w.from, expectedCheckOut: w.to, rooms: out, byType: Object.values(byType) };
 }
 
 function windowFor(ctx, { checkInDate, checkOutDate, checkInTime, checkOutTime, dayUse }) {
@@ -96,7 +96,7 @@ async function reserve(businessId, user, input) {
       const nights = dayUse ? 1 : T.diffDays(input.checkInDate, checkOutDate);
       if (!dayUse && (nights < s.stay.minNights || nights > s.stay.maxNights)) throw ApiError.badRequest(`Stays must be between ${s.stay.minNights} and ${s.stay.maxNights} nights`, 'STAY_LENGTH_NOT_ALLOWED');
       const today = T.todayIn(ctx.timeZone);
-      if (input.checkInDate < today) throw ApiError.badRequest('The check-in date is in the past', 'DATE_IN_PAST');
+      if (input.checkInDate < today) throw ApiError.badRequest(`The check-in date (${input.checkInDate}) is before today (${today}) in the business time zone (${ctx.timeZone}). Pick ${today} or later, or check the time zone in Settings.`, 'DATE_IN_PAST');
       if (T.diffDays(today, input.checkInDate) > s.stay.maxAdvanceDays) throw ApiError.badRequest('That is further ahead than bookings are accepted', 'TOO_FAR_AHEAD');
       if (s.stay.requirePhone && !input.guest?.phone) throw ApiError.badRequest('A phone number is required for the guest', 'PHONE_REQUIRED');
 
@@ -256,7 +256,7 @@ async function changeDates(businessId, user, id, { checkOutDate, checkInDate, re
     const w = windowFor(ctx, { checkInDate: newIn, checkOutDate: newOut, checkInTime: stay.policy.checkInTime, checkOutTime: stay.policy.checkOutTime });
     const nights = T.diffDays(newIn, newOut);
     if (nights < ctx.acc.stay.minNights || nights > ctx.acc.stay.maxNights) throw ApiError.badRequest(`Stays must be between ${ctx.acc.stay.minNights} and ${ctx.acc.stay.maxNights} nights`, 'STAY_LENGTH_NOT_ALLOWED');
-    if (stay.status === 'RESERVED' && newIn < T.todayIn(ctx.timeZone)) throw ApiError.badRequest('The check-in date is in the past', 'DATE_IN_PAST');
+    if (stay.status === 'RESERVED' && newIn < T.todayIn(ctx.timeZone)) throw ApiError.badRequest(`The check-in date (${newIn}) is before today (${T.todayIn(ctx.timeZone)}) in the business time zone (${ctx.timeZone}).`, 'DATE_IN_PAST');
     const room = await Room.findOne({ _id: stay.roomId, businessId }).session(session);
     await Room.updateOne({ _id: room._id }, { $inc: { bookingSeq: 1 } }, { session });
     await assertRoomFree(room, w.from, w.to, { excludeStayId: stay._id, session });

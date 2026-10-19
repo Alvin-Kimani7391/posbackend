@@ -18,7 +18,8 @@ const hhmm = z.string().regex(/^\d{1,2}:\d{2}$/);
 const windowSchema = z.object({ days: z.array(z.number().int().min(0).max(6)).optional(), start: hhmm.optional(), end: hhmm.optional(), startDate: date.optional(), endDate: date.optional() });
 const branchQ = z.object({ branchId: objectId.optional() });
 const rangeQ = z.object({ branchId: objectId.optional(), from: date.optional(), to: date.optional() });
-const pageQ = paginationQuery;
+// The ingredient, stock and menu screens load up to 200 rows at once (the shared pagination schema stops at 100, which made them fail with 400).
+const pageQ = paginationQuery.extend({ limit: z.coerce.number().int().min(1).max(200).default(20) });
 
 // ---- settings / floor
 const settingsSchema = z.object({
