@@ -32,6 +32,7 @@ async function createTickets(order, items, { type = 'NEW', ctx, session, notes }
     for (const i of list) i.ticketId = t._id;
     out.push(t);
   }
+  if (type !== 'AMENDMENT') await require('./print.service').enqueueKot(order, out, { session, tz: ctx.timeZone });
   return out;
 }
 

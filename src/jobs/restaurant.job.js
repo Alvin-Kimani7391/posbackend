@@ -21,6 +21,7 @@ async function accommodationSweep() {
 }
 
 function start() {
+  cron.schedule('* * * * *', safe('guest payments', () => require('../services/hospitality/guest-portal.service').sweep()));
   cron.schedule('*/5 * * * *', safe('guest orders expiry', () => require('../services/hospitality/guest.service').expireStale()));
   cron.schedule('*/15 * * * *', safe('accommodation sweep', accommodationSweep));
   cron.schedule('* * * * *', safe('kitchen delays', () => kitchen.delayAlerts()));           // every minute

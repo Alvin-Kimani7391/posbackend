@@ -14,6 +14,7 @@ const Customer = require('../../models/Customer');
 const CustomerLedger = require('../../models/CustomerLedger');
 const ApiError = require('../../utils/ApiError');
 const { nextSequence, pad } = require('../../models/Counter');
+const GP = require('../../utils/guestPin');
 const T = require('../../utils/hospitalityTime');
 const R = require('../../utils/hospitalityRates');
 const H = require('../../constants/hospitality');
@@ -83,7 +84,7 @@ async function folioFor(ctx, businessId, room, roomType, pricing, userId, sessio
 async function reserve(businessId, user, input) {
   C.requireCan(user, 'accommodation.stays.create', 'Booking a room needs permission');
   if (input.clientRef) { const dup = await Stay.findOne({ businessId, clientRef: input.clientRef }); if (dup) return { stay: dup, replayed: true }; }
-  let out;
+  let out; let issuedPin = null;
   try {
     out = await C.inTx(async (session) => {
       const ctx = await C.getAccContext(businessId, session); C.assertAccommodation(ctx);
@@ -137,6 +138,7 @@ async function reserve(businessId, user, input) {
       const roomNet = stay.folio.filter((l) => !l.voided && ['ROOM', 'EXTRA_PERSON'].includes(l.type)).reduce((a, l) => a + l.total, 0);
       stay.depositRequired = R.depositDue(s, { firstNightAmount: pricing.nightly[0].amount, total: roomNet });
       if (input.deposit) { C.requireCan(user, 'accommodation.folio.pay', 'Taking a deposit needs permission'); const shift = await folio.openShift(businessId, input.branchId, user._id, session); await folio.applyPayment({ businessId, stay, user, ctx, session, shift, kind: 'DEPOSIT', payment: input.deposit }); folio.recompute(stay); hist(stay, 'folio.deposit', user._id, `${input.deposit.method} ${input.deposit.amount}`); }
+      if (ctx.acc.selfService.guestPinRequired) { issuedPin = newPin(ctx.acc.selfService.guestPinLength); stay.guestPinHash = pinHash(stay._id, issuedPin); stay.guestPinEnc = GP.encrypt(issuedPin); }   // the guest's room PIN is issued with the booking and printed on the confirmation
       await stay.save({ session });
       await C.audit({ businessId, branchId: stay.branchId, userId: user._id, action: 'accommodation.stay.reserve', entityType: 'Stay', entityId: stay._id, newValue: { stayNumber: stay.stayNumber, room: room.number, from: input.checkInDate, to: checkOutDate } }, session);
       return stay;
@@ -145,7 +147,7 @@ async function reserve(businessId, user, input) {
     if (err.code === 11000 && input.clientRef) { const dup = await Stay.findOne({ businessId, clientRef: input.clientRef }); if (dup) return { stay: dup, replayed: true }; }
     throw pe(err);
   }
-  return { stay: out, replayed: false };
+  return { stay: out, replayed: false, pin: issuedPin };
 }
 
 // ---------------------------------------------------------------- check-in
@@ -185,8 +187,13 @@ async function checkIn(businessId, user, id, input = {}) {
     }
     const claimed = await Room.findOneAndUpdate({ _id: room._id, currentStayId: null, status: room.status === 'AVAILABLE' ? 'AVAILABLE' : room.status }, { $set: { status: 'OCCUPIED', currentStayId: stay._id } }, { new: true, session });
     if (!claimed) throw ApiError.conflict(`Room ${room.number} is occupied`, 'ROOM_OCCUPIED');
-    const pin = ctx.acc.selfService.guestPinRequired ? newPin(ctx.acc.selfService.guestPinLength) : null;
-    if (pin) stay.guestPinHash = pinHash(stay._id, pin);
+    let pin = null;
+    if (ctx.acc.selfService.guestPinRequired) {
+      const prev = await Stay.findById(stay._id).select('+guestPinEnc +guestPinHash').session(session);
+      pin = prev && prev.guestPinEnc && prev.guestPinHash ? GP.decrypt(prev.guestPinEnc) : null;      // the PIN printed at booking stays valid
+      if (!pin) { pin = newPin(ctx.acc.selfService.guestPinLength); stay.guestPinEnc = GP.encrypt(pin); }
+      stay.guestPinHash = pinHash(stay._id, pin);
+    }
     stay.pinFailures = 0; stay.pinLockedUntil = undefined;
     stay.status = 'CHECKED_IN'; stay.actualCheckIn = now;
     await rebuildLeviesIfNeeded(stay, ctx, user._id, session);
@@ -393,7 +400,7 @@ async function checkOut(businessId, user, id, input = {}) {
     if (stay.totals.balance < 0) throw ApiError.conflict('The guest has paid more than the folio. Refund the difference first.', 'OVERPAID');
 
     const sale = await invoiceStay({ ctx, stay, user, session, shift });
-    stay.status = 'CHECKED_OUT'; stay.actualCheckOut = now; stay.guestPinHash = undefined;
+    stay.status = 'CHECKED_OUT'; stay.actualCheckOut = now; stay.guestPinHash = undefined; stay.guestPinEnc = undefined;
     hist(stay, 'stay.check_out', user._id, input.selfService ? 'self check-out' : undefined); stay.version += 1; await stay.save({ session });
     await Room.updateOne({ _id: stay.roomId }, { $set: { status: 'AVAILABLE', housekeeping: 'DIRTY', currentStayId: null } }, { session });
     if (ctx.acc.housekeeping.autoCreateTasks) await HousekeepingTask.create([{ businessId, branchId: stay.branchId, roomId: stay.roomId, roomNumber: stay.roomNumber, type: 'DEPARTURE_CLEAN', stayId: stay._id, auto: true, createdBy: user._id, priority: await nextArrivalSoon(businessId, stay, session) ? 'URGENT' : 'NORMAL' }], { session });
@@ -461,8 +468,19 @@ async function resetPin(businessId, user, id) {
   const ctx = await C.getAccContext(businessId);
   const stay = await folio.loadStay(businessId, id); C.assertBranchAccess(user, stay.branchId);
   if (stay.status !== 'CHECKED_IN') throw ApiError.conflict('The guest is not checked in', 'INVALID_STAY_STATE');
-  const pin = newPin(ctx.acc.selfService.guestPinLength); stay.guestPinHash = pinHash(stay._id, pin); stay.pinFailures = 0; stay.pinLockedUntil = undefined; hist(stay, 'stay.pin_reset', user._id); await stay.save();
+  const pin = newPin(ctx.acc.selfService.guestPinLength); stay.guestPinHash = pinHash(stay._id, pin); stay.guestPinEnc = GP.encrypt(pin); stay.pinFailures = 0; stay.pinLockedUntil = undefined; hist(stay, 'stay.pin_reset', user._id); await stay.save();
   return { pin };
+}
+/** Reception reprints the guest card: shows the PIN again (issues one if this stay has none yet). Booked or checked-in stays only. */
+async function guestCard(businessId, user, id) {
+  C.requireCan(user, 'accommodation.stays.checkin', 'Printing the guest card needs permission');
+  const ctx = await C.getAccContext(businessId);
+  const stay = await Stay.findOne({ _id: id, businessId }).select('+guestPinEnc +guestPinHash'); if (!stay) throw ApiError.notFound('Stay not found', 'STAY_NOT_FOUND'); C.assertBranchAccess(user, stay.branchId);
+  if (!['RESERVED', 'CHECKED_IN'].includes(stay.status)) throw ApiError.conflict('This stay is closed', 'INVALID_STAY_STATE');
+  if (!ctx.acc.selfService.guestPinRequired) return { pin: null, required: false };
+  let pin = stay.guestPinEnc && stay.guestPinHash ? GP.decrypt(stay.guestPinEnc) : null;
+  if (!pin) { pin = newPin(ctx.acc.selfService.guestPinLength); stay.guestPinHash = pinHash(stay._id, pin); stay.guestPinEnc = GP.encrypt(pin); stay.pinFailures = 0; stay.pinLockedUntil = undefined; hist(stay, 'stay.pin_issued', user._id); await stay.save(); }
+  return { pin, required: true };
 }
 
 // ---------------------------------------------------------------- lookups
@@ -507,6 +525,6 @@ async function listStays(businessId, user, q) {
 }
 
 module.exports = {
-  availability, reserve, checkIn, moveRoom, changeDates, updateStay, cancel, markNoShow, checkoutQuote, checkOut, computeDeparture, verifyPin, resetPin,
+  availability, reserve, checkIn, moveRoom, changeDates, updateStay, cancel, markNoShow, checkoutQuote, checkOut, computeDeparture, verifyPin, resetPin, guestCard,
   resolveRoomForOrder, getStay, listStays, assertRoomFree, roomConflicts, windowFor, blockEnd, earlyFeeFor,
 };

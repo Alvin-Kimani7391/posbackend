@@ -56,7 +56,8 @@ async function context(token) {
     branch: branch?.name,
     place: { kind: r.kind, label: label(r), seats: r.kind === 'TABLE' ? doc.seats : undefined, floor: r.kind === 'ROOM' ? doc.floor : undefined },
     mode: r.mode, canOrder, reason, orderingOpen: canOrder,
-    needsPin: r.kind === 'ROOM' && !!r.stay && !!ctx.acc.selfService.guestPinRequired,
+    needsPin: r.kind === 'ROOM' && !!r.stay && !!ctx.acc.selfService.guestPinRequired, pinLength: ctx.acc.selfService.guestPinLength || 4,
+    hasStay: r.kind === 'ROOM' ? !!r.stay : undefined,
     guest: r.stay ? { firstName: String(r.stay.guest.name).split(' ')[0], checkOutDate: r.stay.checkOutDate } : undefined,
     options: { showPrices: go.showPrices !== false, allowNotes: go.allowNotes !== false, requireName: !!go.requireName, requirePhone: !!go.requirePhone, allowBillRequest: go.allowBillRequest !== false, maxItemsPerRequest: go.maxItemsPerRequest, maxQuantityPerItem: go.maxQuantityPerItem },
     welcome: lang === 'sw' ? (go.welcomeMessageSw || go.welcomeMessage) : (go.welcomeMessage || undefined),
@@ -170,6 +171,16 @@ async function fulfil(req, user, { send = true, auto = false, dropIndexes = [] }
   return done;
 }
 
+/** One word for where an order is: RECEIVED > CONFIRMED > PREPARING > READY > SERVED (the guest sees this as a progress bar). */
+function stageOf(o) {
+  const live = o.items.filter((i) => !['CANCELLED', 'DRAFT', 'HELD'].includes(i.status) && !i.parentItemId); if (!live.length) return 'RECEIVED';
+  if (live.every((i) => i.status === 'SERVED')) return 'SERVED';
+  if (live.every((i) => ['READY', 'SERVED'].includes(i.status))) return 'READY';
+  if (live.some((i) => ['PREPARING', 'READY', 'SERVED'].includes(i.status))) return 'PREPARING';
+  if (live.some((i) => i.status === 'ACCEPTED')) return 'CONFIRMED';
+  return 'RECEIVED';
+}
+
 const view = (req, replayed = false) => ({ id: req._id, status: req.status, mode: req.mode, replayed, orderId: req.orderId, estimatedTotal: money(req.estimatedTotal), items: req.items.length, message: ({ PENDING: 'A waiter will confirm your order shortly.', ACCEPTED: 'Your order was accepted.', AUTO_ACCEPTED: 'Your order was sent to the kitchen.', REJECTED: req.decision?.reason || 'Your order could not be accepted.', EXPIRED: 'Your order expired. Please try again or call a waiter.', FAILED: req.failure || 'Your order could not be sent.' })[req.status], createdAt: req.createdAt });
 
 // ------------------------------------------------------------------ status
@@ -186,7 +197,7 @@ async function status(token, { pin } = {}) {
   return {
     place: label(r),
     requests: reqs.map((q) => view(q)),
-    orders: os.map((o) => ({ orderNumber: o.orderNumber, status: o.status, billStatus: o.billStatus, total: show ? money(o.totals.total) : null, items: o.items.filter((i) => i.status !== 'CANCELLED' && !i.parentItemId).map((i) => ({ name: i.name, quantity: i.quantity, status: i.status === 'PENDING' || i.status === 'ACCEPTED' ? 'RECEIVED' : i.status, notes: i.notes })) })),
+    orders: os.map((o) => ({ id: o._id, orderNumber: o.orderNumber, stage: stageOf(o), placedAt: o.createdAt, status: o.status, billStatus: o.billStatus, total: show ? money(o.totals.total) : null, items: o.items.filter((i) => i.status !== 'CANCELLED' && !i.parentItemId).map((i) => ({ name: i.name, quantity: i.quantity, status: i.status === 'PENDING' || i.status === 'ACCEPTED' ? 'RECEIVED' : i.status, notes: i.notes })) })),
     calls: openCalls.map((c) => ({ id: c._id, kind: c.kind, status: c.status, at: c.createdAt })),
   };
 }
@@ -283,4 +294,4 @@ async function expireStale() {
   return r.modifiedCount || 0;
 }
 
-module.exports = { context, menu, submit, status, call, folioView, requestCheckout, selfCheckOut, selfCheckIn, listRequests, accept, reject, expireStale, fulfil };
+module.exports = { context, menu, submit, status, call, folioView, requestCheckout, selfCheckOut, selfCheckIn, listRequests, accept, reject, expireStale, fulfil, place, label, money };

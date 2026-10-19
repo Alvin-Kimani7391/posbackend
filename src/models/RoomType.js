@@ -9,6 +9,7 @@ const s = new Schema({
   code: { type: String, trim: true, uppercase: true },
   description: { type: String, trim: true },
   images: [{ type: String }],
+  promo: { _id: false, active: { type: Boolean, default: false }, title: { type: String, trim: true, maxlength: 80 }, description: { type: String, trim: true, maxlength: 300 }, percentOff: { type: Number, min: 0, max: 90, default: 0 }, validFrom: String, validTo: String }, // shown as a deal on the guest QR page
   baseRate: { type: Number, required: true, min: 0 },                 // per room per night
   weekendRate: { type: Number, min: 0 },                              // optional: used on weekendDays
   weekendDays: { type: [Number], default: [5, 6] },                   // 0 = Sunday ... 6 = Saturday; the NIGHT that starts on that day

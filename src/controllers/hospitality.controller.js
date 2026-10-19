@@ -8,10 +8,12 @@ const guest = require('../services/hospitality/guest.service');
 const calls = require('../services/hospitality/servicecall.service');
 const qr = require('../services/hospitality/qr.service');
 const orders = require('../services/restaurant/order.service');
+const portal = require('../services/hospitality/guest-portal.service');
 
 const ApiError = require('../utils/ApiError');
 const h = (status, message, fn) => catchAsync(async (req, res) => sendSuccess(res, status, message, await fn(req)));
 const b = (req) => req.businessId; const u = (req) => req.user;
+const pinOf = (r) => r.query.pin || r.headers['x-guest-pin'];
 const clean = (stay) => { const o = stay.toJSON ? stay.toJSON() : stay; delete o.guestPinHash; return o; };
 
 module.exports = {
@@ -42,7 +44,7 @@ module.exports = {
   reserve: h(201, 'Room booked', async (r) => {
     const out = await stays.reserve(b(r), u(r), r.body);
     if (r.body.checkInNow && !out.replayed) { const ci = await stays.checkIn(b(r), u(r), out.stay._id, {}); return { stay: clean(ci.stay), pin: ci.pin, earlyFee: ci.earlyFee, replayed: false }; }
-    return { stay: clean(out.stay), replayed: out.replayed };
+    return { stay: clean(out.stay), pin: out.pin, replayed: out.replayed };
   }),
   checkIn: h(200, 'Guest checked in', async (r) => { const o = await stays.checkIn(b(r), u(r), r.params.id, r.body); return { stay: clean(o.stay), pin: o.pin, earlyFee: o.earlyFee }; }),
   checkoutQuote: h(200, 'Check-out quote', async (r) => { const q = await stays.checkoutQuote(b(r), u(r), r.params.id, r.query); return { adds: q.adds, voids: q.voids, notes: q.notes }; }),
@@ -53,6 +55,7 @@ module.exports = {
   cancelStay: h(200, 'Booking cancelled', async (r) => { const o = await stays.cancel(b(r), u(r), r.params.id, r.body); return { ...o, stay: clean(o.stay) }; }),
   noShow: h(200, 'Booking marked as no-show', async (r) => { const o = await stays.markNoShow(b(r), u(r), r.params.id, r.body); return { ...o, stay: clean(o.stay) }; }),
   resetPin: h(200, 'New guest code issued', async (r) => stays.resetPin(b(r), u(r), r.params.id)),
+  guestCard: h(200, 'Guest card', async (r) => stays.guestCard(b(r), u(r), r.params.id)),
   // ---- folio
   addCharge: h(201, 'Charge posted', async (r) => ({ stay: clean(await folio.addCharge(b(r), u(r), r.params.id, r.body)) })),
   voidLine: h(200, 'Charge removed', async (r) => ({ stay: clean(await folio.voidLine(b(r), u(r), r.params.id, r.params.lineId, r.body)) })),
@@ -99,5 +102,13 @@ module.exports = {
   pFolio: h(200, 'OK', async (r) => guest.folioView(r.params.token, { pin: r.query.pin || r.headers['x-guest-pin'] })),
   pRequestCheckout: h(200, 'OK', async (r) => guest.requestCheckout(r.params.token, r.body)),
   pCheckOut: h(200, 'OK', async (r) => guest.selfCheckOut(r.params.token, r.body)),
+  pBill: h(200, 'OK', async (r) => portal.bill(r.params.token, { pin: pinOf(r) })),
+  pPay: h(200, 'OK', async (r) => portal.payStart(r.params.token, r.body)),
+  pPayStatus: h(200, 'OK', async (r) => portal.payStatus(r.params.token, { pin: pinOf(r), reference: r.params.reference })),
+  pReceipt: h(200, 'OK', async (r) => portal.receipt(r.params.token, { pin: pinOf(r), reference: r.params.reference })),
+  pChargeRoom: h(200, 'OK', async (r) => portal.chargeToRoom(r.params.token, r.body)),
+  pStay: h(200, 'OK', async (r) => portal.stayView(r.params.token, { pin: pinOf(r) })),
+  pDeals: h(200, 'OK', async (r) => portal.deals(r.params.token)),
+  pEnquiry: h(200, 'OK', async (r) => portal.enquiry(r.params.token, r.body)),
   pCheckIn: h(200, 'OK', async (r) => guest.selfCheckIn(r.params.token, r.body, { ip: r.ip })),
 };

@@ -76,6 +76,7 @@ const s = new Schema({
   creditCustomerId: Schema.Types.ObjectId,
 
   guestPinHash: { type: String, select: false },
+  guestPinEnc: { type: String, select: false },                       // same PIN, encrypted, so reception can reprint the guest card (utils/guestPin)
   pinFailures: { type: Number, default: 0 }, pinLockedUntil: Date,
   qrOrdersEnabled: { type: Boolean, default: true },
   checkoutRequestedAt: Date,

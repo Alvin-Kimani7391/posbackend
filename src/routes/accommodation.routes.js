@@ -42,6 +42,7 @@ router.post('/stays/:id/move', P('accommodation.stays.manage'), validate({ ...id
 router.post('/stays/:id/dates', P('accommodation.stays.manage'), validate({ ...id, body: v.datesBody }), c.changeDates);
 router.post('/stays/:id/cancel', P('accommodation.stays.manage'), validate({ ...id, body: v.cancelBody }), c.cancelStay);
 router.post('/stays/:id/no-show', P('accommodation.stays.manage'), validate({ ...id, body: v.noShowBody }), c.noShow);
+router.get('/stays/:id/guest-card', P('accommodation.stays.checkin'), validate(id), c.guestCard);
 router.post('/stays/:id/reset-pin', P('accommodation.stays.manage'), validate(id), c.resetPin);
 
 router.post('/stays/:id/charges', P('accommodation.folio.charge'), validate({ ...id, body: v.chargeBody }), c.addCharge);

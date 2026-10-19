@@ -110,6 +110,8 @@ router.put('/kitchen/orders/:orderId/items/:itemId', kds, P('restaurant.kitchen.
 router.post('/kitchen/tickets/:id/bump', kds, P('restaurant.kitchen.update'), validate({ ...id, body: v.bumpBody }), c.bump);
 router.post('/kitchen/tickets/:id/expo', kds, P('restaurant.kitchen.expedite'), validate(id), c.expo);
 router.post('/kitchen/tickets/:id/priority', kds, P('restaurant.kitchen.expedite'), validate({ ...id, body: v.priorityBody }), c.priority);
+router.get('/print-jobs', c.printJobs);                      // a staff device set to auto-print collects its tickets / receipts
+router.post('/print-jobs/:id/done', validate(id), c.printDone);
 router.post('/kitchen/tickets/:id/reprint', kds, P('restaurant.kitchen.update'), validate({ ...id, body: v.reasonBody }), c.reprint);
 
 // ---- bills and payments

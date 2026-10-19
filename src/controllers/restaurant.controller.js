@@ -7,6 +7,7 @@ const recipes = require('../services/restaurant/recipe.service');
 const ing = require('../services/restaurant/ingredient.service');
 const orders = require('../services/restaurant/order.service');
 const kitchen = require('../services/restaurant/kitchen.service');
+const prints = require('../services/restaurant/print.service');
 const bills = require('../services/restaurant/bill.service');
 const resv = require('../services/restaurant/reservation.service');
 const staff = require('../services/restaurant/staff.service');
@@ -110,6 +111,8 @@ module.exports = {
   bump: h(200, 'Ticket updated', async (r) => ({ ticket: await kitchen.bumpTicket(b(r), u(r), r.params.id, r.body.status) })),
   expo: h(200, 'Ticket confirmed', async (r) => ({ ticket: await kitchen.expoConfirm(b(r), u(r), r.params.id) })),
   priority: h(200, 'Priority updated', async (r) => ({ ticket: await kitchen.setPriority(b(r), u(r), r.params.id, r.body.priority) })),
+  printJobs: h(200, 'Print jobs', async (r) => ({ jobs: await prints.claim(b(r), u(r), { targets: r.query.targets, branchId: r.query.branchId || r.user.branchIds?.[0], limit: r.query.limit }) })),
+  printDone: h(200, 'Print confirmed', async (r) => prints.ack(b(r), u(r), r.params.id)),
   reprint: h(200, 'Ticket reprinted', async (r) => ({ ticket: await kitchen.reprint(b(r), u(r), r.params.id, r.body) })),
   kitchenStats: h(200, 'Kitchen stats fetched', async (r) => kitchen.stats(b(r), u(r), r.query)),
   // bills

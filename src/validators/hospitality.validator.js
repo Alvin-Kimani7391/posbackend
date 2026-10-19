@@ -43,6 +43,7 @@ const settingsSchema = z.object({
 // ---- room types and rooms
 const seasonal = z.object({ name: str(60).optional(), startDate: ymd, endDate: ymd, rate: money0, days: z.array(z.number().int().min(0).max(6)).optional() });
 const roomTypeBody = z.object({
+  promo: z.object({ active: z.boolean().optional(), title: str(80).optional(), description: str(300).optional(), percentOff: z.coerce.number().min(0).max(90).optional(), validFrom: ymd.or(z.literal('')).optional(), validTo: ymd.or(z.literal('')).optional() }).optional(),
   name: str(80).min(1), code: str(12).optional(), description: str(1000).optional(), images: z.array(str(500)).max(12).optional(),
   baseRate: money0, weekendRate: money0.optional(), weekendDays: z.array(z.number().int().min(0).max(6)).optional(), seasonalRates: z.array(seasonal).max(40).optional(),
   baseOccupancy: z.coerce.number().int().min(1).optional(), maxAdults: z.coerce.number().int().min(1).optional(), maxChildren: z.coerce.number().int().min(0).optional(),
@@ -126,11 +127,15 @@ const guestCall = z.object({ kind: z.enum(H.CALL_KINDS), note: str(300).optional
 const guestPinOnly = z.object({ pin, note: str(300).optional() }).strict();
 const guestSelfCheckIn = z.object({ bookingCode: str(12).min(4), phoneLast4: z.string().regex(/^\d{4}$/) }).strict();
 const tokenParam = z.object({ token: z.string().min(30).max(80) });
+const payRefParam = z.object({ token: z.string().min(30).max(80), reference: z.string().regex(/^MPX-[A-F0-9]{12}$/) });
+const guestPay = z.object({ pin, phone: str(20).min(9), orderId: objectId.optional(), billId: objectId.optional(), kind: z.enum(['BILL', 'STAY']).optional() }).strict();
+const guestCharge = z.object({ pin, orderId: objectId, billId: objectId.optional() }).strict();
+const guestEnquiry = z.object({ roomTypeId: objectId, name: str(80).optional(), phone: str(25).optional(), checkInDate: ymd.optional(), nights: z.coerce.number().int().min(1).max(60).optional(), note: str(120).optional() }).strict();
 const pinQuery = z.object({ pin });
 
 module.exports = {
   idParam, lineParam, branchQ, settingsSchema, roomTypeBody, roomTypeUpdate, roomBody, roomUpdate, roomBulk, roomStatus, housekeepingBody,
   availabilityQuery, reserveBody, checkInBody, checkOutBody, quoteQuery, moveBody, datesBody, stayUpdate, cancelBody, noShowBody, stayListQuery, chargeBody, folioPayBody, folioRefundBody, voidLineBody, stkBody, manualBody, claimBody, refParam, verifyBody, entryParam, unverifiedQuery, contextQuery, openShiftBody,
   taskQuery, taskCreate, taskUpdate, rangeQuery, boardQuery, requestQuery, acceptBody, rejectBody, callQuery, callCreate, qrQuery, qrParam, qrEnable,
-  guestOrder, guestCall, guestPinOnly, guestSelfCheckIn, tokenParam, pinQuery,
+  guestOrder, guestCall, guestPinOnly, guestSelfCheckIn, tokenParam, pinQuery, payRefParam, guestPay, guestCharge, guestEnquiry,
 };

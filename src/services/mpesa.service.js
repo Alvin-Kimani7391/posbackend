@@ -634,6 +634,9 @@ async function handleCallback(businessId, body) {
     await propagateReceiptToPaymentAndReceipt(txn);
   }
 
+  // a guest paid from the QR page: close their bill now, even if their phone never comes back to the page
+  if (txn.status === 'SUCCESS' && txn.guestPay && txn.guestPay.kind) require('./hospitality/guest-portal.service').finalizeByTxn(txn._id);
+
   if (txn.status === 'FAILED' && !callbackSaysSuccess) {
     await notificationService.notifyManagement(businessId, {
       type: 'PAYMENT_FAILED',

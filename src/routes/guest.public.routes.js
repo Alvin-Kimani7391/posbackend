@@ -14,16 +14,25 @@ const lim = (windowMs, max) => rateLimit({ windowMs, max, keyGenerator: key, sta
 const read = lim(60 * 1000, 90);
 const write = lim(60 * 1000, 12);
 const pinTry = lim(15 * 60 * 1000, 30);
+const poll = lim(60 * 1000, 40);        // live order tracking refreshes every few seconds; wrong PINs still lock the stay (see stay.service.verifyPin)
 const tok = { params: v.tokenParam };
 
 router.get('/:token', read, validate(tok), c.pContext);
 router.get('/:token/menu', read, validate(tok), c.pMenu);
-router.get('/:token/status', pinTry, validate({ ...tok, query: v.pinQuery }), c.pStatus);
+router.get('/:token/status', poll, validate({ ...tok, query: v.pinQuery }), c.pStatus);
 router.post('/:token/orders', write, pinTry, validate({ ...tok, body: v.guestOrder }), c.pOrder);
 router.post('/:token/calls', write, pinTry, validate({ ...tok, body: v.guestCall }), c.pCall);
-router.get('/:token/folio', pinTry, validate({ ...tok, query: v.pinQuery }), c.pFolio);
+router.get('/:token/folio', poll, validate({ ...tok, query: v.pinQuery }), c.pFolio);
 router.post('/:token/request-checkout', write, pinTry, validate({ ...tok, body: v.guestPinOnly }), c.pRequestCheckout);
 router.post('/:token/check-out', write, pinTry, validate({ ...tok, body: v.guestPinOnly }), c.pCheckOut);
+router.get('/:token/bill', poll, validate({ ...tok, query: v.pinQuery }), c.pBill);
+router.post('/:token/pay', write, validate({ ...tok, body: v.guestPay }), c.pPay);
+router.get('/:token/pay/:reference', poll, validate({ params: v.payRefParam, query: v.pinQuery }), c.pPayStatus);
+router.get('/:token/receipt/:reference', poll, validate({ params: v.payRefParam, query: v.pinQuery }), c.pReceipt);
+router.post('/:token/charge-room', write, validate({ ...tok, body: v.guestCharge }), c.pChargeRoom);
+router.get('/:token/stay', poll, validate({ ...tok, query: v.pinQuery }), c.pStay);
+router.get('/:token/deals', read, validate(tok), c.pDeals);
+router.post('/:token/enquiry', write, validate({ ...tok, body: v.guestEnquiry }), c.pEnquiry);
 router.post('/:token/check-in', write, pinTry, validate({ ...tok, body: v.guestSelfCheckIn }), c.pCheckIn);
 
 module.exports = router;
