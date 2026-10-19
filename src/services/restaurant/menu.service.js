@@ -109,8 +109,18 @@ const priceHistory = (businessId, id) => AuditLog.find({ businessId, entityType:
  * The waiter's menu: every active item with the price it will actually be charged right now for this order type and branch,
  * whether it can be ordered, and (when recipes are on) how many portions the ingredients allow.
  */
-async function getMenu(businessId, user, { branchId, orderType = 'DINE_IN', now = new Date() }) {
+// Short-lived cache: the menu is rebuilt for every table, waiter and QR scan otherwise. Cleared on every menu write; 10 s max otherwise.
+const MENU_TTL = 10000; const menuCache = new Map();
+const bustMenu = (businessId) => { const p = String(businessId) + ':'; for (const k of menuCache.keys()) if (k.startsWith(p)) menuCache.delete(k); };
+async function getMenu(businessId, user, { branchId, orderType = 'DINE_IN', now } = {}) {
   C.assertBranchAccess(user, branchId);
+  const key = `${businessId}:${branchId}:${orderType}`; const hit = menuCache.get(key);
+  if (!now && hit && Date.now() - hit.t < MENU_TTL) return hit.v;
+  const v = await buildMenu(businessId, user, { branchId, orderType, now: now || new Date() });
+  if (!now) { if (menuCache.size > 200) menuCache.clear(); menuCache.set(key, { t: Date.now(), v }); }
+  return v;
+}
+async function buildMenu(businessId, user, { branchId, orderType = 'DINE_IN', now = new Date() }) {
   const ctx = await C.getContext(businessId);
   const [items, groups, cats] = await Promise.all([MenuItem.find({ businessId, status: 'active' }).sort({ sortOrder: 1, name: 1 }), ModifierGroup.find({ businessId, active: true }), Category.find({ businessId, status: 'active' }).sort({ name: 1 })]);
   let portions = new Map();
@@ -137,4 +147,6 @@ async function getMenu(businessId, user, { branchId, orderType = 'DINE_IN', now 
   return { branchId, orderType, generatedAt: now, categories };
 }
 
-module.exports = { listGroups, createGroup, updateGroup, archiveGroup, createItem, updateItem, archiveItem, setSoldOut, getItem, listItems, priceHistory, getMenu };
+const writes = { createGroup, updateGroup, archiveGroup, createItem, updateItem, archiveItem, setSoldOut };
+for (const k of Object.keys(writes)) { const fn = writes[k]; writes[k] = async (businessId, ...a) => { try { return await fn(businessId, ...a); } finally { bustMenu(businessId); } }; }
+module.exports = { listGroups, ...writes, getItem, listItems, priceHistory, getMenu, bustMenu };

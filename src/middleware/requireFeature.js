@@ -18,7 +18,7 @@ function requireFeature(...keys) {
     const businessId = req.businessId;
     if (!businessId) throw ApiError.forbidden('No business context', 'NO_BUSINESS');
 
-    const business = await Business.findById(businessId).select('businessType featureSettings').lean();
+    const business = req.businessDoc || await Business.findById(businessId).select('businessType featureSettings').lean();
     if (!business) throw ApiError.notFound('Business not found');
 
     const fs = business.featureSettings || {};

@@ -19,6 +19,7 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1); // needed for correct req.ip behind Render's proxy
 
 app.use(helmet());
+try { app.use(require('compression')()); } catch (e) { console.warn('compression not installed - run npm install'); } // gzip: the menu / floor JSON shrinks ~5-10x
 app.use(
   cors({
     origin: frontendUrl === '*' ? true : frontendUrl.split(','),
