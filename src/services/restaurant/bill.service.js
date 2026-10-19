@@ -270,6 +270,15 @@ async function mpesaManual(businessId, user, id, { amountCents }) {
   return mpesaService.initiateManual(businessId, bill.branchId, user, { amountCents: amountCents || bill.balance });
 }
 const mpesaStatus = (businessId, reference) => mpesaService.getStatus(businessId, reference);
+async function payContext(businessId, user, branchId) {
+  C.assertBranchAccess(user, branchId);
+  const ctx = await C.getContext(businessId);
+  return require('../payContext.service').build({ businessId, branchId, user, ctx });
+}
+async function openShift(businessId, user, { branchId, registerId, openingCash }) {
+  C.assertBranchAccess(user, branchId);
+  return require('../payContext.service').openShift({ businessId, user, branchId, registerId, openingCash });
+}
 const mpesaClaim = (businessId, user, reference, receiptCode) => mpesaService.claimByCode(businessId, reference, user, receiptCode);
 const mpesaCancel = (businessId, reference) => mpesaService.cancelManual(businessId, reference);
 
@@ -289,6 +298,7 @@ async function pay(businessId, user, id, { payments, customerId }) {
       if (!(p.amount > 0)) throw ApiError.badRequest('Payment amount must be more than zero', 'INVALID_AMOUNT');
       if (p.amount > balance) throw ApiError.badRequest('Payment is more than the balance owing', 'OVERPAYMENT');
       const entry = { kind: 'PAYMENT', method: p.method, amount: p.amount, reference: p.reference, at: new Date(), by: user._id };
+      if (p.method === 'MOBILE_MONEY') Object.assign(entry, { network: p.network || 'OTHER', payerPhone: p.payerPhone, verifyStatus: 'PENDING' });
       if (p.method === 'CREDIT') {
         C.requireCan(user, 'restaurant.bills.credit', 'Putting a bill on credit needs permission');
         const cust = bill.customerId ? await Customer.findOne({ _id: bill.customerId, businessId, status: 'active' }).session(session) : null;
@@ -312,11 +322,12 @@ async function pay(businessId, user, id, { payments, customerId }) {
       } else {
         let provider = 'manual'; let ext; let meta; let verified = false;
         if (p.method === 'MOBILE_MONEY' && !p.reference) throw ApiError.badRequest('A mobile-money transaction reference is required', 'MOBILE_MONEY_REFERENCE_REQUIRED');
+        if (p.method === 'MOBILE_MONEY') meta = { network: p.network || 'OTHER', payerPhone: p.payerPhone, verifyStatus: 'PENDING' };
         if (p.method === 'MPESA') {
           await assertCountry(businessId, 'KE');                                  // automatic M-PESA verification (PayHero) is Kenya-only
           if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
           const c = await consumeMpesa(businessId, p.reference, p.amount, bill._id, session);
-          provider = c.channel === 'MANUAL' ? 'payhero-till' : 'payhero'; ext = c.externalTransactionId; meta = { checkoutRequestId: c.checkoutRequestId, channel: c.channel }; verified = true;
+          provider = c.channel === 'MANUAL' ? 'payhero-till' : 'payhero'; ext = c.externalTransactionId; meta = { checkoutRequestId: c.checkoutRequestId, channel: c.channel }; verified = true; entry.verifyStatus = 'VERIFIED';
         }
         const tendered = p.method === 'CASH' ? (p.tendered ?? p.amount) : undefined;
         if (p.method === 'CASH' && tendered < p.amount) throw ApiError.badRequest('Cash tendered is less than the amount', 'TENDERED_TOO_LOW');
@@ -535,5 +546,5 @@ async function getBill(businessId, user, id) {
 
 module.exports = {
   generateBill, adjustBillsForItem, setDiscount, removeDiscount, waiveServiceCharge, splitBill, moveItems, mergeBills, voidBill, pay, closeBill, addTip, refundBill,
-  consumeMpesa, mpesaStk, mpesaManual, mpesaStatus, mpesaClaim, mpesaCancel, listBills, getBill, tryCloseOrder, closeIfDone, recompute, orderBillStatus, roleLimit,
+  consumeMpesa, mpesaStk, mpesaManual, mpesaStatus, mpesaClaim, mpesaCancel, payContext, openShift, listBills, getBill, tryCloseOrder, closeIfDone, recompute, orderBillStatus, roleLimit,
 };

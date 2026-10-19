@@ -127,6 +127,10 @@ router.post('/bills/:id/pay', P('restaurant.bills.pay'), validate({ ...id, body:
 router.post('/bills/:id/close', P('restaurant.bills.pay'), validate({ ...id, body: v.closeBillBody }), idempotent('POST /restaurant/bills/close'), c.closeBill);
 router.post('/bills/:id/tips', P('restaurant.bills.pay'), validate({ ...id, body: v.tipBody }), idempotent('POST /restaurant/bills/tips'), c.tip);
 router.post('/bills/:id/refund', P('restaurant.bills.refund'), validate({ ...id, body: v.refundBody }), idempotent('POST /restaurant/bills/refund'), c.refund);
+router.get('/pay-context', P('restaurant.bills.view'), validate({ query: v.contextQuery }), c.payContext);
+router.post('/shift/open', P('restaurant.bills.pay'), validate({ body: v.openShiftBody }), c.openCashShift);
+router.get('/payments/unverified', P('restaurant.payments.verify'), validate({ query: v.unverifiedQuery }), c.unverified);
+router.post('/bills/:id/payments/:entryId/verify', P('restaurant.payments.verify'), validate({ params: v.entryParam, body: v.verifyBody }), c.verifyPayment);
 router.post('/bills/:id/mpesa/stk', P('restaurant.bills.pay'), validate({ ...id, body: v.stkBody }), c.mpesaStk);
 router.post('/bills/:id/mpesa/manual', P('restaurant.bills.pay'), validate({ ...id, body: v.manualBody }), c.mpesaManual);
 router.get('/mpesa/:reference/status', P('restaurant.bills.pay'), validate({ params: v.refParam }), c.mpesaStatus);

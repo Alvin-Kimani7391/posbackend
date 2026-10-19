@@ -27,6 +27,8 @@ const stayPayment = new Schema({
   paymentId: { type: Schema.Types.ObjectId, ref: 'Payment' },
   verified: { type: Boolean, default: false },
   at: { type: Date, default: Date.now }, by: Schema.Types.ObjectId, note: String,
+  network: { type: String, trim: true }, payerPhone: { type: String, trim: true },
+  verifyStatus: { type: String, enum: ['PENDING', 'VERIFIED', 'REJECTED'] }, verifiedBy: Schema.Types.ObjectId, verifiedAt: Date, verifyNote: String,
 });
 
 const guestSchema = new Schema({

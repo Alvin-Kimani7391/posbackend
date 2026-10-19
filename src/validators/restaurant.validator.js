@@ -134,7 +134,7 @@ const splitBody = z.discriminatedUnion('mode', [
 ]);
 const moveBody = z.object({ toBillId: objectId, selections: z.array(z.object({ orderItemId: objectId, quantity: z.coerce.number().positive() })).min(1) });
 const mergeBillsBody = z.object({ billIds: z.array(objectId).min(2).max(10) });
-const payBody = z.object({ customerId: objectId.optional(), payments: z.array(z.object({ method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'CREDIT', 'DEPOSIT', 'ROOM', 'OTHER']), amount: money, tendered: money.optional(), reference: str(100).optional(), reservationId: objectId.optional(), stayId: objectId.optional() })).min(1).max(10) });
+const payBody = z.object({ customerId: objectId.optional(), payments: z.array(z.object({ method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'CREDIT', 'DEPOSIT', 'ROOM', 'OTHER']), amount: money, tendered: money.optional(), reference: str(100).optional(), network: str(40).optional(), payerPhone: str(20).optional(), reservationId: objectId.optional(), stayId: objectId.optional() })).min(1).max(10) });
 const tipBody = z.object({ amount: money, method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']), reference: str(100).optional(), waiterId: objectId.optional() });
 const closeBillBody = z.object({ reason: optReason });
 const refundBody = z.object({ amount: money, method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']), reason });
@@ -143,6 +143,11 @@ const stkBody = z.object({ phone: z.string().trim().min(9), amountCents: money.o
 const manualBody = z.object({ amountCents: money.optional() });
 const claimBody = z.object({ receiptCode: z.string().trim().refine((v) => /^[A-Za-z][A-Za-z0-9]{9}$/.test(v), 'Enter the 10-character M-PESA code') });
 const refParam = z.object({ reference: z.string().trim().min(3) });
+const verifyBody = z.object({ approve: z.boolean(), note: str(300).optional() });
+const entryParam = z.object({ id: objectId, entryId: objectId });
+const unverifiedQuery = z.object({ branchId: objectId.optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
+const contextQuery = z.object({ branchId: objectId });
+const openShiftBody = z.object({ branchId: objectId, registerId: objectId, openingCash: money0 });
 
 // ---- reservations / staff
 const reservationBody = z.object({ branchId: objectId, guestName: str(120).min(2), phone: str(20).min(7), customerId: objectId.optional(), partySize: z.coerce.number().int().min(1).max(500), startsAt: date.optional(), durationMinutes: z.coerce.number().int().min(15).max(600).optional(), tableIds: z.array(objectId).optional(), source: z.enum(['PHONE', 'WALK_IN', 'ONLINE', 'STAFF']).optional(), occasion: str(80).optional(), notes: str(500).optional(), waitlist: z.boolean().optional(), quotedWaitMinutes: z.coerce.number().int().min(0).optional(), depositAmount: money0.optional(), overrideCapacity: z.boolean().optional() });
@@ -173,7 +178,7 @@ module.exports = {
   groupBody, itemCreate, itemUpdate, soldOutBody, itemListQuery, menuQuery, recipeBody, recipeQuery, costQuery, ingredientCreate, ingredientUpdate, ingListQuery, receiveBody, transferBody, wasteBody, adjustBody,
   countStart, countSubmit, stockQuery, movementQuery, purchaseQuery, countListQuery, expiringQuery, createOrder, addItemsBody, updateItemBody, cancelItemBody, versionBody, fireBody, serveBody, compBody,
   updateOrderBody, transferBody2, reassignBody, mergeBody, assistBody, reasonBody, riderBody, deliveryStatusBody, pickupBody, orderListQuery, syncBody, kitchenQueue, itemStatusBody, bumpBody, priorityBody, kItemParam,
-  genBill, discountBody, scBody, splitBody, moveBody, mergeBillsBody, payBody, tipBody, closeBillBody, refundBody, billListQuery, stkBody, manualBody, claimBody, refParam,
+  genBill, discountBody, scBody, splitBody, moveBody, mergeBillsBody, payBody, tipBody, closeBillBody, refundBody, billListQuery, stkBody, manualBody, claimBody, refParam, verifyBody, entryParam, unverifiedQuery, contextQuery, openShiftBody,
   reservationBody, reservationUpdate, reservationStatus, depositBody, depositSettle, reservationQuery, availQuery, scheduleBody, clockInBody, clockOutBody, availabilityBody, handoverBody, shiftQuery,
   tipQuery, tipAllocate, tipPayout, incidentBody, incidentResolve, incidentQuery, wasteQuery, salesQuery, deliveryListQuery, pageQ,
 };

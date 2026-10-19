@@ -132,6 +132,10 @@ module.exports = {
   mpesaStatus: h(200, 'M-PESA status fetched', async (r) => bills.mpesaStatus(b(r), r.params.reference)),
   mpesaClaim: h(200, 'M-PESA payment claimed', async (r) => bills.mpesaClaim(b(r), u(r), r.params.reference, r.body.receiptCode)),
   mpesaCancel: h(200, 'M-PESA request cancelled', async (r) => bills.mpesaCancel(b(r), r.params.reference)),
+  payContext: h(200, 'Payment options fetched', async (r) => bills.payContext(b(r), u(r), r.query.branchId)),
+  openCashShift: h(201, 'Shift opened', async (r) => ({ shift: await bills.openShift(b(r), u(r), r.body) })),
+  unverified: h(200, 'Payments awaiting verification', async (r) => ({ payments: await require('../services/paymentVerify.service').listUnverified(b(r), u(r), r.query, { accommodation: false }) })),
+  verifyPayment: h(200, 'Payment checked', async (r) => ({ payment: await require('../services/paymentVerify.service').verifyBill(b(r), u(r), r.params.id, r.params.entryId, r.body) })),
   // reservations
   createReservation: h(201, 'Reservation saved', async (r) => ({ reservation: await resv.create(b(r), u(r), r.body) })),
   listReservations: h(200, 'Reservations fetched', async (r) => resv.list(b(r), u(r), r.query)),

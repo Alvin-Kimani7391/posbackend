@@ -46,6 +46,15 @@ router.post('/stays/:id/reset-pin', P('accommodation.stays.manage'), validate(id
 
 router.post('/stays/:id/charges', P('accommodation.folio.charge'), validate({ ...id, body: v.chargeBody }), c.addCharge);
 router.post('/stays/:id/charges/:lineId/void', P('accommodation.folio.adjust'), validate({ params: v.lineParam, body: v.voidLineBody }), c.voidLine);
+router.post('/stays/:id/mpesa/stk', P('accommodation.folio.pay'), validate({ ...id, body: v.stkBody }), c.mpesaStk);
+router.post('/stays/:id/mpesa/manual', P('accommodation.folio.pay'), validate({ ...id, body: v.manualBody }), c.mpesaManual);
+router.get('/mpesa/:reference/status', P('accommodation.folio.pay'), validate({ params: v.refParam }), c.mpesaStatus);
+router.post('/mpesa/:reference/claim', P('accommodation.folio.pay'), validate({ params: v.refParam, body: v.claimBody }), c.mpesaClaim);
+router.post('/mpesa/:reference/cancel', P('accommodation.folio.pay'), validate({ params: v.refParam }), c.mpesaCancel);
+router.get('/pay-context', P('accommodation.stays.view'), validate({ query: v.contextQuery }), c.payContext);
+router.post('/shift/open', P('accommodation.folio.pay'), validate({ body: v.openShiftBody }), c.openCashShift);
+router.get('/payments/unverified', P('accommodation.folio.verify'), validate({ query: v.unverifiedQuery }), c.unverified);
+router.post('/stays/:id/payments/:entryId/verify', P('accommodation.folio.verify'), validate({ params: v.entryParam, body: v.verifyBody }), c.verifyPayment);
 router.post('/stays/:id/payments', P('accommodation.folio.pay'), validate({ ...id, body: v.folioPayBody }), idempotent('POST /accommodation/stays/payments'), c.addPayment);
 router.post('/stays/:id/refund', P('accommodation.folio.refund'), validate({ ...id, body: v.folioRefundBody }), c.refund);
 

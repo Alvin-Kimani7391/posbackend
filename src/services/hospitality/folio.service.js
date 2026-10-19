@@ -115,6 +115,7 @@ async function voidLine(businessId, user, id, lineId, { reason }) {
 async function applyPayment({ businessId, stay, user, ctx, session, shift, kind = 'PAYMENT', payment: p, customerId }) {
   if (!(p.amount > 0)) throw ApiError.badRequest('Payment amount must be more than zero', 'INVALID_AMOUNT');
   const entry = { kind, method: p.method, amount: p.amount, reference: p.reference, at: new Date(), by: user._id };
+  if (p.method === 'MOBILE_MONEY') Object.assign(entry, { network: p.network || 'OTHER', payerPhone: p.payerPhone, verifyStatus: 'PENDING' });
   if (p.method === 'CREDIT') {
     C.requireCan(user, 'accommodation.folio.credit', 'Putting a stay on credit needs permission');
     const cust = await Customer.findOne({ _id: customerId || stay.customerId, businessId, status: 'active' }).session(session);
@@ -129,11 +130,12 @@ async function applyPayment({ businessId, stay, user, ctx, session, shift, kind 
   let provider = 'manual'; let ext; let meta; let verified = false;
   if (p.method === 'CASH' && ctx.settings.paymentsRequireShift && ctx.business.settings?.requireShift !== false && !shift) throw ApiError.badRequest('Open a cash shift before taking cash payments', 'SHIFT_REQUIRED');
   if (p.method === 'MOBILE_MONEY' && !p.reference) throw ApiError.badRequest('A mobile-money transaction reference is required', 'MOBILE_MONEY_REFERENCE_REQUIRED');
+  if (p.method === 'MOBILE_MONEY') meta = { network: p.network || 'OTHER', payerPhone: p.payerPhone, verifyStatus: 'PENDING' };
   if (p.method === 'MPESA') {
     await assertCountry(businessId, 'KE');
     if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
     const c = await mpesaService.consumeForRepair(businessId, p.reference, p.amount, stay._id, session, 'stayId');
-    provider = c.channel === 'MANUAL' ? 'payhero-till' : 'payhero'; ext = c.externalTransactionId; meta = { checkoutRequestId: c.checkoutRequestId, channel: c.channel }; verified = true;
+    provider = c.channel === 'MANUAL' ? 'payhero-till' : 'payhero'; ext = c.externalTransactionId; meta = { checkoutRequestId: c.checkoutRequestId, channel: c.channel }; verified = true; entry.verifyStatus = 'VERIFIED';
   }
   const tendered = p.method === 'CASH' ? (p.tendered ?? p.amount) : undefined;
   if (p.method === 'CASH' && tendered < p.amount) throw ApiError.badRequest('Cash tendered is less than the amount', 'TENDERED_TOO_LOW');
@@ -161,6 +163,33 @@ async function addPayment(businessId, user, id, { kind = 'PAYMENT', ...p }) {
     await C.audit({ businessId, branchId: stay.branchId, userId: user._id, action: 'accommodation.folio.payment', entityType: 'Stay', entityId: stay._id, newValue: { kind, method: p.method, amount: p.amount } }, session);
     return { stay, payment: pay };
   });
+}
+
+async function stayForPush(businessId, user, id) {
+  C.requireCan(user, 'accommodation.folio.pay', 'Taking a payment needs permission');
+  const stay = await loadStay(businessId, id); C.assertBranchAccess(user, stay.branchId);
+  if (!['RESERVED', 'CHECKED_IN'].includes(stay.status)) throw ApiError.conflict('This stay is closed', 'STAY_CLOSED');
+  recompute(stay); return stay;
+}
+async function mpesaStk(businessId, user, id, { phone, amountCents, customerName }) {
+  const stay = await stayForPush(businessId, user, id);
+  return mpesaService.initiateStk(businessId, stay.branchId, user, { phone, amountCents: amountCents || Math.max(0, stay.totals.balance), customerName: customerName || stay.guest?.name });
+}
+async function mpesaManual(businessId, user, id, { amountCents }) {
+  const stay = await stayForPush(businessId, user, id);
+  return mpesaService.initiateManual(businessId, stay.branchId, user, { amountCents: amountCents || Math.max(0, stay.totals.balance) });
+}
+const mpesaStatus = (businessId, reference) => mpesaService.getStatus(businessId, reference);
+const mpesaClaim = (businessId, user, reference, receiptCode) => mpesaService.claimByCode(businessId, reference, user, receiptCode);
+const mpesaCancel = (businessId, reference) => mpesaService.cancelManual(businessId, reference);
+async function payContext(businessId, user, branchId) {
+  C.assertBranchAccess(user, branchId);
+  const ctx = await C.getAccContext(businessId);
+  return require('../payContext.service').build({ businessId, branchId, user, ctx });
+}
+async function openCashShift(businessId, user, { branchId, registerId, openingCash }) {
+  C.assertBranchAccess(user, branchId);
+  return require('../payContext.service').openShift({ businessId, user, branchId, registerId, openingCash });
 }
 
 /** Money back to the guest (a deposit on cancellation, an overpayment) while the stay is still open. */
@@ -201,4 +230,4 @@ async function autoPostRoomOrder(businessId, orderId) {
   } catch (e) { console.error('[accommodation] auto-post of room order failed:', e.message); return null; }
 }
 
-module.exports = { autoPostRoomOrder, recompute, loadStay, assertChargeable, makeLine, systemLine, rebuildLevies, postBill, addCharge, voidLine, applyPayment, addPayment, refund, openShift, hist };
+module.exports = { mpesaStk, mpesaManual, mpesaStatus, mpesaClaim, mpesaCancel, payContext, openCashShift, autoPostRoomOrder, recompute, loadStay, assertChargeable, makeLine, systemLine, rebuildLevies, postBill, addCharge, voidLine, applyPayment, addPayment, refund, openShift, hist };

@@ -63,7 +63,7 @@ const guest = z.object({
   nationality: str(60).optional(), address: str(200).optional(), company: str(120).optional(), vehiclePlate: str(20).optional(),
 });
 const guestPatch = guest.partial();
-const payment = z.object({ method: z.enum(H.STAY_PAY_METHODS), amount: money, tendered: money.optional(), reference: str(100).optional(), customerId: objectId.optional() });
+const payment = z.object({ method: z.enum(H.STAY_PAY_METHODS), amount: money, tendered: money.optional(), reference: str(100).optional(), network: str(40).optional(), payerPhone: str(20).optional(), customerId: objectId.optional() });
 const availabilityQuery = z.object({ branchId: objectId, checkInDate: ymd, checkOutDate: ymd, roomTypeId: objectId.optional(), checkInTime: hhmm.optional(), checkOutTime: hhmm.optional(), adults: z.coerce.number().int().min(1).optional(), children: z.coerce.number().int().min(0).optional(), mealPlan: z.enum(H.MEAL_PLANS).optional() });
 const reserveBody = z.object({
   branchId: objectId, roomId: objectId.optional(), roomTypeId: objectId.optional(), checkInDate: ymd, checkOutDate: ymd.optional(), checkInTime: hhmm.optional(), checkOutTime: hhmm.optional(), dayUse: z.boolean().optional(),
@@ -81,7 +81,16 @@ const cancelBody = z.object({ reason, waiveFee: z.boolean().optional() });
 const noShowBody = z.object({ reason: str(300).optional(), waiveFee: z.boolean().optional() });
 const stayListQuery = paginationQuery.extend({ branchId: objectId.optional(), status: str(80).optional(), roomId: objectId.optional(), from: z.coerce.date().optional(), to: z.coerce.date().optional(), arriving: z.coerce.boolean().optional(), departing: z.coerce.boolean().optional() });
 const chargeBody = z.object({ type: z.enum(H.FOLIO_TYPES.filter((t) => !['ROOM', 'LEVY', 'EARLY_CHECKIN', 'LATE_CHECKOUT', 'CANCELLATION', 'NO_SHOW'].includes(t))), description: str(160).min(2), quantity: z.coerce.number().positive().max(1000).default(1), unitPrice: moneyAny, taxRate: z.coerce.number().min(0).max(100).optional() });
-const folioPayBody = z.object({ kind: z.enum(['DEPOSIT', 'PAYMENT']).optional(), method: z.enum(H.STAY_PAY_METHODS), amount: money, tendered: money.optional(), reference: str(100).optional(), customerId: objectId.optional() });
+const folioPayBody = z.object({ kind: z.enum(['DEPOSIT', 'PAYMENT']).optional(), method: z.enum(H.STAY_PAY_METHODS), amount: money, tendered: money.optional(), reference: str(100).optional(), network: str(40).optional(), payerPhone: str(20).optional(), customerId: objectId.optional() });
+const stkBody = z.object({ phone: z.string().trim().min(9), amountCents: money.optional(), customerName: str(120).optional() });
+const manualBody = z.object({ amountCents: money.optional() });
+const claimBody = z.object({ receiptCode: z.string().trim().refine((v) => /^[A-Za-z][A-Za-z0-9]{9}$/.test(v), 'Enter the 10-character M-PESA code') });
+const refParam = z.object({ reference: z.string().trim().min(3) });
+const verifyBody = z.object({ approve: z.boolean(), note: str(300).optional() });
+const entryParam = z.object({ id: objectId, entryId: objectId });
+const unverifiedQuery = z.object({ branchId: objectId.optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
+const contextQuery = z.object({ branchId: objectId });
+const openShiftBody = z.object({ branchId: objectId, registerId: objectId, openingCash: money0 });
 const folioRefundBody = z.object({ amount: money, method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']), reason });
 const voidLineBody = z.object({ reason });
 
@@ -121,7 +130,7 @@ const pinQuery = z.object({ pin });
 
 module.exports = {
   idParam, lineParam, branchQ, settingsSchema, roomTypeBody, roomTypeUpdate, roomBody, roomUpdate, roomBulk, roomStatus, housekeepingBody,
-  availabilityQuery, reserveBody, checkInBody, checkOutBody, quoteQuery, moveBody, datesBody, stayUpdate, cancelBody, noShowBody, stayListQuery, chargeBody, folioPayBody, folioRefundBody, voidLineBody,
+  availabilityQuery, reserveBody, checkInBody, checkOutBody, quoteQuery, moveBody, datesBody, stayUpdate, cancelBody, noShowBody, stayListQuery, chargeBody, folioPayBody, folioRefundBody, voidLineBody, stkBody, manualBody, claimBody, refParam, verifyBody, entryParam, unverifiedQuery, contextQuery, openShiftBody,
   taskQuery, taskCreate, taskUpdate, rangeQuery, boardQuery, requestQuery, acceptBody, rejectBody, callQuery, callCreate, qrQuery, qrParam, qrEnable,
   guestOrder, guestCall, guestPinOnly, guestSelfCheckIn, tokenParam, pinQuery,
 };

@@ -13,6 +13,7 @@ const RESTAURANT_PERMISSIONS = Object.freeze([
   'restaurant.orders.void', 'restaurant.orders.comp', 'restaurant.orders.discount', 'restaurant.orders.substitute',
   'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.pay', 'restaurant.bills.split',
   'restaurant.bills.credit', 'restaurant.bills.close_unpaid', 'restaurant.bills.reopen', 'restaurant.bills.refund', 'restaurant.bills.waive_service_charge',
+  'restaurant.payments.verify',
   'restaurant.kitchen.view', 'restaurant.kitchen.update', 'restaurant.kitchen.manage', 'restaurant.kitchen.expedite',
   'restaurant.recipes.view', 'restaurant.recipes.manage',
   'restaurant.ingredients.view', 'restaurant.ingredients.manage', 'restaurant.ingredients.receive',
@@ -31,7 +32,7 @@ const RESTAURANT_PERMISSIONS = Object.freeze([
   'accommodation.stays.view', 'accommodation.stays.create', 'accommodation.stays.checkin', 'accommodation.stays.checkout',
   'accommodation.stays.manage', 'accommodation.stays.override_rate', 'accommodation.stays.waive_fees',
   'accommodation.folio.charge', 'accommodation.folio.adjust', 'accommodation.folio.pay', 'accommodation.folio.credit',
-  'accommodation.folio.close_unpaid', 'accommodation.folio.refund',
+  'accommodation.folio.close_unpaid', 'accommodation.folio.refund', 'accommodation.folio.verify',
   'accommodation.housekeeping.view', 'accommodation.housekeeping.update', 'accommodation.housekeeping.manage',
   'accommodation.reports.view',
 ]);
@@ -57,14 +58,17 @@ const ROLE_GRANTS = {
   ],
   [ROLES.WAITER]: [
     'restaurant.menu.view', 'restaurant.tables.view', 'restaurant.orders.view', 'restaurant.orders.create', 'restaurant.bills.view',
+    'restaurant.bills.generate', 'restaurant.bills.pay',
     'restaurant.reservations.view', 'restaurant.incidents.create', 'restaurant.shifts.self', 'restaurant.tips.view',
     'restaurant.guest.view', 'restaurant.guest.respond', 'accommodation.rooms.view',
+    'shifts.open', 'shifts.close', 'shifts.view',
     'customers.view', 'notifications.view', 'tickets.view', 'tickets.create',
   ],
   [ROLES.HEAD_WAITER]: [
     'restaurant.menu.view', 'restaurant.menu.soldout', 'restaurant.tables.view', 'restaurant.tables.view_all', 'restaurant.tables.assign',
     'restaurant.orders.view', 'restaurant.orders.view_all', 'restaurant.orders.create', 'restaurant.orders.manage', 'restaurant.orders.discount',
-    'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.split', 'restaurant.kitchen.view',
+    'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.split', 'restaurant.bills.pay', 'restaurant.kitchen.view',
+    'shifts.open', 'shifts.close', 'shifts.view',
     'restaurant.reservations.view', 'restaurant.reservations.manage', 'restaurant.incidents.create', 'restaurant.incidents.manage',
     'restaurant.shifts.self', 'restaurant.shifts.view', 'restaurant.tips.view', 'restaurant.delivery.view',
     'restaurant.guest.view', 'restaurant.guest.respond', 'restaurant.guest.qr', 'accommodation.rooms.view',
@@ -91,7 +95,8 @@ const ROLE_GRANTS = {
   [ROLES.BARTENDER]: [
     'restaurant.guest.view', 'restaurant.guest.respond',
     'restaurant.menu.view', 'restaurant.menu.soldout', 'restaurant.kitchen.view', 'restaurant.kitchen.update',
-    'restaurant.orders.view', 'restaurant.orders.create', 'restaurant.bills.view', 'restaurant.ingredients.view', 'restaurant.ingredients.waste',
+    'restaurant.orders.view', 'restaurant.orders.create', 'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.pay',
+    'restaurant.ingredients.view', 'restaurant.ingredients.waste', 'shifts.open', 'shifts.close', 'shifts.view',
     'restaurant.shifts.self', 'notifications.view',
   ],
   [ROLES.EXPEDITOR]: [
@@ -104,6 +109,7 @@ const ROLE_GRANTS = {
     'accommodation.folio.charge', 'accommodation.folio.pay',
     'accommodation.housekeeping.view', 'accommodation.housekeeping.manage', 'accommodation.reports.view',
     'restaurant.menu.view', 'restaurant.orders.view', 'restaurant.orders.view_all', 'restaurant.orders.create', 'restaurant.bills.view',
+    'restaurant.bills.generate', 'restaurant.bills.pay',
     'restaurant.guest.view', 'restaurant.guest.respond', 'restaurant.reservations.view', 'restaurant.reservations.manage',
     'customers.view', 'customers.create', 'shifts.open', 'shifts.close', 'shifts.view',
     'notifications.view', 'tickets.view', 'tickets.create',
