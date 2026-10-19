@@ -62,7 +62,7 @@ const customerSchema = new Schema(
 );
 
 customerSchema.index({ businessId: 1, phone: 1 });
-customerSchema.index({ businessId: 1, customerNumber: 1 }, { unique: true, sparse: true });
+customerSchema.index({ businessId: 1, customerNumber: 1 }, { unique: true, partialFilterExpression: { customerNumber: { $type: 'string' } } });
 customerSchema.index({ businessId: 1, name: 'text' });
 // One customer per phone per business. Partial so customers without a valid phone are unaffected.
 customerSchema.index(

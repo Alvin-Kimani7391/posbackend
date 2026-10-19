@@ -25,7 +25,7 @@ const productVariantSchema = new Schema(
 );
 
 productVariantSchema.index({ businessId: 1, sku: 1 }, { unique: true });
-productVariantSchema.index({ businessId: 1, barcode: 1 }, { unique: true, sparse: true });
+productVariantSchema.index({ businessId: 1, barcode: 1 }, { unique: true, partialFilterExpression: { barcode: { $type: 'string' } } });
 productVariantSchema.index({ businessId: 1, productId: 1 });
 
 moneyFields(productVariantSchema, ['costPrice', 'sellingPrice', 'wholesalePrice']);

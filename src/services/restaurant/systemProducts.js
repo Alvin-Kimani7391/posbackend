@@ -4,7 +4,7 @@ async function ensureSystemProduct(businessId, sku, name, taxRate, session) {
   let p = await Product.findOne({ businessId, sku }).session(session || null);
   if (!p) {
     try { [p] = await Product.create([{ businessId, name, sku, productType: 'service', unit: 'service', trackInventory: false, costPrice: 0, sellingPrice: 0, taxRate, status: 'active' }], session ? { session } : {}); }
-    catch (e) { if (e.code === 11000) p = await Product.findOne({ businessId, sku }).session(session || null); else throw e; }
+    catch (e) { if (e.code === 11000) { p = await Product.findOne({ businessId, sku }).session(session || null); if (!p) throw e; /* a duplicate on something other than the SKU must not be hidden */ } else throw e; }
   }
   return p;
 }

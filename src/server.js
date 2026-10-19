@@ -8,6 +8,8 @@ let server;
 
 async function start() {
   await connectDB();
+  // Repair compound sparse unique indexes (only one barcode-less product per business was allowed). Idempotent.
+  try { await require('./config/fixIndexes').fixSparseCompoundIndexes(); } catch (err) { logger.warn('Index repair skipped', { error: err.message }); }
   // Repair products saved with Expiry ticked but Batch tracking off (their expiry dates could never be stored). Idempotent.
   try {
     const { normalizeExpiryProducts } = require('./services/batch.service');

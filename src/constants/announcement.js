@@ -10,6 +10,9 @@ const ANNOUNCEMENT_PAGES = [
   'dashboard', 'sales', 'products', 'inventory', 'suppliers', 'purchases', 'expenses',
   'refunds', 'reports', 'cash', 'branches', 'employees', 'customers', 'tickets',
   'notifications', 'settings', 'audit',
+  // restaurant & accommodation screens (hx-*.html)
+  'hx-dashboard', 'hx-floor', 'hx-kitchen', 'hx-bills', 'hx-reservations', 'hx-delivery', 'hx-menu', 'hx-stock', 'hx-guest', 'hx-staff',
+  'hx-desk', 'hx-rooms', 'hx-stays', 'hx-housekeeping', 'hx-reports', 'hx-setup', 'hx-settings', 'hx-services',
 ];
 
 // SUPER_ADMIN never sees tenant pages, so it is not a valid audience.

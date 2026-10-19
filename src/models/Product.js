@@ -91,7 +91,9 @@ const productSchema = new Schema(
 );
 
 productSchema.index({ businessId: 1, sku: 1 }, { unique: true });
-productSchema.index({ businessId: 1, barcode: 1 }, { unique: true, sparse: true });
+// NOTE: not `sparse` - a compound sparse index still indexes documents that have no barcode (businessId always exists),
+// so only ONE barcode-less product per business could ever be saved. A partial index skips them properly.
+productSchema.index({ businessId: 1, barcode: 1 }, { unique: true, partialFilterExpression: { barcode: { $type: 'string' } } });
 productSchema.index({ businessId: 1, name: 'text', brand: 'text' });
 productSchema.index({ businessId: 1, categoryId: 1 });
 productSchema.index({ businessId: 1, status: 1 });

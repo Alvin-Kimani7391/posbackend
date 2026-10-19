@@ -46,9 +46,9 @@ const userSchema = new Schema(
   { timestamps: true }
 );
 
-userSchema.index({ businessId: 1, email: 1 }, { unique: true, sparse: true });
+userSchema.index({ businessId: 1, email: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });
 userSchema.index({ businessId: 1, phone: 1 }, { unique: true });
-userSchema.index({ businessId: 1, employeeCode: 1 }, { unique: true, sparse: true });
+userSchema.index({ businessId: 1, employeeCode: 1 }, { unique: true, partialFilterExpression: { employeeCode: { $type: 'string' } } });
 
 userSchema.methods.comparePassword = function comparePassword(plain) {
   return bcrypt.compare(plain, this.passwordHash);
