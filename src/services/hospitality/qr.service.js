@@ -99,7 +99,7 @@ async function storeQr(businessId, user) {
   const ctx = await C.getAccContext(businessId); const v = ctx.settings.storefront?.qrVersion || 1; const t = storeToken(businessId, v);
   const fe = process.env.FRONTEND_URL && process.env.FRONTEND_URL !== '*' ? process.env.FRONTEND_URL.split(',')[0].trim() : '';
   const base = (ctx.settings.guestOrdering?.baseUrl || process.env.GUEST_APP_URL || fe || '').replace(/\/+$/, '');
-  return { token: t, version: v, enabled: !!ctx.settings.storefront?.enabled, url: base ? `${base}/s/${t}` : `/s/${t}`, businessName: ctx.business.name };
+  return { token: t, version: v, enabled: !!ctx.settings.storefront?.enabled, url: base ? `${base}/q/${t}` : `/q/${t}`, businessName: ctx.business.name };
 }
 async function rotateStore(businessId, user) {
   C.requireCan(user, 'restaurant.guest.qr', 'Managing QR codes needs permission');
