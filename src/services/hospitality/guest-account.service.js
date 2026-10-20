@@ -82,8 +82,27 @@ async function claim(token, req, { references }) {
   await MpesaTransaction.updateMany({ businessId: doc.businessId, reference: { $in: references.slice(0, 50) }, 'guestPay.placeKey': String(doc._id), 'guestPay.accountId': { $exists: false } }, { $set: { 'guestPay.accountId': a._id } });
   return { claimed: r.modifiedCount || 0 };
 }
+/** Gives the account the receipts of orders it placed that were paid BEFORE the receipt feature existed (or while signed out of this device). Idempotent. */
+async function backfill(businessId, a) {
+  try {
+    const RestaurantBill = require('../../models/RestaurantBill');
+    const reqs = await GuestRequest.find({ businessId, accountId: a._id, orderId: { $ne: null } }).sort({ createdAt: -1 }).limit(60).select('orderId');
+    const orderIds = [...new Set(reqs.map((r) => String(r.orderId)))]; if (!orderIds.length) return;
+    const bills = await RestaurantBill.find({ businessId, orderId: { $in: orderIds }, status: 'PAID' }).limit(100);
+    const have = new Set((await GuestReceipt.find({ businessId, accountId: a._id }).select('reference')).map((r) => r.reference));
+    const portal = require('./guest-portal.service');
+    for (const b of bills) {
+      const refs = b.payments.filter((p) => p.kind === 'PAYMENT' && p.reference).map((p) => p.reference);
+      const guestTx = refs.length ? await MpesaTransaction.find({ businessId, reference: { $in: refs }, 'guestPay.kind': 'BILL' }).select('reference') : [];
+      if (guestTx.length) { await GuestReceipt.updateMany({ businessId, reference: { $in: guestTx.map((t) => t.reference) }, accountId: { $exists: false } }, { $set: { accountId: a._id } }); continue; }
+      if (have.has(`BILL-${b._id}-${a._id}`)) continue;
+      await portal.saveBillCopies(b);
+    }
+  } catch (e) { console.error('[guest account] backfill failed:', e.message); }
+}
 async function history(token, req) {
   const { doc } = await qr.resolve(token); const a = await need(req, doc.businessId);
+  await backfill(doc.businessId, a);
   const [rc, os] = await Promise.all([
     GuestReceipt.find({ businessId: doc.businessId, accountId: a._id }).sort({ createdAt: -1 }).limit(50).select('reference number total paidAmount paid kind createdAt snapshot.place snapshot.business.name'),
     GuestRequest.find({ businessId: doc.businessId, accountId: a._id }).sort({ createdAt: -1 }).limit(30),
