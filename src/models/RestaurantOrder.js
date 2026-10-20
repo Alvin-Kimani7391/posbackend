@@ -70,6 +70,7 @@ const orderSchema = new Schema({
   totals: { itemsTotal: { type: Number, default: 0 }, serviceCharge: { type: Number, default: 0 }, tax: { type: Number, default: 0 }, total: { type: Number, default: 0 }, discount: { type: Number, default: 0 } },
   delivery: {
     contactName: String, phone: String, address: String, landmark: String, instructions: String, fee: { type: Number, default: 0 },
+    lat: Number, lng: Number, distanceKm: Number, etaMinutes: Number, mapsUrl: String, payment: { type: String, default: 'CASH' }, trackKey: { type: String, index: true }, online: { type: Boolean, default: false },
     riderId: Schema.Types.ObjectId, riderName: String, status: { type: String, enum: C.DELIVERY_STATUS }, assignedAt: Date, outForDeliveryAt: Date, deliveredAt: Date, failReason: String,
     platform: String, commissionPercent: { type: Number, default: 0 },
   },

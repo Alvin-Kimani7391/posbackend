@@ -29,6 +29,13 @@ const settingsSchema = z.object({
   allowNegativeIngredients: z.boolean().optional(), hideOutOfStockItems: z.boolean().optional(), kitchenDelayMinutes: z.coerce.number().int().min(1).max(240).optional(),
   discounts: z.object({ waiterMaxPercent: z.coerce.number().min(0).max(100), cashierMaxPercent: z.coerce.number().min(0).max(100), supervisorMaxPercent: z.coerce.number().min(0).max(100), managerMaxPercent: z.coerce.number().min(0).max(100) }).partial().optional(),
   serviceMode: z.enum(H.SERVICE_MODES).optional(),
+  storefront: z.object({
+    enabled: z.boolean(), tagline: str(120), welcomeMessage: str(300), themeColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+    branchLocations: z.array(z.object({ branchId: objectId, lat: z.coerce.number().min(-90).max(90), lng: z.coerce.number().min(-180).max(180) })).max(50),
+    delivery: z.object({ enabled: z.boolean(), paused: z.boolean(), mode: z.enum(['AUTO', 'CONFIRM']), baseFeeCents: money0, perKmCents: money0, minOrderCents: money0, maxRadiusKm: z.coerce.number().min(0).max(500), minutesPerKm: z.coerce.number().min(0).max(30), bufferMinutes: z.coerce.number().int().min(0).max(120), hoursStart: z.string().regex(/^\d{1,2}:\d{2}$/).or(z.literal('')), hoursEnd: z.string().regex(/^\d{1,2}:\d{2}$/).or(z.literal('')) }).partial(),
+    tables: z.object({ enabled: z.boolean(), openTime: z.string().regex(/^\d{1,2}:\d{2}$/), closeTime: z.string().regex(/^\d{1,2}:\d{2}$/), slotMinutes: z.coerce.number().int().min(15).max(240), minLeadMinutes: z.coerce.number().int().min(0).max(1440), maxAdvanceDays: z.coerce.number().int().min(1).max(365) }).partial(),
+    rooms: z.object({ enabled: z.boolean() }).partial(),
+  }).partial().optional(),
   guestOrdering: z.object({
     tableMode: z.enum(H.GUEST_MODES), roomMode: z.enum(H.GUEST_MODES), maxAutoOrderCents: money0, selfSeat: z.boolean(), requireName: z.boolean(), requirePhone: z.boolean(),
     maxItemsPerRequest: z.coerce.number().int().min(1).max(100), maxQuantityPerItem: z.coerce.number().int().min(1).max(200), allowNotes: z.boolean(), showPrices: z.boolean(), allowBillRequest: z.boolean(),

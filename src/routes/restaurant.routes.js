@@ -17,6 +17,8 @@ const tbl = requireFeature('tableManagement'); const kds = requireFeature('kitch
 const id = { params: v.idParam };
 
 // ---- settings, areas, stations
+router.get('/storefront/qr', P('restaurant.guest.qr'), c.storeQr);
+router.post('/storefront/qr/rotate', P('restaurant.guest.qr'), c.storeQrRotate);
 router.get('/settings', P('restaurant.settings.view'), c.getSettings);
 router.put('/settings', P('restaurant.settings.manage'), validate({ body: v.settingsSchema }), c.updateSettings);
 router.get('/areas', tbl, P('restaurant.tables.view'), validate({ query: v.branchQ }), c.listAreas);

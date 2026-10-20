@@ -13,13 +13,13 @@ const C = require('./common');
 
 const secret = () => process.env.QR_SECRET || require('../../config/env').jwt.secret;
 const sig = (kind, id, ver) => crypto.createHmac('sha256', secret()).update(`${kind}:${id}:${ver}`).digest('base64url').slice(0, 22);
-const KIND_CHAR = { TABLE: 't', ROOM: 'r' };
-const CHAR_KIND = { t: 'TABLE', r: 'ROOM' };
+const KIND_CHAR = { TABLE: 't', ROOM: 'r', STORE: 'b' };
+const CHAR_KIND = { t: 'TABLE', r: 'ROOM', b: 'STORE' };
 
 const makeToken = (kind, doc) => `${KIND_CHAR[kind]}_${doc._id}_${doc.qrVersion || 1}_${sig(kind, doc._id, doc.qrVersion || 1)}`;
 
 function parseToken(token) {
-  const m = /^([tr])_([a-f0-9]{24})_(\d{1,6})_([A-Za-z0-9_-]{22})$/.exec(String(token || ''));
+  const m = /^([trb])_([a-f0-9]{24})_(\d{1,6})_([A-Za-z0-9_-]{22})$/.exec(String(token || ''));
   const bad = () => ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID');
   if (!m) throw bad();
   const kind = CHAR_KIND[m[1]]; const want = sig(kind, m[2], m[3]);
@@ -28,8 +28,21 @@ function parseToken(token) {
 }
 
 /** Token -> the table or room, the business context and what a guest may do here. */
-async function resolve(token) {
+/** The business-wide storefront code. `doc` is a stand-in carrying the business id. */
+async function resolveStore(businessId, ver) {
+  const gone = () => ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID');
+  let ctx; try { ctx = await C.getAccContext(businessId); } catch (e) { throw gone(); }
+  const st = ctx.settings.storefront || {};
+  if ((st.qrVersion || 1) !== ver) throw gone();
+  if (ctx.business.status && ctx.business.status !== 'active') throw ApiError.forbidden('This business is not taking orders right now.', 'BUSINESS_INACTIVE');
+  if (!ctx.features.ordering || !st.enabled) throw ApiError.forbidden('Online ordering is switched off right now. Please call us.', 'STORE_DISABLED');
+  return { kind: 'STORE', doc: { _id: ctx.business._id, businessId: ctx.business._id, active: true }, ctx, store: st, mode: 'STORE', stay: null };
+}
+const storeToken = (businessId, qrVersion = 1) => `b_${businessId}_${qrVersion}_${sig('STORE', businessId, qrVersion)}`;
+
+async function resolve(token, { store = false } = {}) {
   const { kind, id, ver } = parseToken(token);
+  if (kind === 'STORE') { if (!store) throw ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID'); return resolveStore(id, ver); }
   const doc = kind === 'TABLE' ? await RestaurantTable.findById(id) : await Room.findById(id);
   const gone = () => ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID');
   if (!doc || !doc.active || (doc.qrVersion || 1) !== ver || doc.qrEnabled === false) throw gone();
@@ -80,4 +93,18 @@ async function setEnabled(businessId, user, { kind, id, enabled }) {
   d.qrEnabled = !!enabled; await d.save(); return { id: d._id, kind, enabled: d.qrEnabled };
 }
 
-module.exports = { makeToken, parseToken, resolve, urlFor, listQr, rotate, setEnabled };
+/** The one storefront QR for the business: link, token and version (staff with QR permission). */
+async function storeQr(businessId, user) {
+  C.requireCan(user, 'restaurant.guest.qr', 'Managing QR codes needs permission');
+  const ctx = await C.getAccContext(businessId); const v = ctx.settings.storefront?.qrVersion || 1; const t = storeToken(businessId, v);
+  const fe = process.env.FRONTEND_URL && process.env.FRONTEND_URL !== '*' ? process.env.FRONTEND_URL.split(',')[0].trim() : '';
+  const base = (ctx.settings.guestOrdering?.baseUrl || process.env.GUEST_APP_URL || fe || '').replace(/\/+$/, '');
+  return { token: t, version: v, enabled: !!ctx.settings.storefront?.enabled, url: base ? `${base}/s/${t}` : `/s/${t}`, businessName: ctx.business.name };
+}
+async function rotateStore(businessId, user) {
+  C.requireCan(user, 'restaurant.guest.qr', 'Managing QR codes needs permission');
+  const RestaurantSettings = require('../../models/RestaurantSettings');
+  await C.getContext(businessId); await RestaurantSettings.updateOne({ businessId }, { $inc: { 'storefront.qrVersion': 1 } });
+  return storeQr(businessId, user);
+}
+module.exports = { storeToken, storeQr, rotateStore, makeToken, parseToken, resolve, urlFor, listQr, rotate, setEnabled };

@@ -67,10 +67,10 @@ async function context(token) {
 }
 
 /** The menu a guest sees: public fields only (no costs, stock or stations), priced for their service type. */
-async function menu(token) {
-  const r = await qr.resolve(token);
-  const actor = await C.guestActor(r.doc.businessId);
-  const orderType = r.kind === 'ROOM' ? 'ROOM_SERVICE' : 'DINE_IN';
+async function menu(token) { const r = await qr.resolve(token); return menuFor({ businessId: r.doc.businessId, branchId: r.doc.branchId, ctx: r.ctx, orderType: r.kind === 'ROOM' ? 'ROOM_SERVICE' : 'DINE_IN' }); }
+async function menuFor({ businessId, branchId, ctx, orderType }) {
+  const r = { doc: { businessId, branchId }, ctx };
+  const actor = await C.guestActor(businessId);
   const m = await menuSvc.getMenu(r.doc.businessId, actor, { branchId: r.doc.branchId, orderType });
   const show = r.ctx.settings.guestOrdering?.showPrices !== false;
   const clean = (i) => ({
@@ -295,4 +295,4 @@ async function expireStale() {
   return r.modifiedCount || 0;
 }
 
-module.exports = { context, menu, submit, status, call, folioView, requestCheckout, selfCheckOut, selfCheckIn, listRequests, accept, reject, expireStale, fulfil, place, label, money };
+module.exports = { menuFor, stageOf, context, menu, submit, status, call, folioView, requestCheckout, selfCheckOut, selfCheckIn, listRequests, accept, reject, expireStale, fulfil, place, label, money };

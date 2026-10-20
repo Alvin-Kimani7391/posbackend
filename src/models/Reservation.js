@@ -13,6 +13,8 @@ const s = new Schema({
   status: { type: String, enum: C.RESERVATION_STATUS, default: 'BOOKED' },
   source: { type: String, enum: ['PHONE', 'WALK_IN', 'ONLINE', 'STAFF'], default: 'STAFF' },
   occasion: String, notes: String, quotedWaitMinutes: Number,
+  preOrder: [{ _id: false, menuItemId: Schema.Types.ObjectId, name: String, quantity: Number, notes: String }],   // dishes the guest chose when booking online, for the kitchen to prepare
+  guestEmail: String,
   deposit: {
     required: { type: Boolean, default: false }, amount: { type: Number, default: 0 }, paid: { type: Boolean, default: false },
     method: String, reference: String, paymentId: { type: Schema.Types.ObjectId, ref: 'Payment' },

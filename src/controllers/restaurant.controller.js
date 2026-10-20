@@ -18,7 +18,10 @@ const ApiError = require('../utils/ApiError');
 const h = (status, message, fn) => catchAsync(async (req, res) => sendSuccess(res, status, message, await fn(req)));
 const b = (req) => req.businessId; const u = (req) => req.user;
 
+const qrSvc = require('../services/hospitality/qr.service');
 module.exports = {
+  storeQr: h(200, 'Storefront QR fetched', async (r) => qrSvc.storeQr(b(r), u(r))),
+  storeQrRotate: h(200, 'Storefront QR replaced', async (r) => qrSvc.rotateStore(b(r), u(r))),
   // settings, areas, stations
   getSettings: h(200, 'Restaurant settings fetched', async (r) => ({ settings: await settings.getSettings(b(r)) })),
   updateSettings: h(200, 'Restaurant settings updated', async (r) => ({ settings: await settings.updateSettings(b(r), u(r)._id, r.body) })),

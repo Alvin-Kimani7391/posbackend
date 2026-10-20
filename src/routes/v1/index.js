@@ -61,5 +61,6 @@ router.use('/offline', require('../offline-review.routes'));
 router.use('/restaurant', require('../restaurant.routes'));
 router.use('/accommodation', require('../accommodation.routes'));
 router.use('/public/qr', require('../guest.public.routes'));
+router.use('/public/store', require('../storefront.public.routes'));
 
 module.exports = router;

@@ -37,6 +37,24 @@ const restaurantSettingsSchema = new Schema({
     welcomeMessage: { type: String, trim: true, maxlength: 300 },
     welcomeMessageSw: { type: String, trim: true, maxlength: 300 },
   },
+  // The business storefront: ONE QR code for the whole business (delivery, table reservations, room booking, offers).
+  storefront: {
+    enabled: { type: Boolean, default: false },
+    qrVersion: { type: Number, default: 1 },
+    tagline: { type: String, trim: true, maxlength: 120 },
+    welcomeMessage: { type: String, trim: true, maxlength: 300 },
+    themeColor: { type: String, default: '#0f766e' },
+    branchLocations: [{ _id: false, branchId: { type: Schema.Types.ObjectId, ref: 'Branch' }, lat: Number, lng: Number }],
+    delivery: {
+      enabled: { type: Boolean, default: true }, paused: { type: Boolean, default: false },
+      mode: { type: String, enum: ['AUTO', 'CONFIRM'], default: 'AUTO' },          // AUTO = straight to the kitchen; CONFIRM = staff open the order and send it
+      baseFeeCents: { type: Number, default: 0, min: 0 }, perKmCents: { type: Number, default: 0, min: 0 }, minOrderCents: { type: Number, default: 0, min: 0 },
+      maxRadiusKm: { type: Number, default: 0, min: 0, max: 500 }, minutesPerKm: { type: Number, default: 3, min: 0, max: 30 }, bufferMinutes: { type: Number, default: 10, min: 0, max: 120 },
+      hoursStart: { type: String }, hoursEnd: { type: String },
+    },
+    tables: { enabled: { type: Boolean, default: true }, openTime: { type: String, default: '10:00' }, closeTime: { type: String, default: '22:00' }, slotMinutes: { type: Number, default: 30, min: 15, max: 240 }, minLeadMinutes: { type: Number, default: 30, min: 0, max: 1440 }, maxAdvanceDays: { type: Number, default: 30, min: 1, max: 365 } },
+    rooms: { enabled: { type: Boolean, default: true } },
+  },
   stockDepletionEvent: { type: String, enum: STOCK_DEPLETION_EVENTS, default: 'ON_SEND' },
   stockLocations: { type: String, enum: ['SINGLE', 'MULTI'], default: 'SINGLE' }, // SINGLE: one store; MULTI: store + kitchen + bar
   allowNegativeIngredients: { type: Boolean, default: true },   // a missing ingredient record must never stop a customer being served

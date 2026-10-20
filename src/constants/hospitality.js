@@ -15,6 +15,7 @@ const SERVICE_MODES = ['RESTAURANT', 'ACCOMMODATION', 'BOTH'];
 const GUEST_MODES = ['OFF', 'MENU_ONLY', 'ORDER_CONFIRM', 'ORDER_AUTO'];
 
 const QR_KINDS = ['TABLE', 'ROOM'];
+const STORE_QR_CHAR = 'b';   // the business-wide storefront code (delivery, table reservations, room booking)
 
 const GUEST_REQUEST_STATUS = ['PENDING', 'ACCEPTED', 'REJECTED', 'AUTO_ACCEPTED', 'EXPIRED', 'CANCELLED', 'FAILED'];
 
