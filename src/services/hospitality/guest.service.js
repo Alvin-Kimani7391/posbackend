@@ -52,6 +52,7 @@ async function context(token) {
   const canOrder = ORDERING.includes(r.mode) && (r.kind === 'TABLE' ? (!!openOrder || go.selfSeat) : !!r.stay);
   let reason; if (!canOrder) reason = r.mode === 'OFF' ? 'OFF' : !ORDERING.includes(r.mode) ? 'MENU_ONLY' : r.kind === 'TABLE' ? 'TABLE_NOT_OPEN' : 'ROOM_NOT_OCCUPIED';
   return {
+    googleClientId: process.env.GOOGLE_CLIENT_ID || undefined,
     business: { name: ctx.business.name, logo: ctx.business.logo, phone: branch?.phone || ctx.business.phone, currency: ctx.business.currency, language: lang, timezone: ctx.timeZone },
     branch: branch?.name,
     place: { kind: r.kind, label: label(r), seats: r.kind === 'TABLE' ? doc.seats : undefined, floor: r.kind === 'ROOM' ? doc.floor : undefined },
@@ -83,7 +84,7 @@ async function menu(token) {
 }
 
 // ------------------------------------------------------------------ ordering
-async function submit(token, body, { ip, pin } = {}) {
+async function submit(token, body, { ip, pin, accountId } = {}) {
   const r = await place(token, { pin: body.pin ?? pin, needStay: true, needPin: true });
   const { ctx, doc } = r; const go = ctx.settings.guestOrdering || {}; const businessId = doc.businessId;
   if (!ORDERING.includes(r.mode)) throw ApiError.forbidden('Ordering from your phone is not switched on here. Please call a waiter.', 'ORDERING_DISABLED');
@@ -126,7 +127,7 @@ async function submit(token, body, { ip, pin } = {}) {
   try {
     req = await GuestRequest.create({
       businessId, branchId: doc.branchId, kind: r.kind, tableId: r.kind === 'TABLE' ? doc._id : undefined, tableName: r.kind === 'TABLE' ? doc.name : undefined, roomId: r.kind === 'ROOM' ? doc._id : undefined, roomNumber: r.kind === 'ROOM' ? doc.number : undefined, stayId: stay?._id,
-      items: lines, guest: { name: body.guest?.name || stay?.guest?.name, phone: body.guest?.phone }, notes: go.allowNotes === false ? undefined : body.notes, estimatedTotal: estimate, mode: auto ? 'AUTO' : 'CONFIRM', clientRef: body.clientRef, ipHash,
+      items: lines, guest: { name: body.guest?.name || stay?.guest?.name, phone: body.guest?.phone }, notes: go.allowNotes === false ? undefined : body.notes, estimatedTotal: estimate, accountId, mode: auto ? 'AUTO' : 'CONFIRM', clientRef: body.clientRef, ipHash,
       expiresAt: new Date(Date.now() + (go.requestExpiryMinutes || 20) * 60000),
     });
   } catch (e) { if (e.code === 11000 && body.clientRef) return view(await GuestRequest.findOne({ businessId, clientRef: body.clientRef }), true); throw e; }

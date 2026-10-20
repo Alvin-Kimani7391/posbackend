@@ -53,7 +53,7 @@ const mpesaTransactionSchema = new Schema(
     stayId: { type: Schema.Types.ObjectId, default: null }, // set once consumed by a guest stay payment
     layawayId: { type: Schema.Types.ObjectId, ref: 'Layaway', default: null }, // set once consumed by a layaway deposit/instalment
     repairJobId: { type: Schema.Types.ObjectId, ref: 'RepairJob', default: null }, // set once consumed by a repair deposit/payment
-    guestPay: { kind: { type: String, enum: ['BILL', 'STAY'] }, refId: Schema.Types.ObjectId, orderId: Schema.Types.ObjectId, placeKey: String, settleStartedAt: Date, settledAt: Date, error: String, tries: { type: Number, default: 0 } }, // STK started by a guest from the QR page; the server finishes it even if the phone closed the page
+    guestPay: { kind: { type: String, enum: ['BILL', 'STAY'] }, refId: Schema.Types.ObjectId, orderId: Schema.Types.ObjectId, placeKey: String, placeLabel: String, accountId: Schema.Types.ObjectId, settleStartedAt: Date, settledAt: Date, error: String, tries: { type: Number, default: 0 } }, // STK started by a guest from the QR page; the server finishes it even if the phone closed the page
     lastCheckedAt: { type: Date },
     escalatedAt: { type: Date }, // set once a genuinely-unresolved PENDING transaction has been flagged to management (see reapAbandoned)
   },

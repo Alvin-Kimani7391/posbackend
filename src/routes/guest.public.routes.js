@@ -25,6 +25,14 @@ router.post('/:token/calls', write, pinTry, validate({ ...tok, body: v.guestCall
 router.get('/:token/folio', poll, validate({ ...tok, query: v.pinQuery }), c.pFolio);
 router.post('/:token/request-checkout', write, pinTry, validate({ ...tok, body: v.guestPinOnly }), c.pRequestCheckout);
 router.post('/:token/check-out', write, pinTry, validate({ ...tok, body: v.guestPinOnly }), c.pCheckOut);
+const auth = lim(15 * 60 * 1000, 25);
+router.post('/:token/account/register', auth, validate({ ...tok, body: v.acctReg }), c.aRegister);
+router.post('/:token/account/login', auth, validate({ ...tok, body: v.acctLogin }), c.aLogin);
+router.post('/:token/account/google', auth, validate({ ...tok, body: v.acctGoogle }), c.aGoogle);
+router.get('/:token/account/me', poll, validate(tok), c.aMe);
+router.post('/:token/account/claim', write, validate({ ...tok, body: v.acctClaim }), c.aClaim);
+router.get('/:token/account/history', poll, validate(tok), c.aHistory);
+router.get('/:token/account/receipts/:reference', poll, validate({ params: v.acctRef }), c.aReceipt);
 router.get('/:token/bill', poll, validate({ ...tok, query: v.pinQuery }), c.pBill);
 router.post('/:token/pay', write, validate({ ...tok, body: v.guestPay }), c.pPay);
 router.get('/:token/pay/:reference', poll, validate({ params: v.payRefParam, query: v.pinQuery }), c.pPayStatus);

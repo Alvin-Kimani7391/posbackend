@@ -9,6 +9,8 @@ const calls = require('../services/hospitality/servicecall.service');
 const qr = require('../services/hospitality/qr.service');
 const orders = require('../services/restaurant/order.service');
 const portal = require('../services/hospitality/guest-portal.service');
+const acct = require('../services/hospitality/guest-account.service');
+const acctOf = async (r) => { const { doc } = await qr.resolve(r.params.token); return acct.fromRequest(r, doc.businessId); };
 
 const ApiError = require('../utils/ApiError');
 const h = (status, message, fn) => catchAsync(async (req, res) => sendSuccess(res, status, message, await fn(req)));
@@ -96,14 +98,21 @@ module.exports = {
   // ---- public (no login)
   pContext: h(200, 'OK', async (r) => guest.context(r.params.token)),
   pMenu: h(200, 'OK', async (r) => guest.menu(r.params.token)),
-  pOrder: h(201, 'OK', async (r) => guest.submit(r.params.token, r.body, { ip: r.ip })),
+  pOrder: h(201, 'OK', async (r) => { const a = await acctOf(r); return guest.submit(r.params.token, r.body, { ip: r.ip, accountId: a && a._id }); }),
   pStatus: h(200, 'OK', async (r) => guest.status(r.params.token, { pin: r.query.pin || r.headers['x-guest-pin'] })),
   pCall: h(201, 'OK', async (r) => guest.call(r.params.token, r.body)),
   pFolio: h(200, 'OK', async (r) => guest.folioView(r.params.token, { pin: r.query.pin || r.headers['x-guest-pin'] })),
   pRequestCheckout: h(200, 'OK', async (r) => guest.requestCheckout(r.params.token, r.body)),
   pCheckOut: h(200, 'OK', async (r) => guest.selfCheckOut(r.params.token, r.body)),
   pBill: h(200, 'OK', async (r) => portal.bill(r.params.token, { pin: pinOf(r) })),
-  pPay: h(200, 'OK', async (r) => portal.payStart(r.params.token, r.body)),
+  pPay: h(200, 'OK', async (r) => { const a = await acctOf(r); return portal.payStart(r.params.token, { ...r.body, accountId: a && a._id }); }),
+  aRegister: h(201, 'OK', async (r) => acct.register(r.params.token, r.body)),
+  aLogin: h(200, 'OK', async (r) => acct.login(r.params.token, r.body)),
+  aGoogle: h(200, 'OK', async (r) => acct.google(r.params.token, r.body)),
+  aMe: h(200, 'OK', async (r) => acct.me(r.params.token, r)),
+  aClaim: h(200, 'OK', async (r) => acct.claim(r.params.token, r, r.body)),
+  aHistory: h(200, 'OK', async (r) => acct.history(r.params.token, r)),
+  aReceipt: h(200, 'OK', async (r) => acct.receiptOf(r.params.token, r, r.params.reference)),
   pPayStatus: h(200, 'OK', async (r) => portal.payStatus(r.params.token, { pin: pinOf(r), reference: r.params.reference })),
   pReceipt: h(200, 'OK', async (r) => portal.receipt(r.params.token, { pin: pinOf(r), reference: r.params.reference })),
   pChargeRoom: h(200, 'OK', async (r) => portal.chargeToRoom(r.params.token, r.body)),

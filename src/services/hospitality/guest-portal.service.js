@@ -8,6 +8,7 @@ const RestaurantBill = require('../../models/RestaurantBill');
 const MpesaTransaction = require('../../models/MpesaTransaction');
 const IntegrationSettings = require('../../models/IntegrationSettings');
 const RoomType = require('../../models/RoomType');
+const GuestReceipt = require('../../models/GuestReceipt');
 const Stay = require('../../models/Stay');
 const ApiError = require('../../utils/ApiError');
 const B = require('../../utils/restaurantBilling');
@@ -58,7 +59,7 @@ async function billView_(token, { pin }) {
 }
 
 // ------------------------------------------------------------------ pay by STK push
-async function payStart(token, { pin, phone, orderId, billId, kind = 'BILL' }) {
+async function payStart(token, { pin, phone, orderId, billId, kind = 'BILL', accountId }) {
   const r = await G.place(token, { pin, needPin: true, needStay: kind === 'STAY' });
   const { doc } = r; const businessId = doc.businessId;
   const digits = String(phone || '').replace(/[\s-]/g, '');
@@ -81,7 +82,7 @@ async function payStart(token, { pin, phone, orderId, billId, kind = 'BILL' }) {
   const again = await MpesaTransaction.findOne({ businessId, 'guestPay.refId': ref, status: 'PENDING', createdAt: { $gt: new Date(Date.now() - 90000) } });
   if (again && again.amount === amount) return { reference: again.reference, amount: money(amount), reused: true };
   const txn = await mpesa.initiateStk(businessId, branchId, actor, { phone: digits, amountCents: amount, customerName });
-  await MpesaTransaction.updateOne({ _id: txn._id }, { $set: { guestPay: { kind, refId: ref, orderId: orderRef, placeKey: String(doc._id), tries: 0 } } });
+  await MpesaTransaction.updateOne({ _id: txn._id }, { $set: { guestPay: { kind, refId: ref, orderId: orderRef, placeKey: String(doc._id), placeLabel: G.label(r), accountId, tries: 0 } } });
   return { reference: txn.reference, amount: money(amount) };
 }
 
@@ -124,6 +125,7 @@ async function finalize(txnId) {
       C.notifyRoles(businessId, stay.branchId, ['RECEPTIONIST', ...C.CASHIER_ROLES], text); C.notifyManagement(businessId, text);
     }
     await MpesaTransaction.updateOne({ _id: txn._id }, { $set: { 'guestPay.settledAt': new Date() }, $unset: { 'guestPay.error': 1 } });
+    await saveCopy(txn, ctx);
     return { settled: true };
   } catch (e) {
     console.error('[guest pay] could not record payment', txn.reference, e.message);
@@ -164,8 +166,20 @@ async function receipt(token, { pin, reference }) {
   const businessId = r.doc.businessId; const ctx = r.ctx;
   const txn = await MpesaTransaction.findOne({ businessId, reference });
   if (!txn || !txn.guestPay || txn.guestPay.placeKey !== String(r.doc._id)) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
+  const saved = await GuestReceipt.findOne({ businessId, reference }); if (saved) return saved.snapshot;     // the electronic copy never changes
+  return buildReceipt(txn, ctx, G.label(r));
+}
+/** Keeps the electronic copy of a paid bill, for the guest's account and for this phone. */
+async function saveCopy(txn, ctx) {
+  try {
+    const g = txn.guestPay; g.settledAt = g.settledAt || new Date(); const rc = await buildReceipt(txn, ctx, g.placeLabel || '');
+    await GuestReceipt.updateOne({ businessId: txn.businessId, reference: txn.reference }, { $setOnInsert: { businessId: txn.businessId, reference: txn.reference, accountId: g.accountId, placeKey: g.placeKey, kind: g.kind, number: rc.number, total: rc.total, paidAmount: rc.paidAmount, paid: rc.paid, snapshot: rc } }, { upsert: true });
+  } catch (e) { console.error('[guest pay] could not save receipt copy:', e.message); }
+}
+async function buildReceipt(txn, ctx, placeLabel) {
+  const businessId = txn.businessId; const r = { _placeLabel: placeLabel };
   const b = ctx.business; const rs = b.receiptSettings || {};
-  const head = { currency: b.currency, business: { name: b.name, address: b.address, phone: b.phone, taxPin: b.kraPin || b.taxPin, logo: rs.showLogo ? b.logo : undefined }, place: G.label(r), mpesaReceipt: txn.mpesaReceiptNumber || null, phone: txn.phone, footer: rs.footerMessage || 'Thank you!' };
+  const head = { currency: b.currency, business: { name: b.name, address: b.address, phone: b.phone, taxPin: b.kraPin || b.taxPin, logo: rs.showLogo ? b.logo : undefined }, place: placeLabel, mpesaReceipt: txn.mpesaReceiptNumber || null, phone: txn.phone, footer: rs.footerMessage || 'Thank you!' };
   if (txn.guestPay.kind === 'STAY') {
     const s = await Stay.findById(txn.guestPay.refId); if (!s) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
     return { ...head, kind: 'STAY', paid: !!txn.guestPay.settledAt, number: txn.mpesaReceiptNumber || txn.reference, date: txn.updatedAt, title: 'Payment receipt', lines: [{ name: `Payment towards room account ${s.stayNumber}`, quantity: 1, total: money(txn.amount) }], total: money(txn.amount), paidAmount: money(txn.amount), balance: null };
@@ -238,4 +252,4 @@ async function enquiry(token, { roomTypeId, name, phone, checkInDate, nights, no
   return { sent: true, message: 'Reception has your request and will contact you shortly.', merged: res.merged };
 }
 
-module.exports = { bill: billView_, payStart, payStatus, finalize, finalizeByTxn, sweep, receipt, chargeToRoom, stayView, deals, enquiry, receiptDoc };
+module.exports = { buildReceipt, bill: billView_, payStart, payStatus, finalize, finalizeByTxn, sweep, receipt, chargeToRoom, stayView, deals, enquiry, receiptDoc };

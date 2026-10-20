@@ -17,6 +17,7 @@ const s = new Schema({
     notes: String, allergyNotes: String, unitPriceEstimate: Number,
   }],
   guest: { name: String, phone: String },
+  accountId: { type: Schema.Types.ObjectId, ref: 'GuestAccount', index: true },   // set when the guest was signed in
   notes: String,
   estimatedTotal: { type: Number, default: 0 },                       // what the guest saw; the real price is recomputed on acceptance
   mode: { type: String, enum: ['CONFIRM', 'AUTO'], default: 'CONFIRM' },
