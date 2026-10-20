@@ -9,6 +9,7 @@ const MpesaTransaction = require('../../models/MpesaTransaction');
 const IntegrationSettings = require('../../models/IntegrationSettings');
 const RoomType = require('../../models/RoomType');
 const GuestReceipt = require('../../models/GuestReceipt');
+const GuestRequest = require('../../models/GuestRequest');
 const Stay = require('../../models/Stay');
 const ApiError = require('../../utils/ApiError');
 const B = require('../../utils/restaurantBilling');
@@ -176,6 +177,28 @@ async function saveCopy(txn, ctx) {
     await GuestReceipt.updateOne({ businessId: txn.businessId, reference: txn.reference }, { $setOnInsert: { businessId: txn.businessId, reference: txn.reference, accountId: g.accountId, placeKey: g.placeKey, kind: g.kind, number: rc.number, total: rc.total, paidAmount: rc.paidAmount, paid: rc.paid, snapshot: rc } }, { upsert: true });
   } catch (e) { console.error('[guest pay] could not save receipt copy:', e.message); }
 }
+/** A bill settled by staff (cash, till, card...): every signed-in guest who ordered on it gets the same saved e-receipt as a QR payment. */
+async function saveBillCopies(bill) {
+  if (!bill || bill.status !== 'PAID' || bill.payments.some((p) => p.method === 'ROOM' && p.kind === 'PAYMENT')) return;
+  const businessId = bill.businessId;
+  const order = await RestaurantOrder.findById(bill.orderId).select('guestRequestIds'); if (!order || !(order.guestRequestIds || []).length) return;
+  const pays = bill.payments.filter((p) => p.kind === 'PAYMENT'); const refs = pays.map((p) => p.reference).filter(Boolean);
+  if (refs.length && await MpesaTransaction.exists({ businessId, reference: { $in: refs }, 'guestPay.kind': 'BILL' })) return;     // paid from the guest's phone: finalize() already saved it
+  const reqs = await GuestRequest.find({ _id: { $in: order.guestRequestIds }, accountId: { $ne: null } }).select('accountId kind tableName roomNumber');
+  if (!reqs.length) return;
+  const ctx = await C.getContext(businessId); const b = ctx.business; const rs = b.receiptSettings || {};
+  const mp = pays.find((p) => p.method === 'MPESA');
+  const seen = new Set();
+  for (const q of reqs) {
+    const acc = String(q.accountId); if (seen.has(acc)) continue; seen.add(acc);
+    const place = q.kind === 'TABLE' ? `Table ${q.tableName}` : `Room ${q.roomNumber}`;
+    const rc = { currency: b.currency, business: { name: b.name, address: b.address, phone: b.phone, taxPin: b.kraPin || b.taxPin, logo: rs.showLogo ? b.logo : undefined }, place, mpesaReceipt: (mp && mp.reference) || null, footer: rs.footerMessage || 'Thank you!',
+      kind: 'BILL', paid: true, number: bill.receiptNumber || bill.billNumber, billNumber: bill.billNumber, date: bill.settledAt || new Date(), title: 'Receipt', paidAtDesk: true,
+      lines: bill.lines.filter((l) => !l.isComp).map(lineView), itemsTotal: money(bill.itemsTotal), discount: money(bill.discount), serviceCharge: money(bill.serviceCharge), tax: money(bill.tax), total: money(bill.total), paidAmount: money(bill.paid), balance: money(bill.balance),
+      payments: pays.map((p) => ({ method: p.method === 'MPESA' ? 'M-PESA' : p.method === 'MOBILE_MONEY' ? 'Mobile money' : p.method, amount: money(p.amount), reference: p.reference })) };
+    await GuestReceipt.updateOne({ businessId, reference: `BILL-${bill._id}-${acc}` }, { $setOnInsert: { businessId, reference: `BILL-${bill._id}-${acc}`, accountId: q.accountId, placeKey: String(bill.tableId || ''), kind: 'BILL', number: rc.number, total: rc.total, paidAmount: rc.paidAmount, paid: true, snapshot: rc } }, { upsert: true });
+  }
+}
 async function buildReceipt(txn, ctx, placeLabel) {
   const businessId = txn.businessId; const r = { _placeLabel: placeLabel };
   const b = ctx.business; const rs = b.receiptSettings || {};
@@ -252,4 +275,4 @@ async function enquiry(token, { roomTypeId, name, phone, checkInDate, nights, no
   return { sent: true, message: 'Reception has your request and will contact you shortly.', merged: res.merged };
 }
 
-module.exports = { buildReceipt, bill: billView_, payStart, payStatus, finalize, finalizeByTxn, sweep, receipt, chargeToRoom, stayView, deals, enquiry, receiptDoc };
+module.exports = { buildReceipt, bill: billView_, payStart, payStatus, finalize, finalizeByTxn, sweep, receipt, chargeToRoom, stayView, deals, enquiry, receiptDoc, saveBillCopies };

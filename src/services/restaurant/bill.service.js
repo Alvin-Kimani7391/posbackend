@@ -347,7 +347,7 @@ async function pay(businessId, user, id, { payments, customerId }) {
     if (settled) await closeIfDone(order, all, ctx, user, session);
     return { bill, sale: settled?.sale, receipt: settled?.receipt, change: payments.some((p) => p.method === 'CASH') ? docs.filter((d) => d.method === 'CASH').reduce((s, d) => s + (d.changeGiven || 0), 0) : 0 };
   }).catch((e) => { throw bErr(e); });
-  afterSettle(businessId, out.sale);
+  afterSettle(businessId, out.sale, out.bill);
   return out;
 }
 
@@ -419,7 +419,8 @@ async function settle({ bill, order, ctx, user, session, shift }) {
 }
 
 /** After commit: CRM capture, eTIMS submit, credit notifications. Never throws. */
-function afterSettle(businessId, sale) {
+function afterSettle(businessId, sale, bill) {
+  if (bill && bill.status === 'PAID') require('../hospitality/guest-portal.service').saveBillCopies(bill).catch((e) => console.error('[guest receipt] copy failed', e.message));   // signed-in QR guests keep an e-receipt even when the cashier took the payment
   if (!sale) return;
   try { require('../crm.service').onSaleCompleted(businessId, sale._id); } catch (e) { console.error('[crm] capture hook failed', e.message); }
   try { etimsService.kickForSale(businessId, sale._id); } catch (e) { console.error('[etims] kick failed', e.message); }
@@ -478,7 +479,7 @@ async function closeBill(businessId, user, id, { reason }) {
     await C.audit({ businessId, branchId: bill.branchId, userId: user._id, action: 'restaurant.bill.close', entityType: 'RestaurantBill', entityId: bill._id, newValue: { waived: bill.waived, reason } }, session);
     return { bill, sale: settled?.sale, receipt: settled?.receipt, order };
   }).catch((e) => { throw bErr(e); });
-  afterSettle(businessId, out.sale);
+  afterSettle(businessId, out.sale, out.bill);
   if (out.bill.waived > 0) C.notifyManagement(businessId, { type: 'RESTAURANT_VOID', title: `Bill closed unpaid: ${out.bill.billNumber}`, message: `${user.name} closed ${out.bill.billNumber} with ${(out.bill.waived / 100).toFixed(2)} unpaid: ${reason}`, branchId: out.bill.branchId, entityType: 'RestaurantBill', entityId: out.bill._id });
   return out;
 }
