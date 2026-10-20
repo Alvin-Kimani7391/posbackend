@@ -109,6 +109,7 @@ module.exports = {
   aRegister: h(201, 'OK', async (r) => acct.register(r.params.token, r.body)),
   aLogin: h(200, 'OK', async (r) => acct.login(r.params.token, r.body)),
   aGoogle: h(200, 'OK', async (r) => acct.google(r.params.token, r.body)),
+  aProfile: h(200, 'OK', async (r) => acct.updateProfile(r.params.token, r, r.body)),
   aMe: h(200, 'OK', async (r) => acct.me(r.params.token, r)),
   aClaim: h(200, 'OK', async (r) => acct.claim(r.params.token, r, r.body)),
   aHistory: h(200, 'OK', async (r) => acct.history(r.params.token, r)),

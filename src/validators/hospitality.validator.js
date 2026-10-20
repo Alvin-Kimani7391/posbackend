@@ -130,6 +130,7 @@ const tokenParam = z.object({ token: z.string().min(30).max(80) });
 const payRefParam = z.object({ token: z.string().min(30).max(80), reference: z.string().regex(/^MPX-[A-F0-9]{12}$/) });
 const acctReg = z.object({ name: str(80).min(2), email: z.string().trim().toLowerCase().email().max(120).optional().or(z.literal('').transform(() => undefined)), phone: str(20).optional().or(z.literal('').transform(() => undefined)), password: z.string().min(6).max(100) }).strict();
 const acctLogin = z.object({ identifier: str(120).min(3), password: z.string().min(1).max(100) }).strict();
+const acctProfile = z.object({ name: str(80).min(2).optional(), phone: str(20).optional(), email: z.string().trim().toLowerCase().email().max(120).or(z.literal('')).optional(), currentPassword: z.string().max(100).optional(), newPassword: z.string().min(6).max(100).optional() }).strict();
 const acctGoogle = z.object({ credential: z.string().min(20).max(4000) }).strict();
 const acctClaim = z.object({ references: z.array(z.string().regex(/^MPX-[A-F0-9]{12}$/)).max(50) }).strict();
 const acctRef = z.object({ token: z.string().min(30).max(80), reference: z.string().regex(/^MPX-[A-F0-9]{12}$/) });
@@ -142,5 +143,5 @@ module.exports = {
   idParam, lineParam, branchQ, settingsSchema, roomTypeBody, roomTypeUpdate, roomBody, roomUpdate, roomBulk, roomStatus, housekeepingBody,
   availabilityQuery, reserveBody, checkInBody, checkOutBody, quoteQuery, moveBody, datesBody, stayUpdate, cancelBody, noShowBody, stayListQuery, chargeBody, folioPayBody, folioRefundBody, voidLineBody, stkBody, manualBody, claimBody, refParam, verifyBody, entryParam, unverifiedQuery, contextQuery, openShiftBody,
   taskQuery, taskCreate, taskUpdate, rangeQuery, boardQuery, requestQuery, acceptBody, rejectBody, callQuery, callCreate, qrQuery, qrParam, qrEnable,
-  guestOrder, guestCall, guestPinOnly, guestSelfCheckIn, tokenParam, pinQuery, payRefParam, acctReg, acctLogin, acctGoogle, acctClaim, acctRef, guestPay, guestCharge, guestEnquiry,
+  guestOrder, guestCall, guestPinOnly, guestSelfCheckIn, tokenParam, pinQuery, payRefParam, acctProfile, acctReg, acctLogin, acctGoogle, acctClaim, acctRef, guestPay, guestCharge, guestEnquiry,
 };

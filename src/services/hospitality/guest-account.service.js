@@ -12,7 +12,7 @@ const qr = require('./qr.service');
 const secret = () => `${require('../../config/env').jwt.secret}:guest-account`;
 const sign = (a) => jwt.sign({ gid: String(a._id), bid: String(a.businessId) }, secret(), { expiresIn: '60d' });
 const digits = (p) => { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('254')) d = d.slice(3); if (d.startsWith('0')) d = d.slice(1); return /^[17]\d{8}$/.test(d) ? `254${d}` : null; };
-const view = (a) => ({ id: a._id, name: a.name, email: a.email, phone: a.phone ? `0${a.phone.slice(3)}` : undefined, picture: a.picture, google: !!a.googleSub });
+const view = (a) => ({ createdAt: a.createdAt, id: a._id, name: a.name, email: a.email, phone: a.phone ? `0${a.phone.slice(3)}` : undefined, picture: a.picture, google: !!a.googleSub });
 const out = (a) => ({ token: sign(a), account: view(a) });
 
 /** Reads the optional "Authorization: Bearer" header. Returns the account or null; never throws for a missing/bad token. */
@@ -54,6 +54,25 @@ async function google(token, { credential }) {
   else { if (!a.googleSub) a.googleSub = g.sub; if (!a.picture && g.picture) a.picture = g.picture; a.lastLoginAt = new Date(); await a.save(); }
   return out(a);
 }
+/** The guest edits their own details: name, phone, email (not for Google accounts) and, optionally, the password. */
+async function updateProfile(token, req, { name, phone, email, currentPassword, newPassword }) {
+  const { doc } = await qr.resolve(token); const a0 = await need(req, doc.businessId);
+  const a = await GuestAccount.findById(a0._id).select('+passwordHash');
+  if (name !== undefined) { if (String(name).trim().length < 2) throw ApiError.badRequest('Please enter your name', 'NAME_REQUIRED'); a.name = String(name).trim(); }
+  if (phone !== undefined) { if (phone === '') a.phone = undefined; else { const ph = digits(phone); if (!ph) throw ApiError.badRequest('Enter a valid Kenyan phone number', 'INVALID_PHONE'); a.phone = ph; } }
+  if (email !== undefined) {
+    const em = String(email).trim().toLowerCase();
+    if (a.googleSub && em !== (a.email || '')) throw ApiError.badRequest('Your email comes from Google and cannot be changed here', 'EMAIL_LOCKED');
+    a.email = em || undefined;
+  }
+  if (!a.email && !a.phone) throw ApiError.badRequest('Keep at least an email or a phone number', 'CONTACT_REQUIRED');
+  if (newPassword) {
+    if (a.passwordHash && !(await bcrypt.compare(String(currentPassword || ''), a.passwordHash))) throw ApiError.badRequest('Your current password is not right', 'WRONG_PASSWORD');
+    a.passwordHash = await bcrypt.hash(newPassword, 10);
+  }
+  try { await a.save(); } catch (e) { if (e.code === 11000) throw ApiError.conflict('That phone number or email is already used by another account', 'CONTACT_TAKEN'); throw e; }
+  return { account: { ...view(a), createdAt: a.createdAt } };
+}
 async function me(token, req) { const { doc } = await qr.resolve(token); return { account: view(await need(req, doc.businessId)) }; }
 
 /** After signing in, receipts paid earlier on this phone (their references are kept in the browser) join the account. */
@@ -80,4 +99,4 @@ async function receiptOf(token, req, reference) {
   const r = await GuestReceipt.findOne({ businessId: doc.businessId, accountId: a._id, reference }); if (!r) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
   return r.snapshot;
 }
-module.exports = { fromRequest, register, login, google, me, claim, history, receiptOf, view };
+module.exports = { updateProfile, fromRequest, register, login, google, me, claim, history, receiptOf, view };

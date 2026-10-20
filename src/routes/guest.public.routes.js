@@ -29,6 +29,7 @@ const auth = lim(15 * 60 * 1000, 25);
 router.post('/:token/account/register', auth, validate({ ...tok, body: v.acctReg }), c.aRegister);
 router.post('/:token/account/login', auth, validate({ ...tok, body: v.acctLogin }), c.aLogin);
 router.post('/:token/account/google', auth, validate({ ...tok, body: v.acctGoogle }), c.aGoogle);
+router.put('/:token/account/profile', write, validate({ ...tok, body: v.acctProfile }), c.aProfile);
 router.get('/:token/account/me', poll, validate(tok), c.aMe);
 router.post('/:token/account/claim', write, validate({ ...tok, body: v.acctClaim }), c.aClaim);
 router.get('/:token/account/history', poll, validate(tok), c.aHistory);
