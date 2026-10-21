@@ -51,8 +51,9 @@ const restaurantSettingsSchema = new Schema({
       baseFeeCents: { type: Number, default: 0, min: 0 }, perKmCents: { type: Number, default: 0, min: 0 }, minOrderCents: { type: Number, default: 0, min: 0 },
       maxRadiusKm: { type: Number, default: 0, min: 0, max: 500 }, minutesPerKm: { type: Number, default: 3, min: 0, max: 30 }, bufferMinutes: { type: Number, default: 10, min: 0, max: 120 },
       hoursStart: { type: String }, hoursEnd: { type: String },
+      payment: { type: String, enum: ['MPESA', 'MPESA_OR_CASH'], default: 'MPESA_OR_CASH' },   // MPESA = the customer must pay by STK push before the kitchen starts
     },
-    tables: { enabled: { type: Boolean, default: true }, openTime: { type: String, default: '10:00' }, closeTime: { type: String, default: '22:00' }, slotMinutes: { type: Number, default: 30, min: 15, max: 240 }, minLeadMinutes: { type: Number, default: 30, min: 0, max: 1440 }, maxAdvanceDays: { type: Number, default: 30, min: 1, max: 365 } },
+    tables: { enabled: { type: Boolean, default: true }, requirePayment: { type: Boolean, default: true }, openTime: { type: String, default: '10:00' }, closeTime: { type: String, default: '22:00' }, slotMinutes: { type: Number, default: 30, min: 15, max: 240 }, minLeadMinutes: { type: Number, default: 30, min: 0, max: 1440 }, maxAdvanceDays: { type: Number, default: 30, min: 1, max: 365 } },
     rooms: { enabled: { type: Boolean, default: true } },
   },
   stockDepletionEvent: { type: String, enum: STOCK_DEPLETION_EVENTS, default: 'ON_SEND' },
