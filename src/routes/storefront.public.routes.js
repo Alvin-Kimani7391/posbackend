@@ -51,7 +51,7 @@ router.get('/:token/deposit/:reference', poll, validate({ params: z.object({ tok
 // ---- pay a delivery order with M-PESA STK push, live payment status (also used for table + room payments), e-receipts
 router.post('/:token/delivery/:key/pay', pay, validate({ params: z.object({ token: z.string().max(120), key: z.string().regex(/^[a-f0-9]{16}$/) }), body: z.object({ payerPhone: str(20).min(9) }).strict() }), h((r) => svc.orderPayStart(t(r), r.params.key, r.body)));
 router.get('/:token/pay/:reference', poll, validate({ params: z.object({ token: z.string().max(120), reference: z.string().regex(/^MPX-[A-F0-9]{12}$/) }) }), h((r) => svc.depositStatus(t(r), r.params.reference)));
-router.get('/:token/receipts/:reference', poll, validate({ params: z.object({ token: z.string().max(120), reference: z.string().regex(/^MPX-[A-F0-9]{12}$/) }), query: z.object({ phone: str(20).optional() }) }), h((r) => svc.receipt(t(r), r, r.params.reference)));
+router.get('/:token/receipts/:reference', poll, validate({ params: z.object({ token: z.string().max(120), reference: z.string().regex(/^(MPX-[A-F0-9]{12}|BILL-[a-f0-9]{24}-[a-f0-9]{24})$/) }), query: z.object({ phone: str(20).optional() }) }), h((r) => svc.receipt(t(r), r, r.params.reference)));
 
 // ---- ONE account for the storefront and the table/room QR page (same GuestAccount): register, sign in, Google, profile, history
 router.post('/:token/account/register', auth, validate({ ...tok, body: hv.acctReg }), h((r) => acct.register(t(r), r.body), 'OK', 201));
