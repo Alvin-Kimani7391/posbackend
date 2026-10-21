@@ -29,6 +29,7 @@ const settingsSchema = z.object({
   allowNegativeIngredients: z.boolean().optional(), hideOutOfStockItems: z.boolean().optional(), kitchenDelayMinutes: z.coerce.number().int().min(1).max(240).optional(),
   discounts: z.object({ waiterMaxPercent: z.coerce.number().min(0).max(100), cashierMaxPercent: z.coerce.number().min(0).max(100), supervisorMaxPercent: z.coerce.number().min(0).max(100), managerMaxPercent: z.coerce.number().min(0).max(100) }).partial().optional(),
   serviceMode: z.enum(H.SERVICE_MODES).optional(),
+  selfService: z.object({ enabled: z.boolean(), dineIn: z.boolean(), takeAway: z.boolean(), mpesa: z.boolean(), cash: z.boolean(), branchId: objectId, expiryMinutes: z.coerce.number().int().min(5).max(240), welcomeMessage: str(300) }).partial().strict().optional(),
   storefront: z.object({
     enabled: z.boolean(), tagline: str(120), welcomeMessage: str(300), themeColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
     branchLocations: z.array(z.object({ branchId: objectId, lat: z.coerce.number().min(-90).max(90), lng: z.coerce.number().min(-180).max(180) })).max(50),
@@ -119,7 +120,7 @@ const reasonBody = z.object({ reason });
 const riderBody = z.object({ riderId: objectId });
 const deliveryStatusBody = z.object({ status: z.enum(['ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'FAILED']), reason: optReason });
 const pickupBody = z.object({ collectedBy: str(120).min(1) });
-const orderListQuery = pageQ.extend({ branchId: objectId.optional(), status: z.enum(R.ORDER_STATUS).optional(), orderType: z.enum(R.ORDER_TYPES).optional(), tableId: objectId.optional(), waiterId: objectId.optional(), billStatus: z.enum(R.ORDER_BILL_STATUS).optional(), from: date.optional(), to: date.optional(), mine: z.coerce.boolean().optional() });
+const orderListQuery = pageQ.extend({ branchId: objectId.optional(), status: z.enum(R.ORDER_STATUS).optional(), orderType: z.enum(R.ORDER_TYPES).optional(), tableId: objectId.optional(), waiterId: objectId.optional(), billStatus: z.enum(R.ORDER_BILL_STATUS).optional(), source: z.enum(R.ORDER_SOURCES).optional(), from: date.optional(), to: date.optional(), mine: z.coerce.boolean().optional() });
 const syncBody = z.object({ ops: z.array(z.object({ clientOpId: str(80), type: z.enum(['createOrder', 'addItems', 'send', 'serve', 'cancelItem']), orderRef: z.object({ orderId: objectId.optional(), clientRef: str(80).optional(), deviceId: str(80).optional() }).optional(), itemId: objectId.optional(), payload: z.any().optional() })).min(1).max(200) });
 
 // ---- kitchen

@@ -74,6 +74,15 @@ const orderSchema = new Schema({
     riderId: Schema.Types.ObjectId, riderName: String, status: { type: String, enum: C.DELIVERY_STATUS }, assignedAt: Date, outForDeliveryAt: Date, deliveredAt: Date, failReason: String,
     platform: String, commissionPercent: { type: Number, default: 0 },
   },
+  // Self-service kiosk orders only (source KIOSK). paymentState gates the kitchen: items stay HELD until it is PAID.
+  selfService: {
+    publicCode: { type: String },                                  // unguessable handle the customer's screen uses; never the order id
+    paymentMethod: { type: String, enum: ['MPESA', 'CASH'] },
+    paymentState: { type: String, enum: ['PENDING', 'AWAITING_CASH', 'PAID', 'EXPIRED'] },
+    expiresAt: Date, paidAt: Date, releasedAt: Date,
+    confirmedBy: Schema.Types.ObjectId, confirmedByName: String,   // the cashier who took the cash
+    billPrints: { type: Number, default: 0 },
+  },
   pickup: { status: { type: String, enum: ['WAITING', 'COLLECTED'] }, collectedAt: Date, collectedBy: String },
   version: { type: Number, default: 1 },                           // optimistic concurrency: mutating calls may send expectedVersion
   clientRef: String, deviceId: String,                            // offline create dedup
@@ -89,6 +98,9 @@ orderSchema.index({ businessId: 1, stayId: 1, status: 1 }, { sparse: true });
 // HARD guarantee: one open dine-in order per table, even if two waiters tap "open table" at the same instant.
 orderSchema.index({ businessId: 1, tableId: 1 }, { unique: true, partialFilterExpression: { status: 'OPEN', orderType: 'DINE_IN', tableId: { $type: 'objectId' } } });
 orderSchema.index({ businessId: 1, branchId: 1, deviceId: 1, clientRef: 1 }, { unique: true, partialFilterExpression: { deviceId: { $type: 'string' }, clientRef: { $type: 'string' } } });
+
+orderSchema.index({ businessId: 1, 'selfService.publicCode': 1 }, { unique: true, partialFilterExpression: { 'selfService.publicCode': { $type: 'string' } } });
+orderSchema.index({ source: 1, 'selfService.paymentState': 1, 'selfService.expiresAt': 1 }, { partialFilterExpression: { source: 'KIOSK' } });
 
 moneyPaths(orderSchema, ['totals.itemsTotal', 'totals.serviceCharge', 'totals.tax', 'totals.total', 'totals.discount', 'delivery.fee', 'items.unitPrice', 'items.basePrice', 'items.costUnit', 'items.discount', 'items.modifiers.priceDelta', 'items.modifiers.costDelta']);
 

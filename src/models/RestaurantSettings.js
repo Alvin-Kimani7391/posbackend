@@ -56,6 +56,18 @@ const restaurantSettingsSchema = new Schema({
     tables: { enabled: { type: Boolean, default: true }, requirePayment: { type: Boolean, default: true }, openTime: { type: String, default: '10:00' }, closeTime: { type: String, default: '22:00' }, slotMinutes: { type: Number, default: 30, min: 15, max: 240 }, minLeadMinutes: { type: Number, default: 30, min: 0, max: 1440 }, maxAdvanceDays: { type: Number, default: 30, min: 1, max: 365 } },
     rooms: { enabled: { type: Boolean, default: true } },
   },
+  // Self-service kiosk (customer orders and pays on a touchscreen). The owner decides if it exists at all; everything is enforced on the server.
+  selfService: {
+    enabled: { type: Boolean, default: false },
+    dineIn: { type: Boolean, default: true },
+    takeAway: { type: Boolean, default: true },
+    mpesa: { type: Boolean, default: true },                           // also needs M-PESA switched on in Integration settings
+    cash: { type: Boolean, default: true },                            // bill is printed, the cashier confirms the money, only then does the kitchen see it
+    branchId: { type: Schema.Types.ObjectId, ref: 'Branch' },         // the branch this kiosk sells for
+    kioskVersion: { type: Number, default: 1 },                        // rotating it invalidates every kiosk link
+    expiryMinutes: { type: Number, default: 30, min: 5, max: 240 },    // an unpaid order is cancelled and its table freed after this long
+    welcomeMessage: { type: String, trim: true, maxlength: 300 },
+  },
   stockDepletionEvent: { type: String, enum: STOCK_DEPLETION_EVENTS, default: 'ON_SEND' },
   stockLocations: { type: String, enum: ['SINGLE', 'MULTI'], default: 'SINGLE' }, // SINGLE: one store; MULTI: store + kitchen + bar
   allowNegativeIngredients: { type: Boolean, default: true },   // a missing ingredient record must never stop a customer being served

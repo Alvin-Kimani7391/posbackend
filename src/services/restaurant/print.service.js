@@ -12,7 +12,7 @@ const hhmm = (d, tz) => { try { return new Date(d).toLocaleTimeString('en-GB', {
 /** One paper ticket for one station. Called inside the order transaction (session) right after tickets are created. */
 async function enqueueKot(order, tickets, { session, tz } = {}) {
   try {
-    if (!['QR_TABLE', 'QR_ROOM'].includes(order.source)) return;
+    if (!['QR_TABLE', 'QR_ROOM', 'KIOSK'].includes(order.source)) return;
     for (const t of tickets) {
       if (!t.items || !t.items.length) continue;
       let type = 'KITCHEN';
@@ -21,7 +21,7 @@ async function enqueueKot(order, tickets, { session, tz } = {}) {
       const doc = {
         title: `${type === 'BAR' ? 'Bar' : 'Kitchen'} order`, big: true,
         highlight: { label: place, value: t.ticketNumber },
-        meta: [['Order', order.orderNumber], ['Source', order.source === 'QR_ROOM' ? 'Guest phone (room)' : 'Guest phone (table)'], ['Guest', order.customerName], ['Waiter', order.waiterName], ['Time', hhmm(Date.now(), tz)], ['Type', t.type !== 'NEW' ? t.type : '']],
+        meta: [['Order', order.orderNumber], ['Source', order.source === 'KIOSK' ? 'Self-service (PAID)' : order.source === 'QR_ROOM' ? 'Guest phone (room)' : 'Guest phone (table)'], ['Guest', order.customerName], ['Waiter', order.waiterName], ['Time', hhmm(Date.now(), tz)], ['Type', t.type !== 'NEW' ? t.type : '']],
         lines: t.items.filter((i) => !i.cancelled).map((i) => ({ qty: i.quantity, name: i.name + (i.variantName ? ` (${i.variantName})` : ''), sub: [i.modifiersText, i.notes && `NOTE: ${i.notes}`, i.allergyNotes && `ALLERGY: ${i.allergyNotes}`].filter(Boolean).join(' | ') })),
         footer: t.allergyAlert ? '*** ALLERGY ALERT ***' : '',
       };

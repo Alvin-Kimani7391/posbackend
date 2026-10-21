@@ -10,6 +10,7 @@ const C = require('./common');
 async function getSettings(businessId) { return (await C.getContext(businessId)).settings; }
 async function updateSettings(businessId, userId, patch) {
   const { settings } = await C.getContext(businessId);
+  if (patch.selfService && patch.selfService.branchId) await C.assertBranch(businessId, patch.selfService.branchId);
   const before = settings.toObject();
   const merge = (target, src) => { for (const [k, v] of Object.entries(src)) { if (v && typeof v === 'object' && !Array.isArray(v)) { if (!target[k]) target[k] = {}; merge(target[k], v); } else target[k] = v; } };
   for (const [k, v] of Object.entries(patch)) { if (v && typeof v === 'object' && !Array.isArray(v)) { const cur = settings[k] && settings[k].toObject ? settings[k].toObject() : (settings[k] || {}); merge(cur, v); settings[k] = cur; } else settings[k] = v; }

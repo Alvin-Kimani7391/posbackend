@@ -193,4 +193,12 @@ router.post('/qr/:kind/:id/rotate', gq, P('restaurant.guest.qr'), validate({ par
 router.post('/qr/:kind/:id/enabled', gq, P('restaurant.guest.qr'), validate({ params: hv.qrParam, body: hv.qrEnable }), hc.enableQr);
 router.post('/orders/:id/claim', P('restaurant.orders.create'), validate({ params: hv.idParam }), hc.claimOrder);
 
+// ---- self-service kiosk (staff side): the owner's link + the cashier's "confirm cash" desk. The customer side is public: routes/selfservice.public.routes.js
+const sc = require('../controllers/selfservice.controller'); const sv = require('../validators/selfservice.validator');
+router.get('/self-service/link', P('restaurant.settings.manage'), sc.link);
+router.post('/self-service/link/rotate', P('restaurant.settings.manage'), sc.rotateLink);
+router.get('/self-service/orders', P('restaurant.bills.view'), validate({ query: sv.staffList }), sc.staffList);
+router.post('/self-service/orders/:id/confirm-cash', P('restaurant.bills.pay'), validate({ ...id, body: sv.confirmCashBody }), idempotent('POST /restaurant/self-service/confirm-cash'), sc.confirmCash);
+router.post('/self-service/orders/:id/reprint', P('restaurant.bills.view'), validate(id), sc.staffReprint);
+
 module.exports = router;

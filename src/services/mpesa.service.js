@@ -636,6 +636,7 @@ async function handleCallback(businessId, body) {
 
   // a guest paid from the QR page: close their bill now, even if their phone never comes back to the page
   if (txn.status === 'SUCCESS' && txn.guestPay && txn.guestPay.kind) require('./hospitality/guest-portal.service').finalizeByTxn(txn._id);
+  if (txn.status === 'SUCCESS' && txn.kioskPay && txn.kioskPay.orderId) require('./restaurant/selfservice.service').finalizeByTxn(txn._id);
   if (txn.status === 'SUCCESS' && txn.storePay && txn.storePay.kind) require('./storefront/storefront.service').settleByTxn(txn._id);
 
   if (txn.status === 'FAILED' && !callbackSaysSuccess) {

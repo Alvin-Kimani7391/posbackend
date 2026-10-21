@@ -123,7 +123,7 @@ async function getOrder(businessId, user, id) {
 async function listOrders(businessId, user, q) {
   const { branchId, status, orderType, tableId, waiterId, billStatus, search, from, to, mine, page = 1, limit = 20 } = q;
   const f = { businessId, ...C.branchFilter(C.branchScope(user, branchId)) };
-  if (status) f.status = status; if (orderType) f.orderType = orderType; if (tableId) f.tableId = tableId; if (billStatus) f.billStatus = billStatus;
+  if (q.source) f.source = q.source; if (status) f.status = status; if (orderType) f.orderType = orderType; if (tableId) f.tableId = tableId; if (billStatus) f.billStatus = billStatus;
   if (from || to) { f.createdAt = {}; if (from) f.createdAt.$gte = new Date(from); if (to) f.createdAt.$lte = new Date(to); }
   if (!C.can(user, 'restaurant.orders.view_all') || mine) f.$or = [{ waiterId: user._id }, { openedBy: user._id }, ...(mine ? [] : [{ waiterId: { $exists: false } }])]; else if (waiterId) f.waiterId = waiterId;
   if (search) { const rx = new RegExp(C.escapeRegex(search), 'i'); f.$and = [{ $or: [{ orderNumber: rx }, { tableName: rx }, { customerName: rx }, { customerPhone: rx }, { pickupNumber: rx }] }]; }
@@ -461,7 +461,7 @@ async function cancelOrder(businessId, user, id, { reason }) {
     await C.audit({ businessId, branchId: order.branchId, userId: user._id, action: 'restaurant.order.cancel', entityType: 'RestaurantOrder', entityId: order._id, newValue: { reason } }, session);
     return order;
   });
-  C.notifyRoles(businessId, out.branchId, C.KITCHEN_ROLES, { type: 'KITCHEN_CANCELLATION', title: `Order cancelled: ${out.tableName || out.orderNumber}`, message: `${user.name}: ${reason}`, entityType: 'RestaurantOrder', entityId: out._id });
+  if (!(out.source === 'KIOSK' && !out.firstSentAt)) C.notifyRoles(businessId, out.branchId, C.KITCHEN_ROLES, { type: 'KITCHEN_CANCELLATION', title: `Order cancelled: ${out.tableName || out.orderNumber}`, message: `${user.name}: ${reason}`, entityType: 'RestaurantOrder', entityId: out._id });
   return out;
 }
 
