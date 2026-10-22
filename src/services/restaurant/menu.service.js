@@ -11,6 +11,7 @@ const { nextSequence, pad } = require('../../models/Counter');
 const { MENU_SKU_PREFIX } = require('../../constants/restaurant');
 const P = require('../../utils/restaurantPricing');
 const { portionsPossible } = require('../../utils/restaurantRecipe');
+const recipeSvc = require('./recipe.service');
 const C = require('./common');
 
 // ---------------- modifier groups
@@ -36,10 +37,17 @@ async function checkRefs(businessId, input) {
   }
 }
 
-async function createItem(businessId, userId, input) {
+/** A recipe typed into the menu item form: only when the restaurant tracks ingredients by recipe. */
+function assertRecipesOn(ctx) {
+  if (!ctx.features.recipes) throw ApiError.badRequest('Ingredient tracking by recipe is switched off. Turn it on in the restaurant tracking settings first.', 'RECIPES_DISABLED');
+}
+
+async function createItem(businessId, userId, fullInput) {
+  const { recipe, ...input } = fullInput;
   await checkRefs(businessId, input);
   return C.inTx(async (session) => {
     const ctx = await C.getContext(businessId, session);
+    if (recipe) { assertRecipesOn(ctx); if (input.stockMode === 'PRODUCT') throw ApiError.badRequest('A dish linked to a stocked product cannot also have a recipe', 'STOCK_MODE_PRODUCT'); }
     const taxRate = input.taxRate ?? ctx.defaultTaxRate;
     let productId = input.productId; let ownsProduct = false;
     if (input.stockMode === 'PRODUCT') {
@@ -54,13 +62,16 @@ async function createItem(businessId, userId, input) {
     const { productId: _ignored, ...rest } = input;
     const [item] = await MenuItem.create([{ ...rest, taxRate, businessId, productId, ownsProduct, createdBy: userId }], { session });
     await C.audit({ businessId, userId, action: 'restaurant.menu.create', entityType: 'MenuItem', entityId: item._id, newValue: { name: item.name, basePrice: item.basePrice } }, session);
+    if (recipe) { await recipeSvc.createVersionIn(session, businessId, userId, { ...recipe, menuItemId: item._id }); return MenuItem.findById(item._id).session(session); }
     return item;
   });
 }
 
-async function updateItem(businessId, userId, id, input) {
+async function updateItem(businessId, userId, id, fullInput) {
+  const { recipe, ...input } = fullInput;
   await checkRefs(businessId, input);
   return C.inTx(async (session) => {
+    if (recipe) assertRecipesOn(await C.getContext(businessId, session));
     const item = await MenuItem.findOne({ _id: id, businessId }).session(session);
     if (!item) throw ApiError.notFound('Menu item not found', 'MENU_ITEM_NOT_FOUND');
     const before = { basePrice: item.basePrice, typePrices: item.typePrices?.toObject?.({ transform: false }), variants: item.variants.map((v) => ({ name: v.name, price: v.price, priceDelta: v.priceDelta })) };
@@ -72,6 +83,8 @@ async function updateItem(businessId, userId, id, input) {
     if (item.ownsProduct) await Product.updateOne({ _id: item.productId, businessId }, { $set: { name: item.name, sellingPrice: item.basePrice, taxRate: item.taxRate, categoryId: item.categoryId, image: item.image } }, { session });
     if (priceChanged) await C.audit({ businessId, userId, action: 'restaurant.menu.price_change', entityType: 'MenuItem', entityId: item._id, oldValue: before, newValue: { basePrice: item.basePrice, typePrices: item.typePrices?.toObject?.({ transform: false }), variants: item.variants.map((v) => ({ name: v.name, price: v.price, priceDelta: v.priceDelta })) } }, session);
     else await C.audit({ businessId, userId, action: 'restaurant.menu.update', entityType: 'MenuItem', entityId: item._id }, session);
+    if (recipe) { await recipeSvc.createVersionIn(session, businessId, userId, { ...recipe, menuItemId: item._id }); return MenuItem.findById(item._id).session(session); }
+    if (recipe === null) { await recipeSvc.clearRecipe(businessId, userId, item._id, session); return MenuItem.findById(item._id).session(session); }
     return item;
   });
 }

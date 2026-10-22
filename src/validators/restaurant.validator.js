@@ -22,9 +22,11 @@ const rangeQ = z.object({ branchId: objectId.optional(), from: date.optional(), 
 const pageQ = paginationQuery.extend({ limit: z.coerce.number().int().min(1).max(200).default(20) });
 
 // ---- settings / floor
+const settingsTracking = () => z.object({ autoWriteOffExpired: z.boolean(), targetFoodCostPercent: z.coerce.number().min(1).max(100), expiryCriticalDays: z.coerce.number().int().min(0).max(365), expiryWarningDays: z.coerce.number().int().min(1).max(365), costBasis: z.enum(['AUTO', 'RECIPE', 'PURCHASES']) }).partial();
 const settingsSchema = z.object({
   serviceCharge: z.object({ enabled: z.boolean(), percent: z.coerce.number().min(0).max(100), taxRate: z.coerce.number().min(0).max(100), orderTypes: z.array(z.enum(R.ORDER_TYPES)) }).partial().optional(),
   tips: z.object({ enabled: z.boolean(), mode: z.enum(['INDIVIDUAL', 'POOL']), poolRoles: z.array(z.string()) }).partial().optional(),
+  tracking: z.object({ autoWriteOffExpired: z.boolean(), targetFoodCostPercent: z.coerce.number().min(1).max(100), expiryCriticalDays: z.coerce.number().int().min(0).max(365), expiryWarningDays: z.coerce.number().int().min(1).max(365), costBasis: z.enum(['AUTO', 'RECIPE', 'PURCHASES']) }).partial().optional(),
   stockDepletionEvent: z.enum(R.STOCK_DEPLETION_EVENTS).optional(), stockLocations: z.enum(['SINGLE', 'MULTI']).optional(),
   allowNegativeIngredients: z.boolean().optional(), hideOutOfStockItems: z.boolean().optional(), kitchenDelayMinutes: z.coerce.number().int().min(1).max(240).optional(),
   discounts: z.object({ waiterMaxPercent: z.coerce.number().min(0).max(100), cashierMaxPercent: z.coerce.number().min(0).max(100), supervisorMaxPercent: z.coerce.number().min(0).max(100), managerMaxPercent: z.coerce.number().min(0).max(100) }).partial().optional(),
@@ -60,7 +62,9 @@ const floorQuery = z.object({ branchId: objectId, areaId: objectId.optional() })
 // ---- menu
 const optionBody = z.object({ name: str(80).min(1), priceDelta: moneyAny.optional(), costDelta: moneyAny.optional(), allergens: z.array(z.enum(R.ALLERGENS)).optional(), substitution: z.boolean().optional(), removal: z.boolean().optional(), ingredientLines: z.array(z.object({ ingredientId: objectId, quantity: z.coerce.number() })).optional(), soldOut: z.boolean().optional(), active: z.boolean().optional(), sortOrder: z.number().optional() });
 const groupBody = z.object({ name: str(80).min(1), required: z.boolean().optional(), min: z.coerce.number().int().min(0).optional(), max: z.coerce.number().int().min(0).optional(), allowQuantity: z.boolean().optional(), options: z.array(optionBody).max(60).optional(), active: z.boolean().optional() });
+const recipeInline = z.object({ yieldPortions: z.coerce.number().positive().optional(), changeNote: str(300).optional(), lines: z.array(z.object({ ingredientId: objectId, quantity: z.coerce.number().positive(), unit: z.enum(UNIT_NAMES).optional(), prepLossPercent: z.coerce.number().min(0).max(95).optional(), optional: z.boolean().optional() })).min(1).max(60) });
 const itemBase = {
+  recipe: recipeInline.nullable().optional(),   // the recipe typed into the menu item form (null removes it)
   categoryId: objectId.optional(), name: str(120).min(1), description: str(500).optional(), image: str(500).optional(), basePrice: money0,
   typePrices: z.object({ dineIn: money0.optional(), takeaway: money0.optional(), delivery: money0.optional() }).optional(),
   branchOverrides: z.array(z.object({ branchId: objectId, price: money0.optional(), available: z.boolean().optional() })).optional(),
@@ -97,6 +101,9 @@ const stockQuery = pageQ.extend({ branchId: objectId.optional(), location: loc.o
 const movementQuery = pageQ.extend({ branchId: objectId.optional(), ingredientId: objectId.optional(), type: z.enum(R.INGREDIENT_MOVEMENT_TYPES).optional(), from: date.optional(), to: date.optional() });
 const purchaseQuery = pageQ.extend({ branchId: objectId.optional(), supplierId: objectId.optional(), from: date.optional(), to: date.optional() });
 const countListQuery = pageQ.extend({ branchId: objectId.optional(), status: z.enum(['OPEN', 'SUBMITTED', 'APPROVED', 'CANCELLED']).optional() });
+const trackingBody = z.object({ enabled: z.boolean().optional(), tracking: settingsTracking().optional() });
+const batchQuery = pageQ.extend({ branchId: objectId.optional(), ingredientId: objectId.optional(), status: z.enum(['ACTIVE', 'EXHAUSTED', 'EXPIRED', 'DISCARDED', 'RETURNED']).optional(), location: z.enum(R.INGREDIENT_LOCATIONS).optional(), expiringInDays: z.coerce.number().int().min(0).max(365).optional(), search: z.string().trim().max(80).optional() });
+const batchDispose = z.object({ type: z.enum(['EXPIRED', 'WASTE', 'RETURNED']).default('WASTE'), reason: reason, creditSupplier: z.boolean().optional() });
 const expiringQuery = z.object({ branchId: objectId.optional(), days: z.coerce.number().int().min(1).max(90).optional() });
 
 // ---- orders
@@ -183,7 +190,7 @@ const deliveryListQuery = z.object({ branchId: objectId.optional(), status: z.en
 
 module.exports = {
   idParam, itemParam, branchQ, rangeQ, settingsSchema, areaBody, areaUpdate, stationBody, stationUpdate, tableBody, tableUpdate, tableStatus, assignBody, combineBody, floorQuery,
-  groupBody, itemCreate, itemUpdate, soldOutBody, itemListQuery, menuQuery, recipeBody, recipeQuery, costQuery, ingredientCreate, ingredientUpdate, ingListQuery, receiveBody, transferBody, wasteBody, adjustBody,
+  trackingBody, batchQuery, batchDispose, groupBody, itemCreate, itemUpdate, soldOutBody, itemListQuery, menuQuery, recipeBody, recipeQuery, costQuery, ingredientCreate, ingredientUpdate, ingListQuery, receiveBody, transferBody, wasteBody, adjustBody,
   countStart, countSubmit, stockQuery, movementQuery, purchaseQuery, countListQuery, expiringQuery, createOrder, addItemsBody, updateItemBody, cancelItemBody, versionBody, fireBody, serveBody, compBody,
   updateOrderBody, transferBody2, reassignBody, mergeBody, assistBody, reasonBody, riderBody, deliveryStatusBody, pickupBody, orderListQuery, syncBody, kitchenQueue, itemStatusBody, bumpBody, priorityBody, kItemParam,
   genBill, discountBody, scBody, splitBody, moveBody, mergeBillsBody, payBody, tipBody, closeBillBody, refundBody, billListQuery, stkBody, manualBody, claimBody, refParam, verifyBody, entryParam, unverifiedQuery, contextQuery, openShiftBody,

@@ -17,6 +17,7 @@ const { nextSequence, pad } = require('../../models/Counter');
 const U = require('../../utils/restaurantUnits');
 const { consumption, costOf } = require('../../utils/restaurantRecipe');
 const { fromCents } = require('../../utils/money');
+const { startOfToday, isExpired, sameDay } = require('../../utils/expiryDay');
 const C = require('./common');
 
 const effLocation = (settings, location) => (settings.stockLocations === 'SINGLE' ? 'STORE' : location || 'STORE');
@@ -108,7 +109,7 @@ async function moveStock({ businessId, branchId, ingredient, location, delta, ty
 /** Takes up to `qty` from the batches (first-expiring first), skipping expired. Returns [{batchId, quantity}] and how much was NOT covered by a batch. */
 async function drawBatches({ businessId, branchId, ingredientId, location, qty, session }) {
   const now = new Date();
-  const batches = await IngredientBatch.find({ businessId, branchId, ingredientId, location, status: 'ACTIVE', quantity: { $gt: 0 }, $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] })
+  const batches = await IngredientBatch.find({ businessId, branchId, ingredientId, location, status: 'ACTIVE', quantity: { $gt: 0 }, $or: [{ expiryDate: null }, { expiryDate: { $gte: startOfToday(now) } }] })
     .sort({ expiryDate: 1, receivedAt: 1 }).session(session);
   batches.sort((a, b) => (a.expiryDate ? a.expiryDate.getTime() : Infinity) - (b.expiryDate ? b.expiryDate.getTime() : Infinity) || a.receivedAt - b.receivedAt);
   const taken = []; let left = qty;
@@ -172,12 +173,14 @@ async function receivePurchase(businessId, branchId, user, { supplierId, invoice
       const loc = effLocation(ctx.settings, l.location);
       let expiry = l.expiryDate;
       if (ing.trackBatch) {
-        if (!l.batchNumber) throw ApiError.badRequest(`${ing.name} is batch-tracked: give the supplier's batch number`, 'BATCH_DETAILS_REQUIRED');
+        if (!l.batchNumber) { const n = await nextSequence(businessId, 'ingbatch', session); const d = now.toISOString().slice(0, 10).replace(/-/g, ''); l.batchNumber = `${(ing.sku || ing.name.replace(/[^a-z0-9]/gi, '').slice(0, 4) || 'ING').toUpperCase()}-${d}-${pad(n, 3)}`; }   // no supplier batch number: we make one
         if (!expiry && ing.shelfLifeDays) expiry = new Date(now.getTime() + ing.shelfLifeDays * 86400000);
-        if (expiry && new Date(expiry) <= now) throw ApiError.badRequest(`${ing.name}: this batch is already expired`, 'BATCH_EXPIRED');
+        if (expiry && isExpired(expiry, now)) throw ApiError.badRequest(`${ing.name}: this batch is already expired`, 'BATCH_EXPIRED');
+        const existing = await IngredientBatch.findOne({ businessId, branchId, ingredientId: ing._id, location: loc, batchNumber: l.batchNumber }).session(session);
+        if (existing && expiry && existing.expiryDate && !sameDay(existing.expiryDate, expiry)) throw ApiError.badRequest(`${ing.name}: batch ${l.batchNumber} is already on the shelf with a different expiry date. Use a different batch number.`, 'BATCH_EXPIRY_MISMATCH');
         await IngredientBatch.findOneAndUpdate(
           { businessId, branchId, ingredientId: ing._id, location: loc, batchNumber: l.batchNumber },
-          { $inc: { quantity: baseQty, initialQuantity: baseQty }, $set: { status: 'ACTIVE', costPerBase, supplierId }, $setOnInsert: { expiryDate: expiry, receivedAt: now } },
+          { $inc: { quantity: baseQty, initialQuantity: baseQty }, $set: { status: 'ACTIVE', costPerBase, supplierId, purchaseId }, $setOnInsert: { expiryDate: expiry, receivedAt: now } },
           { upsert: true, new: true, session, setDefaultsOnInsert: true }
         );
       }
@@ -356,10 +359,7 @@ async function listMovements(businessId, user, { branchId, ingredientId, type, f
   return C.paged(items, total, { page, limit });
 }
 
-async function expiringBatches(businessId, user, { branchId, days = 7 }) {
-  const f = { businessId, ...C.branchFilter(C.branchScope(user, branchId)), status: 'ACTIVE', quantity: { $gt: 0 }, expiryDate: { $lte: new Date(Date.now() + days * 86400000) } };
-  return IngredientBatch.find(f).populate('ingredientId', 'name baseUnit').sort({ expiryDate: 1 }).limit(500);
-}
+const expiringBatches = (businessId, user, q) => require('./ingredientBatch.service').listExpiring(businessId, user, q);
 
 /** Replenishment: anything at/below its reorder level, with a suggested quantity up to the par level and days of cover from the last 14 days of use. */
 async function replenishmentSuggestions(businessId, user, { branchId }) {
@@ -382,31 +382,8 @@ async function replenishmentSuggestions(businessId, user, { branchId }) {
   return out.sort((a, b) => (a.daysOfCover ?? 1e9) - (b.daysOfCover ?? 1e9));
 }
 
-/** Job: write off expired batches and warn about those about to expire. */
-async function expirySweep(businessId) {
-  const now = new Date();
-  const expired = await IngredientBatch.find({ ...(businessId ? { businessId } : {}), status: 'ACTIVE', quantity: { $gt: 0 }, expiryDate: { $lte: now } }).limit(200);
-  for (const b of expired) {
-    try {
-      await C.inTx(async (session) => {
-        const bt = await IngredientBatch.findOneAndUpdate({ _id: b._id, status: 'ACTIVE', quantity: { $gt: 0 } }, { $set: { status: 'EXPIRED' } }, { new: false, session });
-        if (!bt) return;
-        const ing = await getIngredient(b.businessId, b.ingredientId, session);
-        const ctx = await C.getContext(b.businessId, session);
-        await IngredientBatch.updateOne({ _id: b._id }, { $set: { quantity: 0 } }, { session });
-        await moveStock({ businessId: b.businessId, branchId: b.branchId, ingredient: ing, location: b.location, delta: -bt.quantity, type: 'EXPIRED', batchId: b._id, referenceType: 'IngredientBatch', referenceId: b._id, reason: `Batch ${b.batchNumber} expired`, session, allowNegative: ctx.settings.allowNegativeIngredients !== false });
-        await WasteRecord.create([{ businessId: b.businessId, branchId: b.branchId, kind: 'EXPIRED', ingredientId: ing._id, name: ing.name, quantity: bt.quantity, location: b.location, cost: Math.round(bt.quantity * (ing.costPerBase || 0)), reason: `Batch ${b.batchNumber} expired` }], { session });
-      });
-    } catch (e) { console.error('[restaurant] expiry write-off failed', e.message); }
-  }
-  const soon = await IngredientBatch.find({ ...(businessId ? { businessId } : {}), status: 'ACTIVE', quantity: { $gt: 0 }, expiryDate: { $gt: now, $lte: new Date(now.getTime() + 3 * 86400000) } }).populate('ingredientId', 'name').limit(200);
-  const byBiz = new Map();
-  for (const b of soon) { const k = `${b.businessId}:${b.branchId}`; if (!byBiz.has(k)) byBiz.set(k, { b, list: [] }); byBiz.get(k).list.push(`${b.ingredientId?.name} (${b.batchNumber})`); }
-  for (const { b, list } of byBiz.values()) {
-    await C.notifyManagement(b.businessId, { type: 'INGREDIENT_EXPIRY', title: 'Ingredients expiring within 3 days', message: list.slice(0, 8).join(', ') + (list.length > 8 ? ` and ${list.length - 8} more` : ''), branchId: b.branchId });
-  }
-  return { expired: expired.length, expiringSoon: soon.length };
-}
+/** Hourly job: write off expired batches (only for restaurants that left auto write-off on). */
+const expirySweep = (businessId) => require('./ingredientBatch.service').expirySweep(businessId);
 
 module.exports = {
   createIngredient, updateIngredient, listIngredients, getIngredient, toBaseFor, moveStock, drawBatches, consume, reverse, receivePurchase, listPurchases,

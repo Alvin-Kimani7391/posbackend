@@ -12,7 +12,9 @@ const s = new Schema({
   quantity: { type: Number, required: true },       // remaining, base units
   costPerBase: { type: Number, default: 0 },
   supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier' },
-  status: { type: String, enum: ['ACTIVE', 'EXHAUSTED', 'EXPIRED', 'DISCARDED'], default: 'ACTIVE' },
+  purchaseId: { type: Schema.Types.ObjectId, ref: 'IngredientPurchase' },
+  status: { type: String, enum: ['ACTIVE', 'EXHAUSTED', 'EXPIRED', 'DISCARDED', 'RETURNED'], default: 'ACTIVE' },
+  closedAt: Date, closedBy: { type: Schema.Types.ObjectId, ref: 'User' }, closeReason: String,
 }, { timestamps: true });
 s.index({ businessId: 1, branchId: 1, ingredientId: 1, location: 1, status: 1, expiryDate: 1 });
 s.index({ businessId: 1, branchId: 1, ingredientId: 1, location: 1, batchNumber: 1 }, { unique: true });

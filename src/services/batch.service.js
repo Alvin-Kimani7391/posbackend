@@ -564,7 +564,28 @@ async function expirySummary(businessId, { branchId, criticalDays, warningDays, 
       daysLeft: Math.round((new Date(b.expiryDate).getTime() - today.getTime()) / 86400000),
     }));
   }
+  await mergeIngredientExpiry(businessId, out, { branchId, criticalDays, warningDays, top });
   return out;
+}
+
+/**
+ * Restaurants: ingredient batches ride along in the same alert (dashboard banner, daily in-app alert, SMS digest) with their own
+ * windows from the restaurant tracking settings. The shared buckets/byBranch/top include them; `out.ingredients` is their own breakdown.
+ * A failure here never breaks the product alert.
+ */
+async function mergeIngredientExpiry(businessId, out, { branchId, criticalDays, warningDays, top }) {
+  try {
+    const b = await Business.findById(businessId).select('featureSettings').lean();
+    if (!b?.featureSettings?.restaurantOrdering || !b.featureSettings.recipeManagement) return;   // ingredients exist only where tracking is on
+    const ing = await require('./restaurant/ingredientBatch.service').expirySummary(businessId, { branchId, criticalDays, warningDays, top });
+    for (const k of ['expired', 'critical', 'warning']) { out[k].batches += ing[k].batches; out[k].costValue += ing[k].costValue; out[k].units = round3((out[k].units || 0) + ing[k].units); }
+    for (const [br, v] of Object.entries(ing.byBranch)) {
+      const bb = out.byBranch[br] || (out.byBranch[br] = { expired: 0, critical: 0, warning: 0 });
+      for (const k of ['expired', 'critical', 'warning']) bb[k] += v[k];
+    }
+    out.ingredients = { criticalDays: ing.criticalDays, warningDays: ing.warningDays, expired: ing.expired, critical: ing.critical, warning: ing.warning };
+    out.top = [...out.top, ...ing.top].sort((a, c) => a.daysLeft - c.daysLeft).slice(0, top || 5);
+  } catch (e) { console.error('[expiry] ingredient merge failed', e.message); }
 }
 
 /**

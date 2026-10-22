@@ -44,7 +44,7 @@ async function runForBusiness(businessId, { force = false } = {}) {
         severity: urgent ? 'critical' : 'warning',
         title: summary.expired.batches ? 'Expired stock needs action' : urgent ? 'Stock is about to expire' : 'Stock will expire soon',
         message: describe(summary, (c) => ctx.fmt(c)),
-        data: { day, kind: 'EXPIRY', expired: summary.expired, critical: summary.critical, warning: summary.warning, byBranch: summary.byBranch, link: 'batches.html' },
+        data: { day, kind: 'EXPIRY', expired: summary.expired, critical: summary.critical, warning: summary.warning, byBranch: summary.byBranch, link: (summary.ingredients && (summary.ingredients.expired.batches + summary.ingredients.critical.batches + summary.ingredients.warning.batches)) ? 'hx-stock.html#batches' : 'batches.html' },
         entityType: 'Batch',
       });
       result.notified = true;
@@ -67,7 +67,7 @@ async function runForBusiness(businessId, { force = false } = {}) {
 async function runAll() {
   const cursor = Business.find({
     status: 'active', subscriptionStatus: { $nin: ['suspended', 'cancelled'] },
-    $or: [{ 'featureSettings.expiryTracking': true }, { 'featureSettings.batchTracking': true }],
+    $or: [{ 'featureSettings.expiryTracking': true }, { 'featureSettings.batchTracking': true }, { 'featureSettings.recipeManagement': true }],
   }).select('_id').lean().cursor();
   let n = 0;
   for await (const b of cursor) {

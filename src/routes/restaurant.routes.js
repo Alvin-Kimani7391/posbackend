@@ -19,6 +19,8 @@ const id = { params: v.idParam };
 // ---- settings, areas, stations
 router.get('/storefront/qr', P('restaurant.guest.qr'), c.storeQr);
 router.post('/storefront/qr/rotate', P('restaurant.guest.qr'), c.storeQrRotate);
+router.get('/tracking', P('restaurant.settings.view'), c.getTracking);   // ingredient tracking on/off + setup progress (NOT behind the recipe gate: it is how you turn it on)
+router.put('/tracking', P('restaurant.settings.manage'), validate({ body: v.trackingBody }), c.setTracking);
 router.get('/settings', P('restaurant.settings.view'), c.getSettings);
 router.put('/settings', P('restaurant.settings.manage'), validate({ body: v.settingsSchema }), c.updateSettings);
 router.get('/areas', tbl, P('restaurant.tables.view'), validate({ query: v.branchQ }), c.listAreas);
@@ -65,6 +67,10 @@ router.post('/ingredients', rcp, P('restaurant.ingredients.manage'), validate({ 
 router.put('/ingredients/:id', rcp, P('restaurant.ingredients.manage'), validate({ ...id, body: v.ingredientUpdate }), c.updateIngredient);
 router.get('/ingredients/stock', rcp, P('restaurant.ingredients.view'), validate({ query: v.stockQuery }), c.stock);
 router.get('/ingredients/movements', rcp, P('restaurant.ingredients.view'), validate({ query: v.movementQuery }), c.movements);
+router.get('/ingredients/batches', rcp, P('restaurant.ingredients.view'), validate({ query: v.batchQuery }), c.listBatches);
+router.get('/ingredients/expiry-summary', rcp, P('restaurant.ingredients.view'), validate({ query: v.branchQ }), c.expirySummary);
+router.get('/ingredients/batches/:id/trace', rcp, P('restaurant.ingredients.view'), validate(id), c.traceBatch);
+router.post('/ingredients/batches/:id/dispose', rcp, P('restaurant.ingredients.waste'), validate({ ...id, body: v.batchDispose }), c.disposeBatch);
 router.get('/ingredients/expiring', rcp, P('restaurant.ingredients.view'), validate({ query: v.expiringQuery }), c.expiring);
 router.get('/ingredients/replenishment', rcp, P('restaurant.ingredients.view'), validate({ query: v.branchQ }), c.replenishment);
 router.post('/ingredients/receive', rcp, P('restaurant.ingredients.receive'), validate({ body: v.receiveBody }), requireBranchAccess, idempotent('POST /restaurant/ingredients/receive'), c.receive);
@@ -177,6 +183,7 @@ router.get('/reports/staff', P('restaurant.reports.staff'), validate({ query: v.
 router.get('/reports/waste', P('restaurant.reports.view'), validate({ query: v.rangeQ }), c.repWaste);
 router.get('/reports/stock-variance', P('restaurant.reports.view'), validate({ query: v.rangeQ }), c.repVariance);
 router.get('/reports/reconciliation', P('restaurant.reports.view'), validate({ query: v.rangeQ }), c.repReconciliation);
+router.get('/reports/profit-loss', P('restaurant.reports.view'), validate({ query: v.rangeQ }), c.repProfitLoss);   // needs reports.profit too
 router.get('/reports/delivery', P('restaurant.reports.view'), validate({ query: v.rangeQ }), c.repDelivery);
 
 // ---- guest QR ordering (staff side): orders waiting for acceptance, "call waiter" requests, QR codes

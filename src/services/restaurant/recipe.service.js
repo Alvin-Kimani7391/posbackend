@@ -15,8 +15,9 @@ async function costMapFor(businessId, ingredientIds, session) {
 
 const current = (businessId, menuItemId, session) => C.withSession(Recipe.findOne({ businessId, menuItemId, isCurrent: true }), session);
 
-async function createVersion(businessId, userId, { menuItemId, lines, yieldPortions = 1, changeNote }) {
-  return C.inTx(async (session) => {
+/** Saves a new recipe version INSIDE the caller's transaction (menu.service uses it to save a dish and its recipe together). */
+async function createVersionIn(session, businessId, userId, { menuItemId, lines, yieldPortions = 1, changeNote }) {
+  {
     const item = await MenuItem.findOne({ _id: menuItemId, businessId }).session(session);
     if (!item) throw ApiError.notFound('Menu item not found', 'MENU_ITEM_NOT_FOUND');
     if (item.stockMode === 'PRODUCT') throw ApiError.badRequest('This item deducts a stocked product, not ingredients. Change its stock mode first.', 'STOCK_MODE_PRODUCT');
@@ -39,7 +40,18 @@ async function createVersion(businessId, userId, { menuItemId, lines, yieldPorti
     await MenuItem.updateOne({ _id: item._id }, { $set: upd }, { session });
     await C.audit({ businessId, userId, action: 'recipe.version', entityType: 'MenuItem', entityId: item._id, newValue: { version: recipe.version, costPerPortion: cost } }, session);
     return recipe;
-  });
+  }
+}
+
+const createVersion = (businessId, userId, input) => C.inTx((session) => createVersionIn(session, businessId, userId, input));
+
+/** Takes the recipe off a dish (it stops deducting ingredients). Old versions stay for history; orders already placed keep their version. */
+async function clearRecipe(businessId, userId, menuItemId, session) {
+  const item = await MenuItem.findOne({ _id: menuItemId, businessId }).session(session);
+  if (!item || item.stockMode !== 'RECIPE') return;
+  await Recipe.updateMany({ businessId, menuItemId, isCurrent: true }, { $set: { isCurrent: false } }, { session });
+  await MenuItem.updateOne({ _id: item._id }, { $set: { stockMode: 'NONE', costCents: 0 } }, { session });
+  await C.audit({ businessId, userId, action: 'recipe.clear', entityType: 'MenuItem', entityId: item._id }, session);
 }
 
 async function history(businessId, menuItemId) {
@@ -81,4 +93,4 @@ async function refreshCosts(businessId, ingredientIds) {
   return recipes.length;
 }
 
-module.exports = { createVersion, current, history, costBreakdown, refreshCosts, costMapFor };
+module.exports = { createVersion, createVersionIn, clearRecipe, current, history, costBreakdown, refreshCosts, costMapFor };

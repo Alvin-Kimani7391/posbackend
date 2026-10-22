@@ -12,6 +12,9 @@ const bills = require('../services/restaurant/bill.service');
 const resv = require('../services/restaurant/reservation.service');
 const staff = require('../services/restaurant/staff.service');
 const reports = require('../services/restaurant/report.service');
+const tracking = require('../services/restaurant/tracking.service');
+const batches = require('../services/restaurant/ingredientBatch.service');
+const pnl = require('../services/restaurant/pnl.service');
 
 /** h(status, message, fn) -> express handler. fn(req) returns the response `data` object. */
 const ApiError = require('../utils/ApiError');
@@ -48,7 +51,7 @@ module.exports = {
   updateGroup: h(200, 'Option group updated', async (r) => ({ group: await menu.updateGroup(b(r), u(r)._id, r.params.id, r.body) })),
   archiveGroup: h(200, 'Option group removed', async (r) => ({ group: await menu.archiveGroup(b(r), u(r)._id, r.params.id) })),
   listItems: h(200, 'Menu items fetched', async (r) => menu.listItems(b(r), r.query)),
-  getItem: h(200, 'Menu item fetched', async (r) => ({ item: await menu.getItem(b(r), r.params.id) })),
+  getItem: h(200, 'Menu item fetched', async (r) => ({ item: await menu.getItem(b(r), r.params.id), recipe: await recipes.current(b(r), r.params.id) })),
   createItem: h(201, 'Menu item created', async (r) => ({ item: await menu.createItem(b(r), u(r)._id, r.body) })),
   uploadItemImage: h(200, 'Image uploaded', async (r) => {
     if (!r.file || !r.file.path) throw ApiError.badRequest('Attach an image in the "image" field', 'NO_FILE');
@@ -83,6 +86,13 @@ module.exports = {
   cancelCount: h(200, 'Stock count cancelled', async (r) => ({ count: await ing.cancelCount(b(r), u(r), r.params.id) })),
   expiring: h(200, 'Expiring batches fetched', async (r) => ({ batches: await ing.expiringBatches(b(r), u(r), r.query) })),
   replenishment: h(200, 'Replenishment suggestions fetched', async (r) => ({ suggestions: await ing.replenishmentSuggestions(b(r), u(r), r.query) })),
+  // tracking switch, batches, expiry
+  getTracking: h(200, 'Tracking status fetched', async (r) => ({ tracking: await tracking.getStatus(b(r)) })),
+  setTracking: h(200, 'Tracking updated', async (r) => ({ tracking: await tracking.setTracking(b(r), u(r)._id, r.body) })),
+  listBatches: h(200, 'Ingredient batches fetched', async (r) => batches.listBatches(b(r), u(r), r.query)),
+  expirySummary: h(200, 'Ingredient expiry summary fetched', async (r) => ({ summary: await batches.expirySummary(b(r), { branchId: r.query.branchId }) })),
+  disposeBatch: h(200, 'Batch closed', async (r) => ({ result: await batches.disposeBatch(b(r), u(r), r.params.id, r.body) })),
+  traceBatch: h(200, 'Batch trace fetched', async (r) => batches.trace(b(r), u(r), r.params.id)),
   // orders
   createOrder: h(201, 'Order opened', async (r) => orders.createOrder(b(r), u(r), r.body)),
   listOrders: h(200, 'Orders fetched', async (r) => orders.listOrders(b(r), u(r), r.query)),
@@ -176,5 +186,6 @@ module.exports = {
   repWaste: h(200, 'Waste report fetched', async (r) => reports.waste(b(r), u(r), r.query)),
   repVariance: h(200, 'Stock variance fetched', async (r) => reports.stockVariance(b(r), u(r), r.query)),
   repReconciliation: h(200, 'Reconciliation fetched', async (r) => reports.reconciliation(b(r), u(r), r.query)),
+  repProfitLoss: h(200, 'Profit & loss fetched', async (r) => ({ report: await pnl.profitAndLoss(b(r), u(r), r.query) })),
   repDelivery: h(200, 'Delivery report fetched', async (r) => ({ rows: await reports.delivery(b(r), u(r), r.query) })),
 };

@@ -1,7 +1,8 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
-const EXPENSE_CATEGORIES = ['Rent', 'Electricity', 'Water', 'Transport', 'Salary', 'Packaging', 'Internet', 'Maintenance', 'Other'];
+const EXPENSE_CATEGORIES = ['Rent', 'Electricity', 'Water', 'Transport', 'Salary', 'Packaging', 'Internet', 'Maintenance', 'Other',
+  'Wages', 'Food Purchases', 'Gas & Fuel', 'Licences', 'Marketing', 'Cleaning', 'Insurance', 'Taxes'];
 
 const expenseSchema = new Schema(
   {
@@ -14,6 +15,8 @@ const expenseSchema = new Schema(
 
     paymentMethod: { type: String, enum: ['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER'], default: 'CASH' },
     reference: { type: String, trim: true },
+    employeeId: { type: Schema.Types.ObjectId, ref: 'User' },   // salary / wages: who was paid
+    payPeriod: { type: String, trim: true },                    // salary / wages: e.g. "2026-10"
     receiptImage: { type: String },
 
     expenseDate: { type: Date, default: Date.now },

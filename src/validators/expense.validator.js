@@ -12,6 +12,8 @@ const createExpenseSchema = z.object({
   description: z.string().trim().optional(),
   paymentMethod: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']).optional().default('CASH'),
   reference: z.string().trim().optional(),
+  employeeId: objectId.optional(),
+  payPeriod: z.string().trim().regex(/^\d{4}-\d{2}$/, 'Use YYYY-MM').optional(),
   receiptImage: z.string().trim().optional(),
   expenseDate: z.coerce.date().optional(),
 });

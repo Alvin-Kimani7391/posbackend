@@ -68,6 +68,15 @@ const restaurantSettingsSchema = new Schema({
     expiryMinutes: { type: Number, default: 30, min: 5, max: 240 },    // an unpaid order is cancelled and its table freed after this long
     welcomeMessage: { type: String, trim: true, maxlength: 300 },
   },
+  // Ingredient tracking by recipe. ON/OFF is the business feature flag `recipeManagement` (every recipe/ingredient route and the order flow obey it);
+  // these are the owner's choices for HOW it behaves. See services/restaurant/tracking.service.js.
+  tracking: {
+    autoWriteOffExpired: { type: Boolean, default: true },        // hourly job writes expired batches off as waste; off = they stay listed until a manager disposes of them
+    targetFoodCostPercent: { type: Number, default: 35, min: 1, max: 100 },
+    expiryCriticalDays: { type: Number, default: 3, min: 0, max: 365 },   // ingredient batches: "act now" window
+    expiryWarningDays: { type: Number, default: 7, min: 1, max: 365 },    // ingredient batches: "plan ahead" window
+    costBasis: { type: String, enum: ['AUTO', 'RECIPE', 'PURCHASES'], default: 'AUTO' }, // how the profit & loss counts food cost
+  },
   stockDepletionEvent: { type: String, enum: STOCK_DEPLETION_EVENTS, default: 'ON_SEND' },
   stockLocations: { type: String, enum: ['SINGLE', 'MULTI'], default: 'SINGLE' }, // SINGLE: one store; MULTI: store + kitchen + bar
   allowNegativeIngredients: { type: Boolean, default: true },   // a missing ingredient record must never stop a customer being served
