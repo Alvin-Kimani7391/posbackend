@@ -348,6 +348,7 @@ async function pay(businessId, user, id, { payments, customerId }) {
     return { bill, sale: settled?.sale, receipt: settled?.receipt, change: payments.some((p) => p.method === 'CASH') ? docs.filter((d) => d.method === 'CASH').reduce((s, d) => s + (d.changeGiven || 0), 0) : 0 };
   }).catch((e) => { throw bErr(e); });
   afterSettle(businessId, out.sale, out.bill);
+  if (user && user.isGuestActor) require('../cashier/cashier.service').onGuestBillPaid(businessId, out.bill).catch((e) => console.error('[cashier] receipt queue failed', e.message));   // QR / kiosk / online M-PESA: the receipt prints at the cashier by itself
   return out;
 }
 

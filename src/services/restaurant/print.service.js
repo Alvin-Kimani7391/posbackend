@@ -30,8 +30,12 @@ async function enqueueKot(order, tickets, { session, tz } = {}) {
   } catch (e) { console.error('[print] could not queue kitchen ticket:', e.message); }
 }
 
-async function enqueueReceipt(businessId, branchId, doc, refId, title) {
-  try { await PrintJob.create({ businessId, branchId, target: 'CASHIER', kind: 'RECEIPT', title, doc, refId }); } catch (e) { console.error('[print] could not queue receipt:', e.message); }
+/** One paid receipt per bill: the guest-payment path and the cashier dashboard may both ask, the second request is a no-op. `force` = an explicit reprint. */
+async function enqueueReceipt(businessId, branchId, doc, refId, title, { force = false } = {}) {
+  try {
+    if (!force && refId && await PrintJob.exists({ businessId, target: 'CASHIER', kind: 'RECEIPT', refId, title: /^Receipt / })) return;
+    await PrintJob.create({ businessId, branchId, target: 'CASHIER', kind: 'RECEIPT', title, doc, refId });
+  } catch (e) { console.error('[print] could not queue receipt:', e.message); }
 }
 
 /** Staff device asks for work. Claims atomically so two devices never print the same ticket; a claim not confirmed in 60 s is offered again. */

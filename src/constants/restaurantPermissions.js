@@ -14,6 +14,8 @@ const RESTAURANT_PERMISSIONS = Object.freeze([
   'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.pay', 'restaurant.bills.split',
   'restaurant.bills.credit', 'restaurant.bills.close_unpaid', 'restaurant.bills.reopen', 'restaurant.bills.refund', 'restaurant.bills.waive_service_charge',
   'restaurant.payments.verify',
+  // cashier dashboard (routes/cashier.routes.js also restricts it to OWNER / MANAGER / CASHIER by role)
+  'cashier.view', 'cashier.drawer',
   'restaurant.kitchen.view', 'restaurant.kitchen.update', 'restaurant.kitchen.manage', 'restaurant.kitchen.expedite',
   'restaurant.recipes.view', 'restaurant.recipes.manage',
   'restaurant.ingredients.view', 'restaurant.ingredients.manage', 'restaurant.ingredients.receive',
@@ -47,6 +49,7 @@ const ROLE_GRANTS = {
     'restaurant.reservations.view', 'restaurant.tips.view', 'restaurant.delivery.view',
     'restaurant.guest.view', 'restaurant.guest.respond',
     'accommodation.rooms.view', 'accommodation.stays.view', 'accommodation.folio.pay',
+    'cashier.view', 'cashier.drawer',
   ],
   [ROLES.STOREKEEPER]: [
     'restaurant.menu.view', 'restaurant.recipes.view', 'restaurant.ingredients.view', 'restaurant.ingredients.manage',

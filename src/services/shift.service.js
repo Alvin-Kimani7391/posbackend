@@ -1,5 +1,6 @@
 const CashShift = require('../models/CashShift');
 const CashRegister = require('../models/CashRegister');
+const CashDrawerEvent = require('../models/CashDrawerEvent');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
@@ -119,7 +120,9 @@ async function closeShift(businessId, userId, id, { denominations, actualCash, n
     .populate('saleId', 'receiptNumber');
   const cashTotal = cashPayments.reduce((sum, p) => sum + p.amount, 0);
 
-  const expectedCash = shift.openingCash + cashTotal;
+  // Cash put in / paid out / dropped to the safe from the cashier dashboard (CashDrawerEvent) changes what should be in the drawer.
+  const drawerMovements = await CashDrawerEvent.netForShift(shift._id);
+  const expectedCash = shift.openingCash + cashTotal + drawerMovements;
   const cashDifference = countedCents - expectedCash;
 
   shift.closingCash = expectedCash;
