@@ -281,7 +281,7 @@ async function sendOrder(businessId, user, id, { expectedVersion } = {}) {
     const order = await C.loadOrder(businessId, id, session);
     C.assertOrderAccess(user, order, { write: true }); C.assertOpen(order); C.checkVersion(order, expectedVersion);
     const sent = await sendDrafts(order, ctx, user, session);
-    if (sent.changed.length || order.items.some((i) => i.status === 'HELD' && i.sentAt)) { C.touch(order, user._id, 'order.send', `${sent.changed.length} item(s) sent`); await order.save({ session }); }
+    if (sent.changed.length || order.items.some((i) => i.status === 'HELD' && i.sentAt)) { C.recalcOrder(order, ctx); C.touch(order, user._id, 'order.send', `${sent.changed.length} item(s) sent`); await order.save({ session }); }   // totals now include what was just sent
     return { order, tickets: sent.tickets, sent: sent.changed.length };
   });
 }

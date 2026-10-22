@@ -34,6 +34,8 @@ const reservations = require('../restaurant/reservation.service');
 const stays = require('../hospitality/stay.service');
 const folio = require('../hospitality/folio.service');
 const mpesa = require('../mpesa.service');
+const RC = require('../restaurant/common');
+const B = require('../../utils/restaurantBilling');
 
 const HOLD_MIN = 15;            // how long an unpaid order / table is held while the customer pays
 const STAY_HOLD_MIN = 30;       // same for a room deposit
@@ -59,6 +61,17 @@ const notify = (r, branch, roles, title, message, entityType, entityId) => {
   C.notifyRoles(r.businessId, branch._id || branch, roles, payload);
   try { require('../notification.service').notifyManagement(r.businessId, { ...payload, branchId: branch._id || branch }).catch(() => {}); } catch (e) { /* best effort */ }
 };
+
+/**
+ * What the customer really owes for an online order. Items that are waiting for payment are DRAFT until the money is in, and the order's stored
+ * totals (and the POS) ignore drafts - which used to make every pay-first order show "nothing is due" / pay 0 (only the delivery fee was counted).
+ * Everything not cancelled counts here, so the amount asked from the customer is the same as the bill the till will produce.
+ */
+function liveTotalsSync(o, rc) {
+  const lines = (o.items || []).filter((i) => i.status !== 'CANCELLED' && !i.parentItemId).map((i) => B.buildLine(i, rc.taxInclusive));
+  return B.billTotals(lines, RC.scConfig(rc.settings, o.orderType));
+}
+async function liveTotals(o, rc) { return liveTotalsSync(o, rc || await RC.getContext(o.businessId)); }
 
 // ------------------------------------------------------------------ context + menu
 async function mpesaOn(businessId) {
@@ -134,37 +147,41 @@ async function placeDelivery(token, body, account) {
   try {
     const raw = body.items.map((i, k) => ({ menuItemId: i.menuItemId, quantity: i.quantity, variantId: i.variantId, modifiers: i.modifiers, comboPicks: i.comboPicks, notes: i.notes, clientItemId: `web-${order._id}-${k}` }));
     const res = await orders.addItems(r.businessId, actor, order._id, { items: raw, sendNow: false });
-    const itemsTotal = (res.order.totals && res.order.totals.itemsTotal) || 0;
-    if (d.minOrderCents && itemsTotal < d.minOrderCents) throw ApiError.badRequest(`The minimum delivery order is KSh ${(d.minOrderCents / 100).toFixed(0)}.`, 'BELOW_MINIMUM');
+    const rc = await RC.getContext(r.businessId);
+    const lt = liveTotalsSync(res.order, rc);
+    const foodTotal = lt.itemsTotal - (terms.feeCents || 0);          // the minimum order is about the food, not the delivery fee
+    if (d.minOrderCents && foodTotal < d.minOrderCents) throw ApiError.badRequest(`The minimum delivery order is KSh ${(d.minOrderCents / 100).toFixed(0)}.`, 'BELOW_MINIMUM');
     const prep = (await MenuItem.find({ _id: { $in: body.items.map((i) => i.menuItemId) } }).select('prepMinutes')).map((x) => x.prepMinutes || 0);
     const eta = S.etaMinutes(d, { prepMinutes: prep, distanceKm: terms.distanceKm });
-    await RestaurantOrder.updateOne({ _id: order._id }, { $set: { 'delivery.etaMinutes': eta } });
-    const total = (await RestaurantOrder.findById(order._id).select('totals')).totals.total;
+    const total = lt.total;
+    if (!(total > 0)) throw ApiError.badRequest('Your order total could not be worked out. Please check your items and try again.', 'ORDER_TOTAL_ZERO');
+    await RestaurantOrder.updateOne({ _id: order._id }, { $set: { 'delivery.etaMinutes': eta, totals: { itemsTotal: lt.itemsTotal, serviceCharge: lt.serviceCharge, tax: lt.tax, total: lt.total, discount: lt.discount } } });
     sb = await StoreBooking.create({ businessId: r.businessId, accountId: account && account._id, kind: 'ORDER', refId: order._id, reference: trackKey, phone, payState: method === 'MPESA' ? 'AWAITING' : 'COD', amountDue: method === 'MPESA' ? total : 0, payBy: method === 'MPESA' ? new Date(Date.now() + HOLD_MIN * 60000) : undefined });
     // M-PESA: the kitchen starts only once the money is in (see settle). Cash on delivery: as before.
     if (method === 'CASH' && (d.mode || 'AUTO') === 'AUTO') await orders.sendOrder(r.businessId, actor, order._id, {});
   } catch (e) { await RestaurantOrder.deleteOne({ _id: order._id, status: 'OPEN' }); if (sb) await StoreBooking.deleteOne({ _id: sb._id }); throw e; }   // nothing half-made is left on the POS
   const fresh = await RestaurantOrder.findById(order._id);
   if (method === 'CASH') notify(r, b, [...STAFF, 'RECEPTIONIST'], `New delivery order ${fresh.orderNumber}`, `${body.name} (${phone}) - ${body.address}. Cash on delivery. Open Delivery to ${(d.mode || 'AUTO') === 'AUTO' ? 'assign a rider' : 'confirm and send it to the kitchen'}.`, 'RestaurantOrder', fresh._id);
-  return trackView(fresh, sb);
+  return trackView(fresh, sb, await RC.getContext(r.businessId));
 }
 
-function trackView(o, sb) {
+function trackView(o, sb, rc) {
   const dl = o.delivery || {}; const live = o.items.filter((i) => i.status !== 'CANCELLED' && !i.parentItemId);
   const drafts = live.length && live.every((i) => i.status === 'DRAFT');
   const kitchen = G.stageOf(o);
   const awaiting = !!sb && sb.payState === 'AWAITING';
   const stage = o.status === 'CANCELLED' ? 'CANCELLED' : awaiting ? 'AWAITING_PAYMENT' : dl.status === 'DELIVERED' ? 'DELIVERED' : dl.status === 'OUT_FOR_DELIVERY' ? 'ON_THE_WAY' : dl.status === 'FAILED' ? 'FAILED' : drafts ? 'RECEIVED' : kitchen === 'READY' || kitchen === 'SERVED' ? 'READY' : kitchen === 'PREPARING' ? 'PREPARING' : kitchen === 'CONFIRMED' ? 'CONFIRMED' : 'RECEIVED';
   const state = sb ? sb.payState : (dl.payment === 'MPESA' ? 'PAID' : 'COD');
+  const owed = rc ? liveTotalsSync(o, rc).total : (o.totals && o.totals.total);
   return {
     trackKey: dl.trackKey, orderNumber: o.orderNumber, stage, placedAt: o.createdAt, etaMinutes: dl.etaMinutes, address: dl.address, payment: dl.payment || 'CASH',
-    pay: { method: dl.payment || 'CASH', state, amountDue: money(sb ? sb.amountDue : 0), payBy: sb && sb.payBy, receiptRef: sb && sb.receiptRef || null },
-    rider: dl.riderName ? { name: dl.riderName } : null, deliveredAt: dl.deliveredAt, failReason: dl.failReason, total: money(o.totals && o.totals.total),
+    pay: { method: dl.payment || 'CASH', state, amountDue: money(awaiting ? owed : (sb ? sb.amountDue : 0)), payBy: sb && sb.payBy, receiptRef: sb && sb.receiptRef || null },
+    rider: dl.riderName ? { name: dl.riderName } : null, deliveredAt: dl.deliveredAt, failReason: dl.failReason, total: money(owed),
     items: live.map((i) => ({ name: i.name, quantity: i.quantity, total: money(i.total != null ? i.total : (i.unitPrice || 0) * i.quantity) })),
     message: ({ AWAITING_PAYMENT: 'Waiting for your M-PESA payment. Your order is held for a few minutes.', RECEIVED: 'We have your order.', CONFIRMED: 'Your order is confirmed.', PREPARING: 'The kitchen is preparing your food.', READY: 'Your food is ready and waiting for the rider.', ON_THE_WAY: 'Your rider is on the way.', DELIVERED: 'Delivered. Enjoy your meal!', CANCELLED: state === 'EXPIRED' ? 'This order was released because it was not paid in time.' : 'This order was cancelled.', FAILED: 'We could not deliver this order. Please call us.' })[stage],
   };
 }
-const trackFull = async (o) => trackView(o, await StoreBooking.findOne({ businessId: o.businessId, kind: 'ORDER', refId: o._id }));
+const trackFull = async (o) => trackView(o, await StoreBooking.findOne({ businessId: o.businessId, kind: 'ORDER', refId: o._id }), await RC.getContext(o.businessId));
 async function track(token, trackKey) {
   const r = await open(token);
   const o = await RestaurantOrder.findOne({ businessId: r.businessId, 'delivery.trackKey': String(trackKey) });
@@ -180,7 +197,8 @@ async function orderPayStart(token, trackKey, { payerPhone }) {
   if (!o || !sb) throw ApiError.notFound('We could not find that order.', 'ORDER_NOT_FOUND');
   if (sb.payState === 'PAID') throw ApiError.conflict('This order is already paid.', 'ALREADY_PAID');
   if (sb.payState !== 'AWAITING' || o.status === 'CANCELLED') throw ApiError.conflict('This order is no longer waiting for payment. Please place it again.', 'NOT_PAYABLE');
-  const amount = (o.totals && o.totals.total) || 0; if (!(amount > 0)) throw ApiError.conflict('Nothing is due.', 'NOTHING_TO_PAY');
+  const amount = (await liveTotals(o)).total || 0; if (!(amount > 0)) throw ApiError.conflict('Nothing is due.', 'NOTHING_TO_PAY');
+  if (sb.amountDue !== amount) await StoreBooking.updateOne({ _id: sb._id }, { $set: { amountDue: amount } });     // heals orders saved with a wrong amount
   const again = await MpesaTransaction.findOne({ businessId: bid, 'storePay.refId': o._id, status: 'PENDING', createdAt: { $gt: new Date(Date.now() - 90000) } });
   if (again && again.amount === amount) return { reference: again.reference, amount: money(amount), reused: true };
   const actor = await C.guestActor(bid);
@@ -363,12 +381,73 @@ async function receipt(token, req, reference) {
   const q = a ? { businessId: r.businessId, accountId: a._id, reference } : null;
   let rc = q && await GuestReceipt.findOne(q);
   if (!rc) {
-    const phone = req.query && req.query.phone; const txn = await MpesaTransaction.findOne({ businessId: r.businessId, reference });
-    if (!txn || !txn.storePay || !txn.storePay.kind || !phone || S.last4(txn.phone) !== S.last4(phone)) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
-    rc = await GuestReceipt.findOne({ businessId: r.businessId, reference });
-    if (!rc) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
+    const phone = req.query && req.query.phone;
+    if (/^(BILL|DESK)-/.test(reference)) {      // paid at the till / to the rider: found with the phone number the order was placed with
+      rc = await GuestReceipt.findOne({ businessId: r.businessId, reference });
+      if (!rc || !phone || !rc.snapshot || S.last4(rc.snapshot.phone) !== S.last4(phone)) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
+    } else {
+      const txn = await MpesaTransaction.findOne({ businessId: r.businessId, reference });
+      if (!txn || !txn.storePay || !txn.storePay.kind || !phone || S.last4(txn.phone) !== S.last4(phone)) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
+      rc = await GuestReceipt.findOne({ businessId: r.businessId, reference });
+      if (!rc) throw ApiError.notFound('Receipt not found', 'RECEIPT_NOT_FOUND');
+    }
   }
   return rc.snapshot;
+}
+
+// ---- payments taken by STAFF (cashier till, rider, front desk): the customer's profile gets the receipt and shows PAID
+const PAY_LABEL = { CASH: 'Cash', MPESA: 'M-PESA', MOBILE_MONEY: 'Mobile money', CARD: 'Card', BANK: 'Bank transfer' };
+const payLine = (p) => ({ method: PAY_LABEL[p.method] || p.method, amount: money(p.amount), reference: p.reference });
+async function businessHead(businessId) {
+  const ctx = await C.getContext(businessId); const b = ctx.business; const rs = b.receiptSettings || {};
+  return { currency: b.currency, business: { name: b.name, address: b.address, phone: b.phone, taxPin: b.kraPin || b.taxPin, logo: rs.showLogo ? b.logo : undefined }, footer: rs.footerMessage || 'Thank you for choosing us!' };
+}
+async function saveDeskBillReceipt(sb, bill) {
+  const pays = (bill.payments || []).filter((p) => p.kind === 'PAYMENT'); const mp = pays.find((p) => p.method === 'MPESA');
+  const reference = `BILL-${bill._id}-${sb.accountId || sb._id}`; const head = await businessHead(sb.businessId);
+  const o = await RestaurantOrder.findById(bill.orderId).select('orderNumber');
+  const rc = { ...head, place: `Delivery ${(o && o.orderNumber) || bill.orderNumber || ''}`.trim(), mpesaReceipt: (mp && mp.reference) || null, phone: sb.phone, kind: 'ORDER', paid: true, paidAtDesk: true, title: 'Receipt',
+    number: bill.receiptNumber || bill.billNumber, billNumber: bill.billNumber, date: bill.settledAt || new Date(),
+    lines: bill.lines.filter((l) => !l.isComp).map((l) => ({ name: [l.name, l.variantName && `(${l.variantName})`].filter(Boolean).join(' '), note: l.modifiersText, quantity: l.quantity, total: money(l.total) })),
+    itemsTotal: money(bill.itemsTotal), discount: money(bill.discount), serviceCharge: money(bill.serviceCharge), tax: money(bill.tax), total: money(bill.total), paidAmount: money(bill.paid), balance: money(bill.balance), payments: pays.map(payLine) };
+  await GuestReceipt.updateOne({ businessId: sb.businessId, reference }, { $setOnInsert: { businessId: sb.businessId, reference, accountId: sb.accountId, placeKey: String(sb.businessId), kind: 'ORDER', number: rc.number, total: rc.total, paidAmount: rc.paidAmount, paid: true, snapshot: rc } }, { upsert: true });
+  return reference;
+}
+/** Called when a restaurant bill becomes PAID (cash at the till, cash given to the rider, card, till number...). Idempotent. */
+async function onBillPaid(bill) {
+  try {
+    if (!bill || bill.status !== 'PAID') return;
+    const sb = await StoreBooking.findOne({ businessId: bill.businessId, kind: 'ORDER', refId: bill.orderId }); if (!sb) return;
+    const pays = (bill.payments || []).filter((p) => p.kind === 'PAYMENT'); const refs = pays.map((p) => p.reference).filter(Boolean);
+    if (refs.length && await MpesaTransaction.exists({ businessId: bill.businessId, reference: { $in: refs }, 'storePay.kind': 'ORDER' })) return;   // paid with the storefront STK push: settle() makes that receipt
+    const reference = await saveDeskBillReceipt(sb, bill);
+    const open = await RestaurantBill.exists({ orderId: bill.orderId, status: { $in: ['OPEN', 'PARTIAL'] } });
+    const set = { receiptRef: reference }; if (!open) { set.payState = 'PAID'; set.amountDue = 0; }
+    await StoreBooking.updateOne({ _id: sb._id, payState: { $in: ['COD', 'AWAITING', 'NONE', 'PAID'] } }, { $set: set });
+  } catch (e) { console.error('[storefront] could not save desk receipt:', e.message); }
+}
+/** A table deposit or room deposit recorded by staff (cash / till). method, amount (cents), reference. */
+async function onDeskPayment(kind, doc, { method, amount, reference }) {
+  try {
+    const bid = doc.businessId; const sb = await StoreBooking.findOne({ businessId: bid, kind, refId: doc._id }); if (!sb) return;
+    if (method === 'MPESA' && await MpesaTransaction.exists({ businessId: bid, 'storePay.refId': doc._id, status: 'SUCCESS' })) return;     // storefront STK push: settle() handles it
+    const fresh = kind === 'STAY' ? await Stay.findById(doc._id) : await Reservation.findById(doc._id); if (!fresh) return;
+    const done = kind === 'STAY' ? paidDeposit(fresh) >= (fresh.depositRequired || 0) : !!(fresh.deposit && fresh.deposit.paid);
+    const ref = `DESK-${doc._id}-${sb.accountId || sb._id}`; const head = await businessHead(bid);
+    const stayLine = kind === 'STAY' ? `Room deposit - booking ${fresh.bookingCode}` : `${fresh.preOrder && fresh.preOrder.length ? 'Pre-ordered food' : 'Table deposit'} - ${fresh.reservationNumber}`;
+    const rc = { ...head, phone: sb.phone, kind, paid: true, paidAtDesk: true, title: kind === 'STAY' ? 'Deposit receipt' : 'Table booking receipt', number: `DEP-${sb.reference}`, date: new Date(),
+      place: kind === 'STAY' ? `${fresh.roomTypeName} ${fresh.checkInDate} to ${fresh.checkOutDate}` : 'Table booking', lines: [{ name: stayLine, quantity: 1, total: money(amount) }], total: money(amount), paidAmount: money(amount), balance: 0, payments: [payLine({ method, amount, reference })] };
+    await GuestReceipt.updateOne({ businessId: bid, reference: ref }, { $setOnInsert: { businessId: bid, reference: ref, accountId: sb.accountId, placeKey: String(bid), kind, number: rc.number, total: rc.total, paidAmount: rc.paidAmount, paid: true, snapshot: rc } }, { upsert: true });
+    const set = { receiptRef: ref }; if (done) { set.payState = 'PAID'; set.amountDue = 0; }
+    await StoreBooking.updateOne({ _id: sb._id, payState: { $in: ['AWAITING', 'NONE', 'COD', 'PAID'] } }, { $set: set });
+  } catch (e) { console.error('[storefront] could not save desk deposit receipt:', e.message); }
+}
+/** For the signed-in customer: orders already paid at the till / to the rider (before this fix) get their receipt now. Idempotent. */
+async function backfillDesk(businessId, account) {
+  try {
+    const sbs = await StoreBooking.find({ businessId, accountId: account._id, kind: 'ORDER', payState: { $in: ['COD', 'AWAITING'] } }).sort({ createdAt: -1 }).limit(30);
+    for (const sb of sbs) { const paid = await RestaurantBill.find({ orderId: sb.refId, status: 'PAID' }); for (const b of paid) await onBillPaid(b); }
+  } catch (e) { console.error('[storefront] desk backfill failed:', e.message); }
 }
 
 // ---- settle once the money is in
@@ -418,13 +497,14 @@ async function depositStatus(token, reference) {
 // ---- the customer's account: everything they placed, with receipts
 async function history(token, req) {
   const r = await open(token); const a = await acct.fromRequest(req, r.businessId); if (!a) throw ApiError.unauthorized('Please sign in to continue', 'GUEST_AUTH_REQUIRED');
+  await backfillDesk(r.businessId, a);       // cash taken by a cashier / rider before this fix still gets its receipt
   const sbs = await StoreBooking.find({ businessId: r.businessId, accountId: a._id }).sort({ createdAt: -1 }).limit(80);
   const ids = (k) => sbs.filter((x) => x.kind === k).map((x) => x.refId); const by = (arr) => new Map(arr.map((d) => [String(d._id), d]));
   const [os, rs, ss, rc] = await Promise.all([RestaurantOrder.find({ _id: { $in: ids('ORDER') } }), Reservation.find({ _id: { $in: ids('RESERVATION') } }), Stay.find({ _id: { $in: ids('STAY') } }),
     GuestReceipt.find({ businessId: r.businessId, accountId: a._id }).sort({ createdAt: -1 }).limit(60).select('reference number total paidAmount kind createdAt snapshot.place')]);
-  const om = by(os); const rm = by(rs); const sm = by(ss); const orders = []; const reservationsOut = []; const staysOut = [];
+  const rcx = await RC.getContext(r.businessId); const om = by(os); const rm = by(rs); const sm = by(ss); const orders = []; const reservationsOut = []; const staysOut = [];
   for (const sb of sbs) {
-    if (sb.kind === 'ORDER' && om.get(String(sb.refId))) orders.push({ ...trackView(om.get(String(sb.refId)), sb), at: sb.createdAt });
+    if (sb.kind === 'ORDER' && om.get(String(sb.refId))) orders.push({ ...trackView(om.get(String(sb.refId)), sb, rcx), at: sb.createdAt });
     else if (sb.kind === 'RESERVATION' && rm.get(String(sb.refId))) reservationsOut.push({ ...(await resFull(rm.get(String(sb.refId)))), at: sb.createdAt });
     else if (sb.kind === 'STAY' && sm.get(String(sb.refId))) staysOut.push({ ...stayView(sm.get(String(sb.refId)), sb), at: sb.createdAt });
   }
@@ -453,4 +533,4 @@ async function sweep() {
   await expireUnpaid();
 }
 
-module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep };
+module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment };

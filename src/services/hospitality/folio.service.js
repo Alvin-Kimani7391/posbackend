@@ -151,7 +151,7 @@ const openShift = (businessId, branchId, userId, session) => CashShift.findOne({
 /** Deposit or part-payment while the guest is staying (or before they arrive). */
 async function addPayment(businessId, user, id, { kind = 'PAYMENT', ...p }) {
   C.requireCan(user, 'accommodation.folio.pay', 'Taking a payment needs permission');
-  return C.inTx(async (session) => {
+  const out = await C.inTx(async (session) => {
     const ctx = await C.getAccContext(businessId, session);
     const stay = await loadStay(businessId, id, session); C.assertBranchAccess(user, stay.branchId);
     if (!['RESERVED', 'CHECKED_IN'].includes(stay.status)) throw ApiError.conflict('This stay is closed', 'STAY_CLOSED');
@@ -163,6 +163,8 @@ async function addPayment(businessId, user, id, { kind = 'PAYMENT', ...p }) {
     await C.audit({ businessId, branchId: stay.branchId, userId: user._id, action: 'accommodation.folio.payment', entityType: 'Stay', entityId: stay._id, newValue: { kind, method: p.method, amount: p.amount } }, session);
     return { stay, payment: pay };
   });
+  if (kind === 'DEPOSIT') require('../storefront/storefront.service').onDeskPayment('STAY', out.stay, { method: p.method, amount: p.amount, reference: p.reference }).catch(() => {});     // online room booking: receipt + PAID in the customer's profile
+  return out;
 }
 
 async function stayForPush(businessId, user, id) {

@@ -421,6 +421,7 @@ async function settle({ bill, order, ctx, user, session, shift }) {
 
 /** After commit: CRM capture, eTIMS submit, credit notifications. Never throws. */
 function afterSettle(businessId, sale, bill) {
+  if (bill && bill.status === 'PAID') require('../storefront/storefront.service').onBillPaid(bill).catch((e) => console.error('[storefront receipt] failed', e.message));   // online orders paid in cash / at the till: the customer's profile gets the e-receipt
   if (bill && bill.status === 'PAID') require('../hospitality/guest-portal.service').saveBillCopies(bill).catch((e) => console.error('[guest receipt] copy failed', e.message));   // signed-in QR guests keep an e-receipt even when the cashier took the payment
   if (!sale) return;
   try { require('../crm.service').onSaleCompleted(businessId, sale._id); } catch (e) { console.error('[crm] capture hook failed', e.message); }

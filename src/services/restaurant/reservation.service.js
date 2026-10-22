@@ -89,7 +89,7 @@ async function setStatus(businessId, user, id, { status, reason }) {
 }
 
 async function recordDeposit(businessId, user, id, { method, amount, reference }) {
-  return C.inTx(async (session) => {
+  const saved = await C.inTx(async (session) => {
     const ctx = await C.getContext(businessId, session);
     const r = await load(businessId, id, session); C.assertBranchAccess(user, r.branchId);
     if (r.deposit.paid) throw ApiError.conflict('A deposit was already recorded', 'DEPOSIT_EXISTS');
@@ -104,6 +104,8 @@ async function recordDeposit(businessId, user, id, { method, amount, reference }
     await C.audit({ businessId, branchId: r.branchId, userId: user._id, action: 'restaurant.reservation.deposit', entityType: 'Reservation', entityId: r._id, newValue: { amount, method } }, session);
     return r;
   });
+  require('../storefront/storefront.service').onDeskPayment('RESERVATION', saved, { method, amount, reference }).catch(() => {});     // online booking: the customer's profile gets the receipt
+  return saved;
 }
 
 async function settleDeposit(businessId, user, id, { action, method, reason }) {
