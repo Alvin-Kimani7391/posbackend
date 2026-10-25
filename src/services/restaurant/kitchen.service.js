@@ -13,7 +13,7 @@ const mods = (i) => (i.modifiers || []).map((m) => (m.removal ? `NO ${m.name.rep
 const ticketItem = (i, extra = {}) => ({ orderItemId: i._id, name: i.name, variantName: i.variantName, quantity: i.quantity, modifiersText: mods(i), notes: i.notes, allergyNotes: i.allergyNotes, allergens: i.allergens, course: i.course, seatNumber: i.seatNumber, isComp: i.isComplimentary, parentItemId: i.parentItemId, status: i.status, prepMinutes: i.prepMinutes, ...extra });
 
 /** Creates one ticket per station for the given items and links the items to them. type: NEW | ADDITION | FIRE | AMENDMENT */
-async function createTickets(order, items, { type = 'NEW', ctx, session, notes }) {
+async function createTickets(order, items, { type = 'NEW', ctx, session, notes, silent = false }) {
   if (!items.length) return [];
   const stations = await C.ensureStations(order.businessId, order.branchId, session);
   const groups = new Map();
@@ -32,7 +32,7 @@ async function createTickets(order, items, { type = 'NEW', ctx, session, notes }
     for (const i of list) i.ticketId = t._id;
     out.push(t);
   }
-  if (type !== 'AMENDMENT') await require('./print.service').enqueueKot(order, out, { session, tz: ctx.timeZone });
+  if (type !== 'AMENDMENT' && !silent) await require('./print.service').enqueueKot(order, out, { session, tz: ctx.timeZone, ctx });
   return out;
 }
 
@@ -84,14 +84,14 @@ async function syncTicket(order, item, session) {
  * Kitchen / waiter moves one item along PENDING -> ACCEPTED -> PREPARING -> READY -> SERVED.
  * Stock depletion for ON_READY happens here, in the same transaction.
  */
-async function setItemStatus(businessId, user, orderId, itemId, status) {
+async function setItemStatus(businessId, user, orderId, itemId, status, { frontDesk = false } = {}) {
   const result = await C.inTx(async (session) => {
     const ctx = await C.getContext(businessId, session);
     const order = await C.loadOrder(businessId, orderId, session);
     C.assertBranchAccess(user, order.branchId);
     const item = order.items.id(itemId); if (!item) throw ApiError.notFound('Item not found', 'ITEM_NOT_FOUND');
     if (status === 'SERVED') { if (!C.can(user, 'restaurant.orders.create') && !C.can(user, 'restaurant.kitchen.update')) throw ApiError.forbidden('Not allowed', 'PERMISSION_DENIED'); if (C.can(user, 'restaurant.orders.create') && !C.can(user, 'restaurant.kitchen.update')) C.assertOrderAccess(user, order, { write: true }); }
-    else if (!C.can(user, 'restaurant.kitchen.update')) throw ApiError.forbidden('Missing permission: restaurant.kitchen.update', 'PERMISSION_DENIED');
+    else if (!C.can(user, 'restaurant.kitchen.update') && !(frontDesk && !ctx.ops.screen)) throw ApiError.forbidden('Missing permission: restaurant.kitchen.update', 'PERMISSION_DENIED');
     if (item.status === status) return { order, item, tickets: [], changed: false };      // replays are harmless
     if (!canTransition(item.status, status)) throw ApiError.conflict(`Item is ${item.status}; it cannot go to ${status}`, 'INVALID_ITEM_TRANSITION');
     const now = new Date();

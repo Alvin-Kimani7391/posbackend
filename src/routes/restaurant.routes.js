@@ -21,6 +21,9 @@ router.get('/storefront/qr', P('restaurant.guest.qr'), c.storeQr);
 router.post('/storefront/qr/rotate', P('restaurant.guest.qr'), c.storeQrRotate);
 router.get('/tracking', P('restaurant.settings.view'), c.getTracking);   // ingredient tracking on/off + setup progress (NOT behind the recipe gate: it is how you turn it on)
 router.put('/tracking', P('restaurant.settings.manage'), validate({ body: v.trackingBody }), c.setTracking);
+router.get('/operations', P('restaurant.settings.view'), validate({ query: v.operationsQuery }), c.getOperations);
+router.put('/operations', P('restaurant.settings.manage'), validate({ body: v.operationsBody }), c.updateOperations);
+router.get('/operations/plan', P('restaurant.menu.view'), c.getOperatingPlan);
 router.get('/settings', P('restaurant.settings.view'), c.getSettings);
 router.put('/settings', P('restaurant.settings.manage'), validate({ body: v.settingsSchema }), c.updateSettings);
 router.get('/areas', tbl, P('restaurant.tables.view'), validate({ query: v.branchQ }), c.listAreas);
@@ -97,6 +100,8 @@ router.post('/orders/:id/items/:itemId/cancel', P('restaurant.orders.create'), v
 router.post('/orders/:id/send', P('restaurant.orders.create'), validate({ ...id, body: v.versionBody }), c.sendOrder);
 router.post('/orders/:id/fire', P('restaurant.orders.create'), validate({ ...id, body: v.fireBody }), c.fireCourse);
 router.post('/orders/:id/serve', P('restaurant.orders.create'), validate({ ...id, body: v.serveBody }), c.serve);
+router.post('/orders/:id/ready', P('restaurant.orders.create'), validate({ ...id, body: v.markReadyBody }), c.markReady);
+router.post('/orders/:id/print/kitchen', P('restaurant.orders.create'), validate({ ...id, body: v.reasonBody.partial() }), c.reprintOrderKot);
 router.post('/orders/:id/comp', P('restaurant.orders.comp'), validate({ ...id, body: v.compBody }), c.comp);
 router.post('/orders/:id/transfer', P('restaurant.orders.manage'), validate({ ...id, body: v.transferBody2 }), c.transferOrder);
 router.post('/orders/:id/reassign', P('restaurant.orders.manage'), validate({ ...id, body: v.reassignBody }), c.reassign);
@@ -133,6 +138,7 @@ router.post('/bills/:id/service-charge', P('restaurant.bills.waive_service_charg
 router.post('/bills/:id/split', P('restaurant.bills.split'), validate({ ...id, body: v.splitBody }), c.splitBill);
 router.post('/bills/:id/move-items', P('restaurant.bills.split'), validate({ ...id, body: v.moveBody }), c.moveItems);
 router.post('/bills/:id/void', P('restaurant.bills.generate'), validate({ ...id, body: v.reasonBody }), c.voidBill);
+router.post('/bills/:id/print', P('restaurant.bills.view'), validate(id), c.reprintBill);
 router.post('/bills/:id/pay', P('restaurant.bills.pay'), validate({ ...id, body: v.payBody }), idempotent('POST /restaurant/bills/pay'), c.pay);
 router.post('/bills/:id/close', P('restaurant.bills.pay'), validate({ ...id, body: v.closeBillBody }), idempotent('POST /restaurant/bills/close'), c.closeBill);
 router.post('/bills/:id/tips', P('restaurant.bills.pay'), validate({ ...id, body: v.tipBody }), idempotent('POST /restaurant/bills/tips'), c.tip);

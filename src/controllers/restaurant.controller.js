@@ -15,6 +15,7 @@ const reports = require('../services/restaurant/report.service');
 const tracking = require('../services/restaurant/tracking.service');
 const batches = require('../services/restaurant/ingredientBatch.service');
 const pnl = require('../services/restaurant/pnl.service');
+const operations = require('../services/restaurant/operations.service');
 
 /** h(status, message, fn) -> express handler. fn(req) returns the response `data` object. */
 const ApiError = require('../utils/ApiError');
@@ -25,6 +26,12 @@ const qrSvc = require('../services/hospitality/qr.service');
 module.exports = {
   storeQr: h(200, 'Storefront QR fetched', async (r) => qrSvc.storeQr(b(r), u(r))),
   storeQrRotate: h(200, 'Storefront QR replaced', async (r) => qrSvc.rotateStore(b(r), u(r))),
+  getOperations: h(200, 'Restaurant set-up fetched', async (r) => operations.get(b(r), u(r), r.query)),
+  getOperatingPlan: h(200, 'Operating plan fetched', async (r) => ({ plan: await operations.getPlan(b(r)) })),
+  updateOperations: h(200, 'Restaurant set-up saved', async (r) => operations.update(b(r), u(r), r.body)),
+  markReady: h(200, 'Marked ready', async (r) => ({ order: await orders.markReady(b(r), u(r), r.params.id, r.body) })),
+  reprintOrderKot: h(200, 'Kitchen ticket reprinted', async (r) => prints.reprintOrderKot(b(r), u(r), r.params.id, r.body)),
+  reprintBill: h(200, 'Bill sent to the printer', async (r) => prints.reprintBill(b(r), u(r), r.params.id)),
   // settings, areas, stations
   getSettings: h(200, 'Restaurant settings fetched', async (r) => ({ settings: await settings.getSettings(b(r)) })),
   updateSettings: h(200, 'Restaurant settings updated', async (r) => ({ settings: await settings.updateSettings(b(r), u(r)._id, r.body) })),

@@ -14,6 +14,7 @@ const ApiError = require('../../utils/ApiError');
 const { hasPermission } = require('../../utils/permissionCheck');
 const { ROLES } = require('../../constants/roles');
 const { orderTotals } = require('../../utils/restaurantBilling');
+const { resolvePlan } = require('../../constants/operations');
 const notificationService = require('../notification.service');
 
 async function inTx(fn) {
@@ -35,9 +36,10 @@ async function getContext(businessId, session) {
   const business = await withSession(Business.findById(businessId), session);
   if (!business) throw ApiError.notFound('Business not found');
   const f = business.featureSettings || {};
+  const features = { ordering: f.restaurantOrdering === true, tables: f.tableManagement === true, kitchen: f.kitchenDisplay === true, recipes: f.recipeManagement === true, reservations: f.reservations === true, batches: f.batchTracking === true, guestQr: f.guestQrOrdering === true, accommodation: f.accommodation === true };
   return {
-    business, settings,
-    features: { ordering: f.restaurantOrdering === true, tables: f.tableManagement === true, kitchen: f.kitchenDisplay === true, recipes: f.recipeManagement === true, reservations: f.reservations === true, batches: f.batchTracking === true, guestQr: f.guestQrOrdering === true, accommodation: f.accommodation === true },
+    business, settings, features,
+    ops: resolvePlan(settings, features),
     timeZone: business.timezone || 'Africa/Nairobi',
     taxInclusive: business.taxSettings?.taxInclusive !== false,
     defaultTaxRate: business.vatRegistered ? (business.taxSettings?.defaultTaxRate ?? 0) : 0,

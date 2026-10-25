@@ -1,6 +1,7 @@
 const { Schema, model } = require('mongoose');
 const { ORDER_TYPES, STOCK_DEPLETION_EVENTS } = require('../constants/restaurant');
 const { SERVICE_MODES, GUEST_MODES } = require('../constants/hospitality');
+const { PRESET_IDS } = require('../constants/operations');
 
 /** One document per business. Everything the owner configures for the restaurant module lives here. */
 const restaurantSettingsSchema = new Schema({
@@ -15,6 +16,23 @@ const restaurantSettingsSchema = new Schema({
     enabled: { type: Boolean, default: true },
     mode: { type: String, enum: ['INDIVIDUAL', 'POOL'], default: 'INDIVIDUAL' }, // INDIVIDUAL = to the waiter on the order; POOL = shared among on-duty floor staff
     poolRoles: { type: [String], default: ['WAITER', 'HEAD_WAITER', 'BARTENDER'] },
+  },
+  // OPERATING PROFILE: devices the restaurant really has + how paper is used. configured:false = never set up = old behaviour.
+  operations: {
+    configured: { type: Boolean, default: false },
+    preset: { type: String, enum: PRESET_IDS, default: 'CUSTOM' },
+    devices: {
+      waiterTablet: { type: Boolean, default: false }, kitchenScreen: { type: Boolean, default: false }, kitchenPrinter: { type: Boolean, default: false },
+      barPrinter: { type: Boolean, default: false }, cashierPrinter: { type: Boolean, default: false }, cashierStation: { type: Boolean, default: false }, selfServiceKiosk: { type: Boolean, default: false },
+    },
+    printing: {
+      kotOnSend: { type: Boolean, default: true }, kotCopies: { type: Number, default: 1, min: 1, max: 3 },
+      waiterSlip: { type: Boolean, default: false }, slipPrices: { type: Boolean, default: false },
+      billOnRequest: { type: Boolean, default: true }, receiptOnPayment: { type: Boolean, default: false }, receiptCopies: { type: Number, default: 1, min: 1, max: 3 },
+      cancelSlips: { type: Boolean, default: true }, paperWidthMm: { type: Number, enum: [58, 80], default: 80 },
+    },
+    ready: { manualOrderTypes: { type: [{ type: String, enum: ORDER_TYPES }], default: undefined } },
+    updatedAt: Date, updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   // What this business runs. The owner chooses; switching it only turns the accommodation module on or off (nothing is deleted).
   serviceMode: { type: String, enum: SERVICE_MODES, default: 'RESTAURANT' },

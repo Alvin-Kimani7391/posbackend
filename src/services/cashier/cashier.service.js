@@ -450,18 +450,9 @@ async function receiptDoc(bill, ctx) {
   };
 }
 
-/** Puts the receipt on the CASHIER print queue. `force` always queues (a reprint); without it a bill is queued once. Never throws into a payment. */
+/** Puts the receipt on the till print queue (printer chosen by the operating profile). Never throws into a payment. */
 async function queueBillReceipt(businessId, billId, { force = false } = {}) {
-  try {
-    const bill = await RestaurantBill.findOne({ _id: billId, businessId }).lean();
-    if (!bill) return false;
-    const title = `Receipt ${bill.receiptNumber || bill.billNumber}`;
-    if (!force && await PrintJob.exists({ businessId, target: 'CASHIER', kind: 'RECEIPT', refId: bill._id, title: /^Receipt / })) return true;
-    const ctx = await C.getContext(businessId);
-    const doc = await receiptDoc(bill, ctx);
-    await PrintJob.create({ businessId, branchId: bill.branchId, target: 'CASHIER', kind: 'RECEIPT', title: force ? `${title} (copy)` : title, doc, refId: bill._id });
-    return true;
-  } catch (e) { console.error('[cashier] could not queue receipt:', e.message); return false; }
+  return require('../restaurant/print.service').queueBillPrint(businessId, billId, { mode: 'RECEIPT', force });
 }
 
 /** Called by bill.service after a payment that a GUEST made (QR, kiosk, online order) settled a bill: it prints at the cashier by itself. */
@@ -482,4 +473,4 @@ async function reprintReceipt(businessId, user, billId) {
   return { queued: true, doc: await receiptDoc(bill, ctx) };
 }
 
-module.exports = { queue, overview, payments, orderDetail, drawer, recordDrawerEvent, reprintReceipt, queueBillReceipt, onGuestBillPaid, channelOf, dayRange, zoneStart, buildQueue, summarize, shiftFigures };
+module.exports = { queue, overview, payments, orderDetail, drawer, recordDrawerEvent, reprintReceipt, queueBillReceipt, receiptDoc, onGuestBillPaid, channelOf, dayRange, zoneStart, buildQueue, summarize, shiftFigures };

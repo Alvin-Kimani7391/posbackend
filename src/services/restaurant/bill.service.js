@@ -91,7 +91,11 @@ async function applyPrepaid(businessId, user, bill) {
     return (await RestaurantBill.findById(bill._id)) || bill;
   } catch (e) { console.error('[restaurant] prepaid amount could not be applied:', e.message); return bill; }
 }
-async function generateBill(businessId, user, orderId, opts = {}) { return applyPrepaid(businessId, user, await generateBillCore(businessId, user, orderId, opts)); }
+async function generateBill(businessId, user, orderId, opts = {}) {
+  const bill = await applyPrepaid(businessId, user, await generateBillCore(businessId, user, orderId, opts));
+  require('./print.service').onBillGenerated(businessId, user, bill).catch(() => {});
+  return bill;
+}
 async function generateBillCore(businessId, user, orderId, { label, customerId } = {}) {
   return C.inTx(async (session) => {
     const ctx = await C.getContext(businessId, session);
@@ -365,7 +369,7 @@ async function pay(businessId, user, id, { payments, customerId }) {
     return { bill, sale: settled?.sale, receipt: settled?.receipt, change: payments.some((p) => p.method === 'CASH') ? docs.filter((d) => d.method === 'CASH').reduce((s, d) => s + (d.changeGiven || 0), 0) : 0 };
   }).catch((e) => { throw bErr(e); });
   afterSettle(businessId, out.sale, out.bill);
-  if (user && user.isGuestActor) require('../cashier/cashier.service').onGuestBillPaid(businessId, out.bill).catch((e) => console.error('[cashier] receipt queue failed', e.message));   // QR / kiosk / online M-PESA: the receipt prints at the cashier by itself
+  require('./print.service').onBillPaid(businessId, out.bill, user).catch((e) => console.error('[print] receipt queue failed', e.message));
   return out;
 }
 

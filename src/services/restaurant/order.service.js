@@ -27,6 +27,7 @@ const tables = require('./table.service');
 const kitchen = require('./kitchen.service');
 const consumption = require('./consumption.service');
 const bills = require('./bill.service');
+const prints = require('./print.service');
 const C = require('./common');
 
 const oidNew = () => new mongoose.Types.ObjectId();
@@ -195,11 +196,20 @@ async function sendDrafts(order, ctx, user, session, { fireCourse } = {}) {
   if (!changed.length) return { tickets: [], changed };
   const type = fireCourse !== undefined ? 'FIRE' : (order.firstSentAt ? 'ADDITION' : 'NEW');
   let tickets = [];
-  if (ctx.features.kitchen) tickets = await kitchen.createTickets(order, changed, { type, ctx, session });
-  else for (const i of changed) { i.status = 'READY'; i.readyAt = now; i.preparingAt = now; i.acceptedAt = now; }
+  const readyNow = [];
+  if (ctx.ops.screen) tickets = await kitchen.createTickets(order, changed, { type, ctx, session });
+  else {
+    // NO kitchen screen: AUTO (dine-in) = ready when sent; MANUAL (delivery/pickup/takeaway/counter) = PREPARING until front-of-house taps Mark ready.
+    for (const i of changed) {
+      i.acceptedAt = now; i.preparingAt = now;
+      if (ctx.ops.readyFor(order.orderType) === 'MANUAL') i.status = 'PREPARING';
+      else { i.status = 'READY'; i.readyAt = now; readyNow.push(i._id); }
+    }
+    await prints.enqueueOrderKot(order, changed, { type, ctx, session });
+  }
   order.firstSentAt = order.firstSentAt || now;
   await consumption.depleteDue(order, 'ON_SEND', { ctx, userId: user._id, session, onlyIds: changed.map((i) => i._id) });
-  if (!ctx.features.kitchen) await consumption.depleteDue(order, 'ON_READY', { ctx, userId: user._id, session, onlyIds: changed.map((i) => i._id) });
+  if (readyNow.length) await consumption.depleteDue(order, 'ON_READY', { ctx, userId: user._id, session, onlyIds: readyNow });
   return { tickets, changed };
 }
 
@@ -234,7 +244,10 @@ async function updateItem(businessId, user, orderId, itemId, input) {
     if (!sent) { if (input.quantity !== undefined) item.quantity = input.quantity; if (input.seatNumber !== undefined) item.seatNumber = input.seatNumber; if (input.course !== undefined) item.course = input.course; }
     const noteChanged = (input.notes !== undefined && input.notes !== item.notes) || (input.allergyNotes !== undefined && input.allergyNotes !== item.allergyNotes);
     if (input.notes !== undefined) item.notes = input.notes; if (input.allergyNotes !== undefined) item.allergyNotes = input.allergyNotes;
-    if (sent && noteChanged && ['PENDING', 'ACCEPTED', 'PREPARING', 'HELD'].includes(item.status) && item.ticketId) await kitchen.amend(order, [{ item, cancelled: false }], { ctx, session, reason: 'Instructions changed' });
+    if (sent && noteChanged && ['PENDING', 'ACCEPTED', 'PREPARING', 'HELD'].includes(item.status) && (item.ticketId || (!ctx.ops.screen && item.status !== 'HELD'))) {
+      if (ctx.ops.screen && item.ticketId) await kitchen.amend(order, [{ item, cancelled: false }], { ctx, session, reason: 'Instructions changed' });
+      await prints.enqueueCancelSlip(order, [{ item, cancelled: false }], { ctx, session, reason: 'Instructions changed' });
+    }
     C.recalcOrder(order, ctx); C.touch(order, user._id, 'item.update', item.name); await order.save({ session });
     return order;
   });
@@ -259,13 +272,14 @@ async function cancelItem(businessId, user, orderId, itemId, { reason, quantity,
     const group = [item, ...order.items.filter((x) => C.sameId(x.parentItemId, item._id))];
     const changes = [];
     for (const it of group) {
-      const wasSent = it.status !== 'DRAFT'; const prepared = consumption.wasPrepared(it);
+      const wasSent = it.status !== 'DRAFT'; const wasHeld = it.status === 'HELD'; const prepared = consumption.wasPrepared(it);
       const { wasted } = await consumption.settleCancelledItem(order, it, { ctx, userId: user._id, session, reason });
       it.cancelledAfterPrep = prepared; it.status = 'CANCELLED'; it.cancelledAt = new Date(); it.cancelledBy = user._id; it.cancelReason = reason;
-      if (wasSent && it.ticketId) changes.push({ item: it, cancelled: true });
+      if (wasSent && (it.ticketId || (!ctx.ops.screen && !wasHeld))) changes.push({ item: it, cancelled: true });
       if (!it.parentItemId) await bills.adjustBillsForItem(order, it, { session, ctx, mode: 'CANCEL' });
     }
-    if (changes.length && ctx.features.kitchen) await kitchen.amend(order, changes, { ctx, session, reason: `CANCELLED: ${reason}` });
+    if (changes.length && ctx.ops.screen) await kitchen.amend(order, changes.filter((c) => c.item.ticketId), { ctx, session, reason: `CANCELLED: ${reason}` });
+    if (changes.length) await prints.enqueueCancelSlip(order, changes.filter((c) => !c.item.parentItemId), { ctx, session, reason });
     C.recalcOrder(order, ctx); C.touch(order, user._id, 'item.cancel', `${item.name}: ${reason || 'removed'}`, { itemId: item._id }); await order.save({ session });
     await C.audit({ businessId, branchId: order.branchId, userId: user._id, action: 'restaurant.item.cancel', entityType: 'RestaurantOrder', entityId: order._id, newValue: { item: item.name, quantity: item.quantity, reason, afterPrep: item.cancelledAfterPrep } }, session);
     return { order, sentBefore, item };
@@ -305,6 +319,19 @@ async function serveItems(businessId, user, id, { itemIds, allReady }) {
   const order0 = await C.loadOrder(businessId, id); C.assertOrderAccess(user, order0, { write: true });
   const ids = allReady ? order0.items.filter((i) => i.status === 'READY').map((i) => i._id) : itemIds;
   for (const itemId of ids) await kitchen.setItemStatus(businessId, user, id, itemId, 'SERVED');
+  return C.loadOrder(businessId, id);
+}
+
+/** NO kitchen screen: front-of-house staff mark food READY by hand (delivery, pickup, take-away, counter). Refused when a kitchen screen exists. */
+async function markReady(businessId, user, id, { itemIds, all = false } = {}) {
+  const ctx0 = await C.getContext(businessId);
+  if (ctx0.ops.screen) throw ApiError.conflict('This restaurant has a kitchen screen: the kitchen marks food ready.', 'USE_KITCHEN_SCREEN');
+  if (!C.can(user, 'restaurant.orders.create') && !C.can(user, 'restaurant.bills.view') && !C.can(user, 'restaurant.kitchen.update')) throw ApiError.forbidden('Not allowed to mark food ready', 'PERMISSION_DENIED');
+  const order0 = await C.loadOrder(businessId, id); C.assertOrderAccess(user, order0, { write: true }); C.assertOpen(order0);
+  const open = order0.items.filter((i) => ['PENDING', 'ACCEPTED', 'PREPARING'].includes(i.status));
+  const ids = all || !itemIds || !itemIds.length ? open.map((i) => i._id) : itemIds;
+  if (!ids.length) throw ApiError.conflict('Nothing is waiting to be marked ready', 'NOTHING_TO_MARK_READY');
+  for (const itemId of ids) await kitchen.setItemStatus(businessId, user, id, itemId, 'READY', { frontDesk: true });
   return C.loadOrder(businessId, id);
 }
 
@@ -451,12 +478,13 @@ async function cancelOrder(businessId, user, id, { reason }) {
     const changes = [];
     for (const it of order.items) {
       if (it.status === 'CANCELLED') continue;
-      const wasSent = it.status !== 'DRAFT'; const prepared = consumption.wasPrepared(it);
+      const wasSent = it.status !== 'DRAFT'; const wasHeld = it.status === 'HELD'; const prepared = consumption.wasPrepared(it);
       await consumption.settleCancelledItem(order, it, { ctx, userId: user._id, session, reason });
       it.cancelledAfterPrep = prepared; it.status = 'CANCELLED'; it.cancelledAt = new Date(); it.cancelledBy = user._id; it.cancelReason = reason;
-      if (wasSent && it.ticketId && !it.parentItemId) changes.push({ item: it, cancelled: true });
+      if (wasSent && (it.ticketId || (!ctx.ops.screen && !wasHeld)) && !it.parentItemId) changes.push({ item: it, cancelled: true });
     }
-    if (changes.length && ctx.features.kitchen) await kitchen.amend(order, changes, { ctx, session, reason: `ORDER CANCELLED: ${reason}` });
+    if (changes.length && ctx.ops.screen) await kitchen.amend(order, changes.filter((c) => c.item.ticketId), { ctx, session, reason: `ORDER CANCELLED: ${reason}` });
+    if (changes.length) await prints.enqueueCancelSlip(order, changes, { ctx, session, reason: `ORDER CANCELLED: ${reason}` });
     order.status = 'CANCELLED'; order.cancelledAt = new Date(); order.cancelledBy = user._id; order.cancelReason = reason; order.billStatus = 'NONE';
     if (order.tableId) await tables.releaseTable({ businessId, tableId: order.tableId, settings: ctx.settings, session });
     if (order.reservationId) await Reservation.updateOne({ _id: order.reservationId }, { $set: { status: 'ARRIVED' } }, { session });
@@ -564,5 +592,5 @@ async function syncBatch(businessId, user, ops) {
 
 module.exports = {
   createOrder, getOrder, listOrders, addItems, updateItem, cancelItem, sendOrder, fireCourse, serveItems, compItems, updateOrder, transferTable,
-  reassignWaiter, mergeOrders, claimOrder, requestBill, requestAssistance, cancelOrder, reopenOrder, assignRider, setDeliveryStatus, collectPickup, myDeliveries, listDeliveries, syncBatch,
+  markReady, reassignWaiter, mergeOrders, claimOrder, requestBill, requestAssistance, cancelOrder, reopenOrder, assignRider, setDeliveryStatus, collectPickup, myDeliveries, listDeliveries, syncBatch,
 };

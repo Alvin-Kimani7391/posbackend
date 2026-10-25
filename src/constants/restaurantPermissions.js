@@ -47,6 +47,7 @@ const ROLE_GRANTS = {
   [ROLES.MANAGER]: MANAGER_SET,
   [ROLES.CASHIER]: [
     'restaurant.menu.view', 'restaurant.tables.view', 'restaurant.tables.view_all', 'restaurant.orders.view', 'restaurant.orders.view_all',
+    'restaurant.orders.create',          // cashier-only restaurants: the cashier takes orders and marks them ready
     'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.pay', 'restaurant.bills.split',
     'restaurant.reservations.view', 'restaurant.tips.view', 'restaurant.delivery.view', 'restaurant.delivery.cash',
     'restaurant.guest.view', 'restaurant.guest.respond',

@@ -82,7 +82,7 @@ async function context(token) {
   return {
     business: { name: ctx.business.name, logo: ctx.business.logo, currency: ctx.business.currency, timezone: ctx.timeZone },
     branch: branch.name,
-    options: { dineIn: !!ss.dineIn, takeAway: !!ss.takeAway, mpesa: await mpesaAllowed(r), cash: cashOn(r), tablesRequired: !!ctx.features.tables, taxInclusive: ctx.taxInclusive },
+    options: { printAvailable: !!ctx.ops.route('CASHIER'), dineIn: !!ss.dineIn, takeAway: !!ss.takeAway, mpesa: await mpesaAllowed(r), cash: cashOn(r), tablesRequired: !!ctx.features.tables, taxInclusive: ctx.taxInclusive },
     welcome: ss.welcomeMessage || undefined,
   };
 }
@@ -206,8 +206,10 @@ async function printDoc(order, bill) {
 /** Puts a copy on the cashier printer's queue. Returns true only if the job was really stored; a printer fault never touches the order or payment. */
 async function queuePrintJob(order, bill) {
   try {
+    const ctx = await H.getContext(order.businessId); const target = ctx.ops.route('CASHIER');
+    if (!target) return 'NO_PRINTER';
     const doc = await printDoc(order, bill);
-    await PrintJob.create({ businessId: order.businessId, branchId: order.branchId, target: 'CASHIER', kind: 'RECEIPT', title: `${doc.paid ? 'Receipt' : 'UNPAID bill'} ${order.orderNumber}`, doc, refId: bill._id });
+    await PrintJob.create({ businessId: order.businessId, branchId: order.branchId, target, kind: doc.paid ? 'RECEIPT' : 'BILL', title: `${doc.paid ? 'Receipt' : 'UNPAID bill'} ${order.orderNumber}`, doc, refId: bill._id });
     await RestaurantOrder.updateOne({ _id: order._id }, { $inc: { 'selfService.billPrints': 1 } });
     return true;
   } catch (e) { console.error('[self-service] could not queue print job:', e.message); return false; }
@@ -344,6 +346,7 @@ async function queuePrint(token, code) {
   if ((order.selfService.billPrints || 0) >= 5) throw ApiError.conflict('Please ask the cashier to reprint this for you.', 'PRINT_LIMIT');
   const bill = await anyBill(order._id); if (!bill) throw ApiError.notFound('No bill yet.', 'BILL_NOT_FOUND');
   const queued = await queuePrintJob(order, bill);
+  if (queued === 'NO_PRINTER') return { queued: false, noPrinter: true, message: 'There is no printer here. Please note your order number and go to the cashier.' };
   if (!queued) throw ApiError.conflict('The printer is not available. Your order is safe; ask the cashier for a copy.', 'PRINT_FAILED');
   return { queued: true };
 }
@@ -457,7 +460,9 @@ async function staffReprint(businessId, user, id) {
   if (!order) throw ApiError.notFound('Self-service order not found', 'ORDER_NOT_FOUND');
   H.assertBranchAccess(user, order.branchId);
   const bill = await anyBill(order._id); if (!bill) throw ApiError.notFound('No bill yet.', 'BILL_NOT_FOUND');
-  if (!(await queuePrintJob(order, bill))) throw ApiError.conflict('Could not reach the print queue. Nothing was changed - try again.', 'PRINT_FAILED');
+  const queued = await queuePrintJob(order, bill);
+  if (queued === 'NO_PRINTER') return { queued: false, noPrinter: true, doc: await printDoc(order, bill) };
+  if (!queued) throw ApiError.conflict('Could not reach the print queue. Nothing was changed - try again.', 'PRINT_FAILED');
   return { queued: true, doc: await printDoc(order, bill) };
 }
 

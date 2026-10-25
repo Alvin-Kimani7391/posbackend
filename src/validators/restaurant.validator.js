@@ -3,6 +3,7 @@ const { objectId, paginationQuery } = require('./common');
 const { toCents } = require('../utils/money');
 const R = require('../constants/restaurant');
 const H = require('../constants/hospitality');
+const OPS = require('../constants/operations');
 const { UNIT_NAMES } = require('../utils/restaurantUnits');
 
 const money = z.coerce.number().positive().transform(toCents);
@@ -53,6 +54,16 @@ const settingsSchema = z.object({
   requireTableCleaning: z.boolean().optional(), paymentsRequireShift: z.boolean().optional(),
   reservation: z.object({ durationMinutes: z.coerce.number().int().min(15).max(600), holdMinutes: z.coerce.number().int().min(0).max(120), depositRequired: z.boolean(), depositCents: money0, remindMinutes: z.coerce.number().int().min(0).max(1440), lockMinutes: z.coerce.number().int().min(0).max(480), lateAlertMinutes: z.coerce.number().int().min(0).max(120), noShowAction: z.enum(['HOLD', 'FORFEIT']), minSpendPerGuestCents: money0, maxNoShows: z.coerce.number().int().min(0).max(20) }).partial().optional(),
 }).strict();
+const bool = z.boolean();
+const operationsBody = z.object({
+  preset: z.enum(OPS.PRESET_IDS).optional(),
+  devices: z.object({ waiterTablet: bool, kitchenScreen: bool, kitchenPrinter: bool, barPrinter: bool, cashierPrinter: bool, cashierStation: bool, selfServiceKiosk: bool }).partial().strict().optional(),
+  printing: z.object({ kotOnSend: bool, kotCopies: z.coerce.number().int().min(1).max(3), waiterSlip: bool, slipPrices: bool, billOnRequest: bool, receiptOnPayment: bool, receiptCopies: z.coerce.number().int().min(1).max(3), cancelSlips: bool, paperWidthMm: z.union([z.literal(58), z.literal(80)]) }).partial().strict().optional(),
+  ready: z.object({ manualOrderTypes: z.array(z.enum(R.ORDER_TYPES)).max(R.ORDER_TYPES.length) }).partial().strict().optional(),
+  useTables: bool.optional(), guestQr: bool.optional(),
+}).strict().refine((b) => Object.keys(b).length > 0, 'Send at least one change');
+const operationsQuery = z.object({ branchId: objectId.optional() });
+const markReadyBody = z.object({ itemIds: z.array(objectId).optional(), all: z.boolean().optional() });
 const areaBody = z.object({ branchId: objectId, name: str(60).min(1), type: z.enum(R.AREA_TYPES).optional(), sortOrder: z.coerce.number().int().optional() });
 const areaUpdate = areaBody.omit({ branchId: true }).partial();
 const stationBody = z.object({ branchId: objectId, name: str(60).min(1), code: str(20).min(2), type: z.enum(['KITCHEN', 'BAR']).optional(), isDefault: z.boolean().optional(), printerName: str(80).optional() });
@@ -195,6 +206,7 @@ const salesQuery = z.object({ branchId: objectId.optional(), from: date.optional
 const deliveryListQuery = z.object({ branchId: objectId.optional(), status: z.enum(R.DELIVERY_STATUS).optional() });
 
 module.exports = {
+  operationsBody, operationsQuery, markReadyBody,
   idParam, itemParam, branchQ, rangeQ, settingsSchema, areaBody, areaUpdate, stationBody, stationUpdate, tableBody, tableUpdate, tableStatus, assignBody, combineBody, floorQuery,
   trackingBody, batchQuery, batchDispose, groupBody, itemCreate, itemUpdate, soldOutBody, itemListQuery, menuQuery, recipeBody, recipeQuery, costQuery, ingredientCreate, ingredientUpdate, ingListQuery, receiveBody, transferBody, wasteBody, adjustBody,
   countStart, countSubmit, stockQuery, movementQuery, purchaseQuery, countListQuery, expiringQuery, createOrder, addItemsBody, updateItemBody, cancelItemBody, versionBody, fireBody, serveBody, compBody,
