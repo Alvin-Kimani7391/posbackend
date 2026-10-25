@@ -34,11 +34,16 @@ async function floor(businessId, user, { branchId, areaId }) {
   const orders = await RestaurantOrder.find({ _id: { $in: tables.map((t) => t.currentOrderId).filter(Boolean) } }).select('orderNumber waiterId waiterName guestCount totals billStatus firstSentAt items.status items.readyAt createdAt priority');
   const byId = new Map(orders.map((o) => [String(o._id), o]));
   const now = Date.now();
+  const nextRes = new Map();            // the next booking of each table (so the floor shows who it is held for and when)
+  try {
+    const rs = await Reservation.find({ businessId, branchId, tableIds: { $in: tables.map((t) => t._id) }, status: { $in: ['BOOKED', 'CONFIRMED', 'ARRIVED'] }, endsAt: { $gt: new Date() }, startsAt: { $lt: new Date(now + 12 * 3600000) } }).sort({ startsAt: 1 }).select('reservationNumber guestName phone partySize startsAt status tableIds deposit');
+    for (const r of rs) for (const id of r.tableIds) if (!nextRes.has(String(id))) nextRes.set(String(id), { _id: r._id, reservationNumber: r.reservationNumber, guestName: r.guestName, phone: r.phone, partySize: r.partySize, startsAt: r.startsAt, status: r.status, prepaid: r.deposit && r.deposit.paid ? fromCents(Math.max(0, (r.deposit.amount || 0) - (r.deposit.appliedAmount || 0))) : 0 });
+  } catch (e) { /* the floor still works without it */ }
   return tables.filter((t) => all || C.sameId(t.waiterId?._id, user._id) || (byId.get(String(t.currentOrderId)) && (C.sameId(byId.get(String(t.currentOrderId)).waiterId, user._id)))).map((t) => {
     const o = t.currentOrderId ? byId.get(String(t.currentOrderId)) : null;
     const live = o ? o.items.filter((i) => i.status !== 'CANCELLED') : [];
     return {
-      ...t.toJSON(), occupiedMinutes: t.seatedAt && t.status !== 'AVAILABLE' ? Math.floor((now - t.seatedAt) / 60000) : null,
+      ...t.toJSON(), reservation: nextRes.get(String(t._id)) || null, occupiedMinutes: t.seatedAt && t.status !== 'AVAILABLE' ? Math.floor((now - t.seatedAt) / 60000) : null,
       order: o ? { _id: o._id, orderNumber: o.orderNumber, waiterName: o.waiterName, guestCount: o.guestCount, total: fromCents(o.totals.total), billStatus: o.billStatus, priority: o.priority,
         waitingForFoodMinutes: o.firstSentAt && live.some((i) => ['PENDING', 'ACCEPTED', 'PREPARING'].includes(i.status)) ? Math.floor((now - o.firstSentAt) / 60000) : null,
         readyItems: live.filter((i) => i.status === 'READY').length, pendingItems: live.filter((i) => ['PENDING', 'ACCEPTED', 'PREPARING'].includes(i.status)).length } : null,

@@ -160,6 +160,7 @@ module.exports = {
   reservationStatus: h(200, 'Reservation updated', async (r) => ({ reservation: await resv.setStatus(b(r), u(r), r.params.id, r.body) })),
   deposit: h(200, 'Deposit recorded', async (r) => ({ reservation: await resv.recordDeposit(b(r), u(r), r.params.id, r.body) })),
   settleDeposit: h(200, 'Deposit settled', async (r) => ({ reservation: await resv.settleDeposit(b(r), u(r), r.params.id, r.body) })),
+  seatReservation: h(200, 'Guest seated', async (r) => resv.seat(b(r), u(r), r.params.id, r.body || {})),
   availability: h(200, 'Availability fetched', async (r) => resv.availability(b(r), u(r), r.query)),
   // staff
   schedule: h(201, 'Shift scheduled', async (r) => ({ shift: await staff.schedule(b(r), u(r), r.body) })),

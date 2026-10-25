@@ -93,7 +93,8 @@ async function context(token) {
     store: { tagline: st.tagline, welcomeMessage: st.welcomeMessage, themeColor: st.themeColor || '#0f766e' },
     branches: branches.map((b) => ({ id: b._id, name: b.name, phone: b.phone, address: b.address, hasPin: !!pointOf(st, b._id), location: pointOf(st, b._id) })),
     delivery: { enabled: d.enabled !== false, paused: !!d.paused, openNow: S.withinHours(now, ctx.timeZone, d.hoursStart, d.hoursEnd), hours: d.hoursStart && d.hoursEnd ? `${d.hoursStart} - ${d.hoursEnd}` : null, baseFee: money(d.baseFeeCents), perKm: money(d.perKmCents), minOrder: money(d.minOrderCents), maxRadiusKm: d.maxRadiusKm || null, allowCash: cashOk },
-    tables: { enabled: ctx.features.tables !== false && t.enabled !== false, openTime: t.openTime || '10:00', closeTime: t.closeTime || '22:00', depositRequired: !!ctx.settings.reservation?.depositRequired, deposit: money(ctx.settings.reservation?.depositCents || 0), requirePayment: mp && t.requirePayment !== false },
+    tables: { enabled: ctx.features.tables !== false && t.enabled !== false, openTime: t.openTime || '10:00', closeTime: t.closeTime || '22:00', depositRequired: !!ctx.settings.reservation?.depositRequired, deposit: money(ctx.settings.reservation?.depositCents || 0), requirePayment: mp && t.requirePayment !== false,
+      minSpendPerGuest: money(ctx.settings.reservation?.minSpendPerGuestCents || 0), holdMinutes: ctx.settings.reservation?.holdMinutes ?? 15, durationMinutes: ctx.settings.reservation?.durationMinutes || 90, lockMinutes: ctx.settings.reservation?.lockMinutes ?? 30 },
     rooms: { enabled: !!accOn, depositRequired: !!dep.required },
     mpesa: mp, requireAccount: REQUIRE_ACCOUNT, holdMinutes: HOLD_MIN,
     googleClientId: process.env.GOOGLE_CLIENT_ID || undefined,
@@ -216,24 +217,29 @@ async function orderPayStart(token, trackKey, { payerPhone }) {
 // ------------------------------------------------------------------ tables
 async function tables(token, { branchId, date, time, partySize = 1 }) {
   const r = await open(token); const b = await pickBranch(r, branchId); const t = r.store.tables || {}; const rs = r.ctx.settings.reservation || {};
-  const dur = rs.durationMinutes || 90;
-  const startsAt = date && time ? S.zonedDate(date, time, r.ctx.timeZone) : new Date();
+  const dur = rs.durationMinutes || 90; const tz = r.ctx.timeZone;
+  const startsAt = date && time ? S.zonedDate(date, time, tz) : new Date();
   const endsAt = new Date(startsAt.getTime() + dur * 60000); const isNow = startsAt.getTime() - Date.now() < 30 * 60000;
-  const [list, areas, busy] = await Promise.all([
-    RestaurantTable.find({ businessId: r.businessId, branchId: b._id, active: true }).sort({ name: 1 }).collation({ locale: 'en', numericOrdering: true }),
+  const dayStart = date ? S.zonedDate(date, '00:00', tz) : new Date(); const dayEnd = new Date(dayStart.getTime() + 86400000);
+  const [list, areas, dayBookings] = await Promise.all([
+    RestaurantTable.find({ businessId: r.businessId, branchId: b._id, active: true, combinedInto: null }).sort({ name: 1 }).collation({ locale: 'en', numericOrdering: true }),
     RestaurantArea.find({ businessId: r.businessId, branchId: b._id }).select('name'),
-    Reservation.find({ businessId: r.businessId, branchId: b._id, status: { $in: RESERVATION_ACTIVE }, startsAt: { $lt: endsAt }, endsAt: { $gt: startsAt } }).select('tableIds'),
+    Reservation.find({ businessId: r.businessId, branchId: b._id, status: { $in: RESERVATION_ACTIVE }, startsAt: { $lt: dayEnd }, endsAt: { $gt: dayStart } }).select('tableIds startsAt endsAt'),
   ]);
-  const taken = new Set(busy.flatMap((x) => x.tableIds.map(String))); const an = new Map(areas.map((a) => [String(a._id), a.name]));
-  const slots = date ? S.reservationSlots(date, { ...t, durationMinutes: dur, timeZone: r.ctx.timeZone }).map((s) => s.time) : [];
+  const clash = (x) => x.startsAt < endsAt && x.endsAt > startsAt;
+  const taken = new Set(dayBookings.filter(clash).flatMap((x) => x.tableIds.map(String)));
+  const times = new Map();            // table -> the times it is already booked on that day, so the guest can see when it is free
+  for (const x of dayBookings) for (const id of x.tableIds) { const k = String(id); if (!times.has(k)) times.set(k, []); times.get(k).push({ from: x.startsAt, to: x.endsAt }); }
+  const an = new Map(areas.map((a) => [String(a._id), a.name]));
+  const slots = date ? S.reservationSlots(date, { ...t, durationMinutes: dur, timeZone: tz }).map((s) => s.time) : [];
   return {
-    durationMinutes: dur, slots, depositRequired: !!rs.depositRequired, deposit: money(rs.depositCents || 0),
+    durationMinutes: dur, slots, depositRequired: !!rs.depositRequired, deposit: money(rs.depositCents || 0), minSpendPerGuest: money(rs.minSpendPerGuestCents || 0),
     tables: list.map((x) => {
-      const soon = startsAt.getTime() < Date.now() + dur * 60000; // the party seated now is still there during this slot
+      const soon = startsAt.getTime() < Date.now() + dur * 60000;          // the party seated now is still there during this slot
       const inUse = x.status !== 'AVAILABLE' || !!x.currentOrderId;
       const reserved = taken.has(String(x._id)) || (soon && x.status === 'RESERVED'); const occupied = (isNow || soon) && inUse && x.status !== 'RESERVED';
       const small = x.seats < partySize;
-      return { id: x._id, name: x.name, seats: x.seats, area: an.get(String(x.areaId)), free: !reserved && !occupied && !small, reason: reserved ? 'RESERVED' : occupied ? 'OCCUPIED' : small ? 'TOO_SMALL' : null };
+      return { id: x._id, name: x.name, seats: x.seats, area: an.get(String(x.areaId)), free: !reserved && !occupied && !small, reason: reserved ? 'RESERVED' : occupied ? 'OCCUPIED' : small ? 'TOO_SMALL' : null, booked: (times.get(String(x._id)) || []).sort((p, q) => p.from - q.from) };
     }),
   };
 }
@@ -245,6 +251,10 @@ async function reserveTable(token, body, account) {
   const b = await pickBranch(r, body.branchId); const phone = S.kePhone(body.phone); if (!phone) throw ApiError.badRequest('Enter a valid phone number, for example 0712 345 678', 'INVALID_PHONE');
   const startsAt = S.zonedDate(body.date, body.time, r.ctx.timeZone);
   const bad = S.slotProblem(startsAt, st, { timeZone: r.ctx.timeZone }); if (bad) throw ApiError.badRequest(bad, 'SLOT_NOT_ALLOWED');
+  if (rs.maxNoShows > 0) {            // a number that keeps missing its bookings is asked to call us instead
+    const missed = await Reservation.countDocuments({ businessId: r.businessId, phoneKey: phone.slice(-9), status: 'NO_SHOW' });
+    if (missed >= rs.maxNoShows) throw ApiError.forbidden('Online booking is not available for this number. Please call us to book a table.', 'NO_SHOW_BLOCKED');
+  }
   const actor = await C.guestActor(r.businessId);
   const pre = []; let preText = ''; let preCents = 0;
   if (body.preOrder && body.preOrder.length) {
@@ -260,11 +270,15 @@ async function reserveTable(token, body, account) {
   }
   // The table is only really booked once it is paid: the food pre-order if there is one, otherwise the owner's table deposit.
   const mp = await mpesaOn(r.businessId); const mustPay = mp && st.requirePayment !== false;
-  const due = preCents > 0 ? preCents : (rs.depositRequired ? rs.depositCents || 0 : 0);
-  if (mustPay && !(due > 0)) throw ApiError.badRequest('Choose at least one dish to pre-order - your table is confirmed once the food is paid with M-PESA.', 'PREORDER_REQUIRED');
+  // What the guest pays now: the food they will eat (chosen dishes, or an amount they decide), never less than the owner's minimum per guest.
+  const creditCents = Math.round((Number(body.foodCredit) || 0) * 100); const minCents = (rs.minSpendPerGuestCents || 0) * body.partySize;
+  const foodCents = Math.max(preCents, creditCents);
+  if (mustPay && minCents > 0 && foodCents < minCents) throw ApiError.badRequest(`To book for ${body.partySize}, please pay at least KSh ${money(minCents)} towards your food (KSh ${money(rs.minSpendPerGuestCents)} per person).`, 'MIN_SPEND');
+  const due = foodCents > 0 ? foodCents : (rs.depositRequired ? rs.depositCents || 0 : 0);
+  if (mustPay && !(due > 0)) throw ApiError.badRequest('Choose how much food to prepay, or pick dishes - your table is confirmed once it is paid with M-PESA.', 'PREORDER_REQUIRED');
   const rv = await reservations.create(r.businessId, actor, {
     branchId: b._id, guestName: body.name, phone, partySize: body.partySize, startsAt, tableIds: [body.tableId], source: 'ONLINE', occasion: body.occasion,
-    notes: [body.notes, preText].filter(Boolean).join(' | ') || undefined, ...(mustPay ? { depositAmount: due } : {}),
+    notes: [body.notes, preText].filter(Boolean).join(' | ') || undefined, ...(mustPay ? { depositAmount: due, depositKind: foodCents > 0 ? 'FOOD' : 'DEPOSIT' } : {}),
   });
   if (pre.length) await Reservation.updateOne({ _id: rv._id }, { $set: { preOrder: pre } });
   const awaiting = mustPay && due > 0;
@@ -276,14 +290,32 @@ const RES_MSG = { BOOKED: 'Your table is booked. We will confirm shortly.', CONF
 async function resFull(x) {
   const [sb, tbs] = await Promise.all([StoreBooking.findOne({ businessId: x.businessId, kind: 'RESERVATION', refId: x._id }), RestaurantTable.find({ _id: { $in: x.tableIds } }).select('name seats')]);
   const awaiting = !!sb && sb.payState === 'AWAITING';
-  return { reference: x.reservationNumber, status: x.status, guestName: x.guestName, partySize: x.partySize, startsAt: x.startsAt, tables: tbs.map((t) => ({ name: t.name, seats: t.seats })), preOrder: x.preOrder,
-    deposit: { required: !!x.deposit?.required, amount: money(x.deposit?.amount || 0), paid: !!x.deposit?.paid }, pay: { state: sb ? sb.payState : 'NONE', payBy: sb && sb.payBy, receiptRef: sb && sb.receiptRef || null },
+  return { reference: x.reservationNumber, status: x.status, guestName: x.guestName, partySize: x.partySize, startsAt: x.startsAt, tables: tbs.map((t) => ({ name: t.name, seats: t.seats })), preOrder: x.preOrder, phone: x.phone,
+    deposit: { required: !!x.deposit?.required, amount: money(x.deposit?.amount || 0), paid: !!x.deposit?.paid, kind: x.deposit?.kind || 'DEPOSIT', used: money(x.deposit?.appliedAmount || 0), forfeited: !!x.deposit?.forfeited, refunded: !!x.deposit?.refunded },
+    canCancel: RESERVATION_ACTIVE.includes(x.status) && !!x.startsAt && x.startsAt.getTime() > Date.now() + 60 * 60000, pay: { state: sb ? sb.payState : 'NONE', payBy: sb && sb.payBy, receiptRef: sb && sb.receiptRef || null },
     message: awaiting ? 'Pay with M-PESA to confirm your table. It is held for a few minutes.' : sb && sb.payState === 'EXPIRED' ? 'This table was released because it was not paid in time.' : RES_MSG[x.status] };
 }
 async function reservationLookup(token, { reference, phone }) {
   const r = await open(token);
   const x = await Reservation.findOne({ businessId: r.businessId, reservationNumber: String(reference || '').toUpperCase() });
   if (!x || S.last4(x.phone) !== S.last4(phone)) throw ApiError.notFound('We could not find a booking with those details.', 'BOOKING_NOT_FOUND'); return resFull(x);
+}
+
+/** The guest cancels their own table booking (up to an hour before). Prepaid money is not returned automatically: the manager is told to refund it. */
+async function cancelReservation(token, { reference, phone }, account) {
+  const r = await open(token);
+  const x = await Reservation.findOne({ businessId: r.businessId, reservationNumber: String(reference || '').toUpperCase() });
+  const sb = x && await StoreBooking.findOne({ businessId: r.businessId, kind: 'RESERVATION', refId: x._id });
+  const owns = !!(account && sb && sb.accountId && String(sb.accountId) === String(account._id));
+  if (!x || !(owns || S.last4(x.phone) === S.last4(phone))) throw ApiError.notFound('We could not find a booking with those details.', 'BOOKING_NOT_FOUND');
+  if (!RESERVATION_ACTIVE.includes(x.status)) throw ApiError.conflict('This booking can no longer be cancelled.', 'NOT_CANCELLABLE');
+  if (x.startsAt && x.startsAt.getTime() < Date.now() + 60 * 60000) throw ApiError.conflict('It is too close to your booking time to cancel online. Please call us.', 'TOO_LATE');
+  const actor = await C.guestActor(r.businessId);
+  await reservations.setStatus(r.businessId, actor, x._id, { status: 'CANCELLED', reason: 'Cancelled by the guest' });
+  if (sb && sb.payState === 'AWAITING') await StoreBooking.updateOne({ _id: sb._id }, { $set: { payState: 'EXPIRED' } });
+  const tb = await RestaurantTable.find({ _id: { $in: x.tableIds } }).select('name');
+  notify(r, x.branchId, [...STAFF, 'RECEPTIONIST'], `Booking cancelled ${x.reservationNumber}`, `${x.guestName} cancelled table ${tb.map((t) => t.name).join(', ')}. The table is free again.${x.deposit && x.deposit.paid ? ' They had prepaid: please refund or keep it.' : ''}`, 'Reservation', x._id);
+  return resFull(await Reservation.findById(x._id));
 }
 
 // ------------------------------------------------------------------ rooms
@@ -540,4 +572,4 @@ async function sweep() {
   await expireUnpaid();
 }
 
-module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment, open };
+module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, cancelReservation, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment, open };

@@ -77,7 +77,22 @@ async function newBill(order, ctx, user, session, { lines, label, parentBillId, 
 }
 
 // ------------------------------------------------------------------ generate
-async function generateBill(businessId, user, orderId, { label, customerId } = {}) {
+/** A guest who prepaid food when booking does not pay that part again: it comes off the bill the moment the bill is made. */
+async function applyPrepaid(businessId, user, bill) {
+  try {
+    const order = await RestaurantOrder.findOne({ _id: bill.orderId, businessId }).select('reservationId');
+    if (!order || !order.reservationId) return bill;
+    const r = await Reservation.findOne({ _id: order.reservationId, businessId });
+    if (!r || !r.deposit || !r.deposit.paid || r.deposit.refunded || r.deposit.forfeited) return bill;
+    const left = (r.deposit.amount || 0) - (r.deposit.appliedAmount || 0); if (left <= 0) return bill;
+    const fresh = await RestaurantBill.findById(bill._id); if (!fresh || !OPENISH.includes(fresh.status)) return bill;
+    const amount = Math.min(left, fresh.balance); if (!(amount > 0)) return bill;
+    await pay(businessId, user, bill._id, { payments: [{ method: 'DEPOSIT', amount, reservationId: r._id }] });
+    return (await RestaurantBill.findById(bill._id)) || bill;
+  } catch (e) { console.error('[restaurant] prepaid amount could not be applied:', e.message); return bill; }
+}
+async function generateBill(businessId, user, orderId, opts = {}) { return applyPrepaid(businessId, user, await generateBillCore(businessId, user, orderId, opts)); }
+async function generateBillCore(businessId, user, orderId, { label, customerId } = {}) {
   return C.inTx(async (session) => {
     const ctx = await C.getContext(businessId, session);
     const order = await C.loadOrder(businessId, orderId, session);
@@ -315,9 +330,11 @@ async function pay(businessId, user, id, { payments, customerId }) {
         entry.stayId = roomStay._id; entry.reference = roomStay.stayNumber; entry.verified = true;
       } else if (p.method === 'DEPOSIT') {
         const r = await Reservation.findOne({ _id: p.reservationId, businessId }).session(session);
-        if (!r || !r.deposit?.paid || r.deposit.appliedBillId || r.deposit.refunded || r.deposit.forfeited) throw ApiError.badRequest('No unused deposit on that reservation', 'DEPOSIT_NOT_AVAILABLE');
-        if (p.amount > r.deposit.amount) throw ApiError.badRequest('More than the deposit held', 'DEPOSIT_EXCEEDED');
-        r.deposit.appliedBillId = bill._id; await r.save({ session });
+        const left = r ? (r.deposit?.amount || 0) - (r.deposit?.appliedAmount || 0) : 0;
+        if (!r || !r.deposit?.paid || left <= 0 || r.deposit.refunded || r.deposit.forfeited) throw ApiError.badRequest('No unused prepaid amount on that reservation', 'DEPOSIT_NOT_AVAILABLE');
+        if (p.amount > left) throw ApiError.badRequest('More than the prepaid amount left', 'DEPOSIT_EXCEEDED');
+        r.deposit.appliedAmount = (r.deposit.appliedAmount || 0) + p.amount; if (r.deposit.appliedAmount >= r.deposit.amount) r.deposit.appliedBillId = bill._id;
+        await r.save({ session });
         entry.reservationId = r._id; entry.paymentId = r.deposit.paymentId; entry.verified = true;
       } else {
         let provider = 'manual'; let ext; let meta; let verified = false;

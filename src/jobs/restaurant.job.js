@@ -28,7 +28,7 @@ function start() {
   cron.schedule('*/5 * * * *', safe('guest orders expiry', () => require('../services/hospitality/guest.service').expireStale()));
   cron.schedule('*/15 * * * *', safe('accommodation sweep', accommodationSweep));
   cron.schedule('* * * * *', safe('kitchen delays', () => kitchen.delayAlerts()));           // every minute
-  cron.schedule('*/2 * * * *', safe('reservations', () => reservations.sweep()));            // reserved tables, no-shows, reminders
+  cron.schedule('* * * * *', safe('reservations', () => reservations.sweep()));              // every minute: lock tables before the booking, late alerts, no-shows, reminders
   cron.schedule('15 * * * *', safe('ingredient expiry', () => ingredients.expirySweep()));   // hourly
 }
 module.exports = { start };

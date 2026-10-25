@@ -13,6 +13,7 @@ const s = new Schema({
   currentStayId: { type: Schema.Types.ObjectId, ref: 'Stay', default: null },
   outOfOrder: { reason: String, since: Date, until: Date, by: Schema.Types.ObjectId },
   notes: { type: String, trim: true },
+  images: [{ type: String }],                                         // photos of this room (also shown to guests booking online)
   lastCleanedAt: Date, lastInspectedAt: Date,
   qrVersion: { type: Number, default: 1 },                           // bump to invalidate every printed QR for this room
   qrEnabled: { type: Boolean, default: true },

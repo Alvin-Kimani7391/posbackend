@@ -24,6 +24,11 @@ module.exports = {
   updateSettings: h(200, 'Accommodation settings updated', async (r) => ({ settings: await rooms.updateSettings(b(r), u(r)._id, r.body) })),
   listRoomTypes: h(200, 'Room types fetched', async (r) => ({ roomTypes: await rooms.listRoomTypes(b(r), { includeInactive: r.query.all === 'true' }) })),
   createRoomType: h(201, 'Room type created', async (r) => ({ roomType: await rooms.createRoomType(b(r), u(r)._id, r.body) })),
+  uploadRoomPhotos: h(200, 'Images uploaded', async (r) => {        // upload first, attach on save: returns the links for the add forms
+    const urls = (r.files || []).map((f) => f.path).filter(Boolean);
+    if (!urls.length) throw ApiError.badRequest('Attach images in the "images" field', 'NO_FILE');
+    return { urls };
+  }),
   uploadRoomTypeImages: h(200, 'Images uploaded', async (r) => {
     const urls = (r.files || []).map((f) => f.path).filter(Boolean);
     if (!urls.length) throw ApiError.badRequest('Attach images in the "images" field', 'NO_FILE');

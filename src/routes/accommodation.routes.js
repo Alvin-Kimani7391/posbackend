@@ -10,7 +10,7 @@ const idempotent = require('../middleware/idempotency');
 const requireFeature = require('../middleware/requireFeature');
 const { authenticate, requirePermission: P, requireBranchAccess } = require('../middleware/auth');
 const v = require('../validators/hospitality.validator');
-const { uploadRoomTypeImages } = require('../middleware/hospitalityUpload');
+const { uploadRoomTypeImages, uploadRoomImages } = require('../middleware/hospitalityUpload');
 
 router.use(authenticate, requireFeature('accommodation'));
 const id = { params: v.idParam };
@@ -20,6 +20,7 @@ router.put('/settings', P('accommodation.settings.manage'), validate({ body: v.s
 
 router.get('/room-types', P('accommodation.rooms.view'), c.listRoomTypes);
 router.post('/room-types', P('accommodation.rooms.manage'), validate({ body: v.roomTypeBody }), c.createRoomType);
+router.post('/images', P('accommodation.rooms.manage'), uploadRoomImages, c.uploadRoomPhotos);
 router.post('/room-types/:id/images', P('accommodation.rooms.manage'), validate(id), uploadRoomTypeImages, c.uploadRoomTypeImages);
 router.put('/room-types/:id', P('accommodation.rooms.manage'), validate({ ...id, body: v.roomTypeUpdate }), c.updateRoomType);
 

@@ -107,7 +107,12 @@ const restaurantSettingsSchema = new Schema({
     holdMinutes: { type: Number, default: 15, min: 0, max: 120 },   // late this long and it can be marked no-show
     depositRequired: { type: Boolean, default: false },
     depositCents: { type: Number, default: 0, min: 0 },
-    remindMinutes: { type: Number, default: 60, min: 0, max: 1440 },
+    remindMinutes: { type: Number, default: 60, min: 0, max: 1440 },        // staff are alerted this long before the booking starts (owner / manager sets it)
+    lockMinutes: { type: Number, default: 30, min: 0, max: 480 },           // the table is locked (Reserved, no walk-in can be seated) this long before the booking starts
+    lateAlertMinutes: { type: Number, default: 5, min: 0, max: 120 },       // staff are told the guest is late this long after the booking time (0 = off)
+    noShowAction: { type: String, enum: ['HOLD', 'FORFEIT'], default: 'HOLD' },   // prepaid money when the guest never comes: HOLD = a manager decides, FORFEIT = the business keeps it
+    minSpendPerGuestCents: { type: Number, default: 0, min: 0 },            // online bookings must prepay at least this much food per guest (0 = no minimum)
+    maxNoShows: { type: Number, default: 0, min: 0, max: 20 },              // a phone number with this many no-shows can no longer book online (0 = never block)
   },
 }, { timestamps: true });
 

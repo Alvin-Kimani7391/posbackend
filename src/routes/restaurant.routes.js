@@ -155,6 +155,7 @@ router.get('/reservations/:id', rsv, P('restaurant.reservations.view'), validate
 router.put('/reservations/:id', rsv, P('restaurant.reservations.manage'), validate({ ...id, body: v.reservationUpdate }), c.updateReservation);
 router.post('/reservations/:id/status', rsv, P('restaurant.reservations.manage'), validate({ ...id, body: v.reservationStatus }), c.reservationStatus);
 router.post('/reservations/:id/deposit', rsv, P('restaurant.bills.pay'), validate({ ...id, body: v.depositBody }), c.deposit);
+router.post('/reservations/:id/seat', rsv, P('restaurant.reservations.manage'), validate({ ...id, body: v.reservationSeat }), c.seatReservation);
 router.post('/reservations/:id/deposit/settle', rsv, P('restaurant.reservations.manage'), validate({ ...id, body: v.depositSettle }), c.settleDeposit);
 
 // ---- staff, tips, incidents, waste

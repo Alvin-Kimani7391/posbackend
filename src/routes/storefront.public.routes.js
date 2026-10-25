@@ -30,7 +30,7 @@ const delivery = z.object({ payMethod: z.enum(['MPESA', 'CASH']).optional(), bra
   lat: num.min(-90).max(90), lng: num.min(-180).max(180), items: z.array(item).min(1).max(40), clientRef: str(60).min(8) }).strict();
 const quote = z.object({ branchId: objectId.optional(), lat: num.min(-90).max(90), lng: num.max(180).min(-180), subtotal: num.min(0).optional() });
 const tablesQ = z.object({ branchId: objectId.optional(), date: ymd.optional(), time: hhmm.optional(), partySize: z.coerce.number().int().min(1).max(50).optional() });
-const reserve = z.object({ branchId: objectId.optional(), name: str(80).min(2), phone: str(20).min(9), date: ymd, time: hhmm, partySize: z.coerce.number().int().min(1).max(50), tableId: objectId, occasion: str(80).optional(), notes: str(300).optional(),
+const reserve = z.object({ branchId: objectId.optional(), name: str(80).min(2), phone: str(20).min(9), date: ymd, time: hhmm, partySize: z.coerce.number().int().min(1).max(50), tableId: objectId, foodCredit: z.coerce.number().min(0).max(1000000).optional(), occasion: str(80).optional(), notes: str(300).optional(),
   preOrder: z.array(z.object({ menuItemId: objectId, quantity: z.coerce.number().int().min(1).max(50), notes: str(150).optional() })).max(30).optional() }).strict();
 const roomsQ = z.object({ branchId: objectId.optional(), checkInDate: ymd, checkOutDate: ymd, adults: z.coerce.number().int().min(1).max(20).optional(), children: z.coerce.number().int().min(0).max(20).optional() });
 const book = z.object({ branchId: objectId.optional(), roomTypeId: objectId, checkInDate: ymd, checkOutDate: ymd, name: str(80).min(2), phone: str(20).min(9), email: str(120).optional(), adults: z.coerce.number().int().min(1).max(20).optional(), children: z.coerce.number().int().min(0).max(20).optional(), mealPlan: z.enum(['ROOM_ONLY', 'BED_BREAKFAST', 'HALF_BOARD', 'FULL_BOARD']).optional(), specialRequests: str(300).optional(), clientRef: str(60).min(8) }).strict();
@@ -43,6 +43,7 @@ router.post('/:token/delivery', write, validate({ ...tok, body: delivery }), h(a
 router.get('/:token/delivery/:key', poll, validate({ params: z.object({ token: z.string().max(120), key: z.string().regex(/^[a-f0-9]{16}$/) }) }), h((r) => svc.track(t(r), r.params.key)));
 router.get('/:token/tables', read, validate({ ...tok, query: tablesQ }), h((r) => svc.tables(t(r), r.query)));
 router.post('/:token/reservations', write, validate({ ...tok, body: reserve }), h(async (r) => svc.reserveTable(t(r), r.body, await who(r)), 'Table booked', 201));
+router.post('/:token/reservations/cancel', write, validate({ ...tok, body: z.object({ reference: str(30), phone: str(20) }).strict() }), h(async (r) => svc.cancelReservation(t(r), r.body, await who(r)), 'Booking cancelled'));
 router.get('/:token/reservations/lookup', poll, validate({ ...tok, query: z.object({ reference: str(30), phone: str(20) }) }), h((r) => svc.reservationLookup(t(r), r.query)));
 router.get('/:token/rooms', read, validate({ ...tok, query: roomsQ }), h((r) => svc.rooms(t(r), r.query)));
 router.post('/:token/bookings', write, validate({ ...tok, body: book }), h(async (r) => svc.bookRoom(t(r), r.body, await who(r)), 'Room booked', 201));

@@ -37,18 +37,24 @@ async function updateRoomType(businessId, userId, id, input) {
 }
 
 // ------------------------------------------------------------ rooms
+/** Guests book a room TYPE online, so photos added with a room also go on its type when the type has none yet. */
+async function shareImages(businessId, roomTypeId, images) {
+  if (images && images.length) await RoomType.updateOne({ _id: roomTypeId, businessId, $or: [{ images: { $exists: false } }, { images: { $size: 0 } }] }, { $set: { images: images.slice(0, 12) } });
+}
 async function createRoom(businessId, userId, input) {
   await C.assertBranch(businessId, input.branchId);
   if (!(await RoomType.exists({ _id: input.roomTypeId, businessId }))) throw ApiError.badRequest('Room type not found', 'ROOM_TYPE_NOT_FOUND');
+  await shareImages(businessId, input.roomTypeId, input.images);
   try { const r = await Room.create({ ...input, businessId }); await C.audit({ businessId, branchId: r.branchId, userId, action: 'accommodation.room.create', entityType: 'Room', entityId: r._id, newValue: { number: r.number } }); return r; }
   catch (e) { if (e.code === 11000) throw ApiError.conflict(`Room ${input.number} already exists at this branch`, 'DUPLICATE_ROOM'); throw e; }
 }
 /** Create many rooms at once: numbers "101..110" style lists are expanded by the caller; duplicates are reported, not fatal. */
-async function bulkCreateRooms(businessId, userId, { branchId, roomTypeId, numbers, floor }) {
+async function bulkCreateRooms(businessId, userId, { branchId, roomTypeId, numbers, floor, images }) {
   await C.assertBranch(businessId, branchId);
   if (!(await RoomType.exists({ _id: roomTypeId, businessId }))) throw ApiError.badRequest('Room type not found', 'ROOM_TYPE_NOT_FOUND');
+  await shareImages(businessId, roomTypeId, images);
   const created = []; const skipped = [];
-  for (const number of numbers) { try { created.push(await Room.create({ businessId, branchId, roomTypeId, number, floor })); } catch (e) { if (e.code === 11000) skipped.push(number); else throw e; } }
+  for (const number of numbers) { try { created.push(await Room.create({ businessId, branchId, roomTypeId, number, floor, ...(images && images.length ? { images } : {}) })); } catch (e) { if (e.code === 11000) skipped.push(number); else throw e; } }
   await C.audit({ businessId, branchId, userId, action: 'accommodation.room.bulk_create', entityType: 'Room', newValue: { created: created.length, skipped } });
   return { created, skipped };
 }

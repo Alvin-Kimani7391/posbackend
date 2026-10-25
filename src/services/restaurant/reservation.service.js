@@ -41,7 +41,7 @@ async function create(businessId, user, input) {
     const [r] = await Reservation.create([{
       businessId, branchId: input.branchId, reservationNumber: `RS-${pad(seq, 5)}`, guestName: input.guestName, phone: input.phone, customerId: input.customerId, partySize: input.partySize,
       startsAt, endsAt, durationMinutes: dur, tableIds: waitlist ? [] : input.tableIds || [], status: waitlist ? 'WAITLIST' : 'BOOKED', source: input.source || 'STAFF', occasion: input.occasion, notes: input.notes,
-      quotedWaitMinutes: input.quotedWaitMinutes, deposit: { required: depAmount > 0, amount: depAmount }, createdBy: user._id,
+      quotedWaitMinutes: input.quotedWaitMinutes, deposit: { required: depAmount > 0, amount: depAmount, kind: input.depositKind || 'DEPOSIT' }, createdBy: user._id,
     }], { session });
     await C.audit({ businessId, branchId: r.branchId, userId: user._id, action: 'restaurant.reservation.create', entityType: 'Reservation', entityId: r._id, newValue: { n: r.reservationNumber, startsAt } }, session);
     return r;
@@ -56,7 +56,7 @@ async function list(businessId, user, { branchId, status, from, to, search, page
   if (status) f.status = status;
   if (from || to) { f.startsAt = {}; if (from) f.startsAt.$gte = new Date(from); if (to) f.startsAt.$lte = new Date(to); }
   if (search) { const rx = new RegExp(C.escapeRegex(search), 'i'); f.$or = [{ guestName: rx }, { phone: rx }, { reservationNumber: rx }]; }
-  const [items, total] = await Promise.all([Reservation.find(f).sort({ startsAt: 1, createdAt: 1 }).skip((page - 1) * limit).limit(limit), Reservation.countDocuments(f)]);
+  const [items, total] = await Promise.all([Reservation.find(f).populate('tableIds', 'name seats').sort({ startsAt: 1, createdAt: 1 }).skip((page - 1) * limit).limit(limit), Reservation.countDocuments(f)]);
   return C.paged(items, total, { page, limit });
 }
 
@@ -68,10 +68,14 @@ async function update(businessId, user, id, input) {
     const tableIds = input.tableIds || r.tableIds; const party = input.partySize || r.partySize;
     if (startsAt) { const endsAt = new Date(startsAt.getTime() + dur * 60000); await checkTables(businessId, r.branchId, tableIds, party, startsAt, endsAt, r._id, session, input.overrideCapacity); r.endsAt = endsAt; }
     Object.assign(r, { ...(input.guestName && { guestName: input.guestName }), ...(input.phone && { phone: input.phone }), ...(input.notes !== undefined && { notes: input.notes }), ...(input.occasion !== undefined && { occasion: input.occasion }), partySize: party, startsAt, durationMinutes: dur, tableIds });
+    if (input.startsAt || input.tableIds) { r.reminderSentAt = undefined; r.lateAlertedAt = undefined; r.lockedAt = undefined; }     // moved: alerts and the table lock start over
     if (r.status === 'WAITLIST' && startsAt && tableIds.length) r.status = 'BOOKED';   // promoted from the waiting list
     await r.save({ session }); return r;
   });
 }
+
+/** Prepaid money (cents) that has not been used on a bill and is still held. */
+const unusedPrepaid = (r) => (r.deposit && r.deposit.paid && !r.deposit.refunded && !r.deposit.forfeited ? Math.max(0, (r.deposit.amount || 0) - (r.deposit.appliedAmount || 0)) : 0);
 
 async function setStatus(businessId, user, id, { status, reason }) {
   const r = await load(businessId, id); C.assertBranchAccess(user, r.branchId);
@@ -83,7 +87,11 @@ async function setStatus(businessId, user, id, { status, reason }) {
   if (status === 'NO_SHOW') r.noShowAt = new Date();
   await r.save();
   if (['CANCELLED', 'NO_SHOW'].includes(status) && r.tableIds.length) await RestaurantTable.updateMany({ _id: { $in: r.tableIds }, status: 'RESERVED', currentOrderId: null }, { $set: { status: 'AVAILABLE', statusSince: new Date() } });
-  if (r.deposit?.paid && ['CANCELLED', 'NO_SHOW'].includes(status)) C.notifyManagement(businessId, { type: 'SYSTEM_ALERT', title: `Deposit held: ${r.reservationNumber}`, message: `${r.guestName}'s reservation is ${status.toLowerCase().replace('_', ' ')}. Decide whether to refund or forfeit the deposit.`, branchId: r.branchId, entityType: 'Reservation', entityId: r._id });
+  if (status === 'NO_SHOW' && unusedPrepaid(r) > 0) {
+    const ctx = await C.getContext(businessId);
+    if (ctx.settings.reservation.noShowAction === 'FORFEIT') { await Reservation.updateOne({ _id: r._id }, { $set: { 'deposit.forfeited': true } }); r.deposit.forfeited = true; }
+  }
+  if (unusedPrepaid(r) > 0 && !r.deposit.forfeited && ['CANCELLED', 'NO_SHOW'].includes(status)) C.notifyManagement(businessId, { type: 'SYSTEM_ALERT', title: `Deposit held: ${r.reservationNumber}`, message: `${r.guestName}'s reservation is ${status.toLowerCase().replace('_', ' ')}. Decide whether to refund or forfeit the deposit.`, branchId: r.branchId, entityType: 'Reservation', entityId: r._id });
   await C.audit({ businessId, branchId: r.branchId, userId: user._id, action: `restaurant.reservation.${status.toLowerCase()}`, entityType: 'Reservation', entityId: r._id, newValue: { reason } });
   return r;
 }
@@ -112,14 +120,14 @@ async function settleDeposit(businessId, user, id, { action, method, reason }) {
   C.requireCan(user, 'restaurant.reservations.manage');
   return C.inTx(async (session) => {
     const r = await load(businessId, id, session); C.assertBranchAccess(user, r.branchId);
-    if (!r.deposit.paid || r.deposit.appliedBillId || r.deposit.refunded || r.deposit.forfeited) throw ApiError.conflict('There is no unused deposit to settle', 'DEPOSIT_NOT_AVAILABLE');
+    const left = unusedPrepaid(r); if (left <= 0) throw ApiError.conflict('There is no unused prepaid amount to settle', 'DEPOSIT_NOT_AVAILABLE');
     if (action === 'FORFEIT') r.deposit.forfeited = true;
     else {
       r.deposit.refunded = true;
-      await Payment.create([{ businessId, branchId: r.branchId, customerId: r.customerId, method: method || r.deposit.method, provider: 'manual', amount: r.deposit.amount, status: 'REFUNDED', metadata: { kind: 'RESERVATION_DEPOSIT_REFUND', reservationId: r._id }, initiatedBy: user._id, completedAt: new Date() }], { session });
+      await Payment.create([{ businessId, branchId: r.branchId, customerId: r.customerId, method: method || r.deposit.method, provider: 'manual', amount: left, status: 'REFUNDED', metadata: { kind: 'RESERVATION_DEPOSIT_REFUND', reservationId: r._id }, initiatedBy: user._id, completedAt: new Date() }], { session });
     }
     await r.save({ session });
-    await C.audit({ businessId, branchId: r.branchId, userId: user._id, action: `restaurant.reservation.deposit_${action.toLowerCase()}`, entityType: 'Reservation', entityId: r._id, newValue: { reason, amount: r.deposit.amount } }, session);
+    await C.audit({ businessId, branchId: r.branchId, userId: user._id, action: `restaurant.reservation.deposit_${action.toLowerCase()}`, entityType: 'Reservation', entityId: r._id, newValue: { reason, amount: left } }, session);
     return r;
   });
 }
@@ -136,27 +144,87 @@ async function availability(businessId, user, { branchId, startsAt, durationMinu
   return { window: { startsAt: s, endsAt: e }, tables: free.filter((t) => !partySize || t.seats >= partySize), allFree: free.map((t) => ({ _id: t._id, name: t.name, seats: t.seats })), totalFreeSeats: free.reduce((a, t) => a + t.seats, 0) };
 }
 
-/** Job: mark upcoming tables RESERVED, release stale ones, mark late arrivals as no-show, remind staff. */
+/**
+ * A reservation that is close enough to its time holds its table: the table shows Reserved and nobody else can seat there. The owner / manager
+ * sets how far ahead that happens (`lockMinutes`). Returns the booking holding the table right now, or null.
+ */
+async function lockingReservation(businessId, tableId, settings, session) {
+  const lock = settings && settings.reservation && settings.reservation.lockMinutes != null ? settings.reservation.lockMinutes : 30;
+  const now = new Date();
+  return C.withSession(Reservation.findOne({ businessId, tableIds: tableId, status: { $in: RESERVATION_ACTIVE }, startsAt: { $lte: new Date(now.getTime() + lock * 60000) }, endsAt: { $gt: now } }).sort({ startsAt: 1 }), session);
+}
+
+/** The guest is here: open their order on the reserved table (the prepaid food amount comes off the bill by itself). */
+async function seat(businessId, user, id, { guestCount } = {}) {
+  C.requireCan(user, 'restaurant.orders.create', 'You need permission to open orders to seat a guest');
+  const r = await load(businessId, id); C.assertBranchAccess(user, r.branchId);
+  if (!RESERVATION_ACTIVE.includes(r.status)) throw ApiError.conflict(`Reservation is ${r.status}`, 'INVALID_RESERVATION_STATE');
+  if (!r.tableIds.length) throw ApiError.badRequest('Give this booking a table first', 'TABLE_REQUIRED');
+  const pre = (r.preOrder || []).length ? `PRE-ORDER: ${r.preOrder.map((i) => `${i.quantity}x ${i.name}`).join(', ')}` : undefined;
+  const { order } = await require('./order.service').createOrder(businessId, user, {
+    branchId: r.branchId, orderType: 'DINE_IN', tableId: r.tableIds[0], guestCount: guestCount || r.partySize, reservationId: r._id, customerId: r.customerId,
+    customerName: r.guestName, customerPhone: r.phone, notes: [r.occasion, pre].filter(Boolean).join(' | ') || undefined,
+  });
+  return { reservation: await load(businessId, id), order };
+}
+
+const hm = (d, tz) => { try { return new Intl.DateTimeFormat('en-GB', { timeZone: tz || 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d); } catch (e) { return d.toISOString().slice(11, 16); } };
+const FORFEIT_NOTE = (r) => (unusedPrepaid(r) > 0 ? ' Their prepaid amount is held: refund or forfeit it.' : '');
+
+/**
+ * Job (every minute). For each business, using the owner's settings:
+ *   1. guests who never came are marked no-show after `holdMinutes` (prepaid money is kept or held, per `noShowAction`) and the table is freed
+ *   2. a table is locked (Reserved) `lockMinutes` before its booking, and released again when nobody holds it
+ *   3. staff are told when a guest is late (`lateAlertMinutes`) and before the booking (`remindMinutes`)
+ */
 async function sweep() {
+  const Business = require('../../models/Business');
   const settings = await require('../../models/RestaurantSettings').find({});
   let marked = 0;
   for (const st of settings) {
-    const now = new Date(); const soon = new Date(now.getTime() + 30 * 60000);
-    const upcoming = await Reservation.find({ businessId: st.businessId, status: { $in: RESERVATION_ACTIVE }, startsAt: { $lte: soon }, endsAt: { $gt: now } });
-    const want = new Set(upcoming.flatMap((r) => r.tableIds.map(String)));
-    if (want.size) await RestaurantTable.updateMany({ _id: { $in: [...want] }, status: 'AVAILABLE', currentOrderId: null }, { $set: { status: 'RESERVED', statusSince: now } });
-    await RestaurantTable.updateMany({ businessId: st.businessId, status: 'RESERVED', currentOrderId: null, ...(want.size ? { _id: { $nin: [...want] } } : {}) }, { $set: { status: 'AVAILABLE', statusSince: now } });
-    const late = await Reservation.find({ businessId: st.businessId, status: { $in: ['BOOKED', 'CONFIRMED'] }, startsAt: { $lt: new Date(now.getTime() - st.reservation.holdMinutes * 60000) } }).limit(100);
-    for (const r of late) {
-      const got = await Reservation.updateOne({ _id: r._id, status: { $in: ['BOOKED', 'CONFIRMED'] } }, { $set: { status: 'NO_SHOW', noShowAt: now } });
-      if (got.modifiedCount) { marked += 1; C.notifyManagement(r.businessId, { type: 'RESERVATION_UPCOMING', title: `No-show: ${r.guestName}`, message: `${r.reservationNumber} did not arrive within ${st.reservation.holdMinutes} minutes.${r.deposit?.paid ? ' A deposit is held: refund or forfeit it.' : ''}`, branchId: r.branchId, entityType: 'Reservation', entityId: r._id }); }
-    }
-    if (st.reservation.remindMinutes > 0) {
-      const rem = await Reservation.find({ businessId: st.businessId, status: { $in: RESERVATION_ACTIVE }, reminderSentAt: null, startsAt: { $gt: now, $lte: new Date(now.getTime() + st.reservation.remindMinutes * 60000) } }).limit(100);
-      for (const r of rem) { const got = await Reservation.updateOne({ _id: r._id, reminderSentAt: null }, { $set: { reminderSentAt: now } }); if (got.modifiedCount) C.notifyRoles(r.businessId, r.branchId, C.FLOOR_LEAD_ROLES, { type: 'RESERVATION_UPCOMING', title: `Reservation soon: ${r.guestName} (${r.partySize})`, message: `${r.reservationNumber} at ${r.startsAt.toISOString()}`, entityType: 'Reservation', entityId: r._id }); }
-    }
+    try {
+      const rs = st.reservation || {}; const now = new Date(); const bid = st.businessId;
+      const biz = await Business.findById(bid).select('timezone'); const tz = biz && biz.timezone;
+      // 1. no-shows
+      if (rs.holdMinutes > 0) {
+        const late = await Reservation.find({ businessId: bid, status: { $in: ['BOOKED', 'CONFIRMED'] }, startsAt: { $lt: new Date(now.getTime() - rs.holdMinutes * 60000) } }).limit(100);
+        for (const r of late) {
+          const forfeit = rs.noShowAction === 'FORFEIT' && unusedPrepaid(r) > 0;
+          const got = await Reservation.updateOne({ _id: r._id, status: { $in: ['BOOKED', 'CONFIRMED'] } }, { $set: { status: 'NO_SHOW', noShowAt: now, ...(forfeit ? { 'deposit.forfeited': true } : {}) } });
+          if (!got.modifiedCount) continue;
+          marked += 1;
+          if (r.tableIds.length) await RestaurantTable.updateMany({ _id: { $in: r.tableIds }, status: 'RESERVED', currentOrderId: null }, { $set: { status: 'AVAILABLE', statusSince: now } });
+          C.notifyManagement(bid, { type: 'RESERVATION_UPCOMING', title: `No-show: ${r.guestName}`, message: `${r.reservationNumber} (${r.partySize} guests, ${hm(r.startsAt, tz)}) did not arrive within ${rs.holdMinutes} minutes. The table was released.${unusedPrepaid(r) > 0 ? (forfeit ? ' Their prepaid amount was kept by the business.' : FORFEIT_NOTE(r)) : ''}`, branchId: r.branchId, entityType: 'Reservation', entityId: r._id });
+        }
+      }
+      // 2. lock the tables of bookings that are close
+      const lock = rs.lockMinutes != null ? rs.lockMinutes : 30;
+      const upcoming = await Reservation.find({ businessId: bid, status: { $in: RESERVATION_ACTIVE }, startsAt: { $lte: new Date(now.getTime() + lock * 60000) }, endsAt: { $gt: now } });
+      const want = new Set(upcoming.flatMap((r) => r.tableIds.map(String)));
+      if (want.size) await RestaurantTable.updateMany({ _id: { $in: [...want] }, status: 'AVAILABLE', currentOrderId: null }, { $set: { status: 'RESERVED', statusSince: now } });
+      await RestaurantTable.updateMany({ businessId: bid, status: 'RESERVED', currentOrderId: null, ...(want.size ? { _id: { $nin: [...want] } } : {}) }, { $set: { status: 'AVAILABLE', statusSince: now } });
+      for (const r of upcoming.filter((x) => !x.lockedAt)) {            // tell the floor once if the table is still in use when its booking comes up
+        const busy = await RestaurantTable.find({ _id: { $in: r.tableIds }, currentOrderId: { $ne: null } }).select('name');
+        await Reservation.updateOne({ _id: r._id }, { $set: { lockedAt: now } });
+        if (busy.length) C.notifyRoles(bid, r.branchId, C.FLOOR_LEAD_ROLES, { type: 'RESERVATION_UPCOMING', title: `Table ${busy.map((t) => t.name).join(', ')} is reserved for ${hm(r.startsAt, tz)}`, message: `${r.guestName} (${r.partySize} guests, ${r.reservationNumber}) is booked here but the table is still in use. Please clear it in time.`, entityType: 'Reservation', entityId: r._id });
+      }
+      // 3. late guests and reminders
+      if (rs.lateAlertMinutes > 0) {
+        const lt = await Reservation.find({ businessId: bid, status: { $in: ['BOOKED', 'CONFIRMED'] }, lateAlertedAt: null, startsAt: { $lt: new Date(now.getTime() - rs.lateAlertMinutes * 60000) } }).limit(100);
+        for (const r of lt) { const got = await Reservation.updateOne({ _id: r._id, lateAlertedAt: null }, { $set: { lateAlertedAt: now } }); if (got.modifiedCount) C.notifyRoles(bid, r.branchId, [...C.FLOOR_LEAD_ROLES, 'RECEPTIONIST'], { type: 'RESERVATION_UPCOMING', title: `Late guest: ${r.guestName}`, message: `${r.reservationNumber} was booked for ${hm(r.startsAt, tz)} (${r.partySize} guests, ${r.phone}). Call them${rs.holdMinutes > 0 ? `; the table is released ${rs.holdMinutes} minutes after the booking time` : ''}.`, entityType: 'Reservation', entityId: r._id }); }
+      }
+      if (rs.remindMinutes > 0) {
+        const rem = await Reservation.find({ businessId: bid, status: { $in: RESERVATION_ACTIVE }, reminderSentAt: null, startsAt: { $gt: now, $lte: new Date(now.getTime() + rs.remindMinutes * 60000) } }).limit(100);
+        for (const r of rem) {
+          const got = await Reservation.updateOne({ _id: r._id, reminderSentAt: null }, { $set: { reminderSentAt: now } });
+          if (!got.modifiedCount) continue;
+          const tbs = await RestaurantTable.find({ _id: { $in: r.tableIds } }).select('name');
+          C.notifyRoles(bid, r.branchId, [...C.FLOOR_LEAD_ROLES, 'RECEPTIONIST'], { type: 'RESERVATION_UPCOMING', title: `Reservation at ${hm(r.startsAt, tz)}: ${r.guestName} (${r.partySize})`, message: `${r.reservationNumber}${tbs.length ? ` · Table ${tbs.map((t) => t.name).join(', ')}` : ''}${r.deposit && r.deposit.paid ? ' · prepaid' : ''}${(r.preOrder || []).length ? ` · pre-order: ${r.preOrder.map((i) => `${i.quantity}x ${i.name}`).join(', ')}` : ''}. Get the table ready.`, entityType: 'Reservation', entityId: r._id });
+        }
+      }
+    } catch (e) { console.error('[reservations] sweep failed for a business:', e.message); }
   }
   return marked;
 }
 
-module.exports = { create, get, list, update, setStatus, recordDeposit, settleDeposit, availability, sweep };
+module.exports = { create, get, list, update, setStatus, recordDeposit, settleDeposit, availability, sweep, seat, lockingReservation, unusedPrepaid };

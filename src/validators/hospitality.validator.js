@@ -52,9 +52,9 @@ const roomTypeBody = z.object({
   amenities: z.array(str(60)).max(40).optional(), bedConfig: str(80).optional(), sizeSqm: z.coerce.number().positive().optional(), taxRate: z.coerce.number().min(0).max(100).optional(), sortOrder: z.coerce.number().int().optional(),
 });
 const roomTypeUpdate = roomTypeBody.partial().extend({ active: z.boolean().optional() });
-const roomBody = z.object({ branchId: objectId, roomTypeId: objectId, number: str(20).min(1), name: str(60).optional(), floor: str(20).optional(), notes: str(500).optional() });
+const roomBody = z.object({ branchId: objectId, roomTypeId: objectId, number: str(20).min(1), name: str(60).optional(), floor: str(20).optional(), notes: str(500).optional(), images: z.array(str(500)).max(8).optional() });
 const roomUpdate = roomBody.omit({ branchId: true }).partial().extend({ active: z.boolean().optional(), qrEnabled: z.boolean().optional() });
-const roomBulk = z.object({ branchId: objectId, roomTypeId: objectId, numbers: z.array(str(20).min(1)).min(1).max(200), floor: str(20).optional() });
+const roomBulk = z.object({ branchId: objectId, roomTypeId: objectId, numbers: z.array(str(20).min(1)).min(1).max(200), floor: str(20).optional(), images: z.array(str(500)).max(8).optional() });
 const roomStatus = z.object({ status: z.enum(['AVAILABLE', 'OUT_OF_ORDER']), reason: str(300).optional(), until: z.coerce.date().optional() });
 const housekeepingBody = z.object({ housekeeping: z.enum(H.HOUSEKEEPING_STATUS) });
 

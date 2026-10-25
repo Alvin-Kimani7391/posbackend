@@ -51,7 +51,7 @@ const settingsSchema = z.object({
     baseUrl: z.string().trim().url().max(200).or(z.literal('')), welcomeMessage: str(300), welcomeMessageSw: str(300),
   }).partial().optional(),
   requireTableCleaning: z.boolean().optional(), paymentsRequireShift: z.boolean().optional(),
-  reservation: z.object({ durationMinutes: z.coerce.number().int().min(15).max(600), holdMinutes: z.coerce.number().int().min(0).max(120), depositRequired: z.boolean(), depositCents: money0, remindMinutes: z.coerce.number().int().min(0).max(1440) }).partial().optional(),
+  reservation: z.object({ durationMinutes: z.coerce.number().int().min(15).max(600), holdMinutes: z.coerce.number().int().min(0).max(120), depositRequired: z.boolean(), depositCents: money0, remindMinutes: z.coerce.number().int().min(0).max(1440), lockMinutes: z.coerce.number().int().min(0).max(480), lateAlertMinutes: z.coerce.number().int().min(0).max(120), noShowAction: z.enum(['HOLD', 'FORFEIT']), minSpendPerGuestCents: money0, maxNoShows: z.coerce.number().int().min(0).max(20) }).partial().optional(),
 }).strict();
 const areaBody = z.object({ branchId: objectId, name: str(60).min(1), type: z.enum(R.AREA_TYPES).optional(), sortOrder: z.coerce.number().int().optional() });
 const areaUpdate = areaBody.omit({ branchId: true }).partial();
@@ -170,8 +170,9 @@ const contextQuery = z.object({ branchId: objectId });
 const openShiftBody = z.object({ branchId: objectId, registerId: objectId, openingCash: money0 });
 
 // ---- reservations / staff
-const reservationBody = z.object({ branchId: objectId, guestName: str(120).min(2), phone: str(20).min(7), customerId: objectId.optional(), partySize: z.coerce.number().int().min(1).max(500), startsAt: date.optional(), durationMinutes: z.coerce.number().int().min(15).max(600).optional(), tableIds: z.array(objectId).optional(), source: z.enum(['PHONE', 'WALK_IN', 'ONLINE', 'STAFF']).optional(), occasion: str(80).optional(), notes: str(500).optional(), waitlist: z.boolean().optional(), quotedWaitMinutes: z.coerce.number().int().min(0).optional(), depositAmount: money0.optional(), overrideCapacity: z.boolean().optional() });
-const reservationUpdate = reservationBody.omit({ branchId: true, waitlist: true, source: true, customerId: true, depositAmount: true }).partial();
+const reservationBody = z.object({ branchId: objectId, guestName: str(120).min(2), phone: str(20).min(7), customerId: objectId.optional(), partySize: z.coerce.number().int().min(1).max(500), startsAt: date.optional(), durationMinutes: z.coerce.number().int().min(15).max(600).optional(), tableIds: z.array(objectId).optional(), source: z.enum(['PHONE', 'WALK_IN', 'ONLINE', 'STAFF']).optional(), occasion: str(80).optional(), notes: str(500).optional(), waitlist: z.boolean().optional(), quotedWaitMinutes: z.coerce.number().int().min(0).optional(), depositAmount: money0.optional(), depositKind: z.enum(['DEPOSIT', 'FOOD']).optional(), overrideCapacity: z.boolean().optional() });
+const reservationUpdate = reservationBody.omit({ branchId: true, waitlist: true, source: true, customerId: true, depositAmount: true, depositKind: true }).partial();
+const reservationSeat = z.object({ guestCount: z.coerce.number().int().min(1).max(500).optional() }).strict();
 const reservationStatus = z.object({ status: z.enum(['CONFIRMED', 'ARRIVED', 'CANCELLED', 'NO_SHOW']), reason: optReason });
 const depositBody = z.object({ method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']), amount: money, reference: str(100).optional() });
 const depositSettle = z.object({ action: z.enum(['REFUND', 'FORFEIT']), method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']).optional(), reason: optReason });
@@ -199,6 +200,6 @@ module.exports = {
   countStart, countSubmit, stockQuery, movementQuery, purchaseQuery, countListQuery, expiringQuery, createOrder, addItemsBody, updateItemBody, cancelItemBody, versionBody, fireBody, serveBody, compBody,
   updateOrderBody, transferBody2, reassignBody, mergeBody, assistBody, reasonBody, riderBody, deliveryStatusBody, pickupBody, orderListQuery, syncBody, kitchenQueue, itemStatusBody, bumpBody, priorityBody, kItemParam,
   genBill, discountBody, scBody, splitBody, moveBody, mergeBillsBody, payBody, tipBody, closeBillBody, refundBody, billListQuery, stkBody, manualBody, claimBody, refParam, verifyBody, entryParam, unverifiedQuery, contextQuery, openShiftBody,
-  reservationBody, reservationUpdate, reservationStatus, depositBody, depositSettle, reservationQuery, availQuery, scheduleBody, clockInBody, clockOutBody, availabilityBody, handoverBody, shiftQuery,
+  reservationBody, reservationUpdate, reservationStatus, reservationSeat, depositBody, depositSettle, reservationQuery, availQuery, scheduleBody, clockInBody, clockOutBody, availabilityBody, handoverBody, shiftQuery,
   tipQuery, tipAllocate, tipPayout, incidentBody, incidentResolve, incidentQuery, wasteQuery, salesQuery, deliveryListQuery, pageQ,
 };

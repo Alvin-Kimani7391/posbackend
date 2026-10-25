@@ -62,6 +62,9 @@ async function createOrder(businessId, user, input) {
           if (!r || !['BOOKED', 'CONFIRMED', 'ARRIVED'].includes(r.status)) throw ApiError.badRequest('Reservation not found or not active', 'RESERVATION_NOT_ACTIVE');
           if (!r.tableIds.some((x) => C.sameId(x, t0._id))) throw ApiError.badRequest('That reservation is for a different table', 'RESERVATION_TABLE_MISMATCH');
           allowReserved = true;
+        } else if (!allowReserved) {      // a walk-in cannot take a table that is held for a booking starting soon (the owner sets how soon)
+          const hold = await require('./reservation.service').lockingReservation(businessId, t0._id, ctx.settings, session);
+          if (hold) throw ApiError.conflict(`Table ${t0.name} is reserved for ${hold.guestName} (${hold.reservationNumber})`, 'TABLE_RESERVED');
         }
         table = await tables.claimTable({ businessId, tableId: input.tableId, orderId: _id, guestCount: input.guestCount, waiterId: undefined, allowReserved, allowCleaning: C.can(user, 'restaurant.tables.manage'), session });
       }

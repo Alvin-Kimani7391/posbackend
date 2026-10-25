@@ -28,4 +28,5 @@ const wrap = (handler) => (req, res, next) => handler(req, res, (err) => {
 module.exports = {
   uploadMenuImage: wrap(mk('menu').single('image')),
   uploadRoomTypeImages: wrap(mk('rooms').array('images', 8)),
+  uploadRoomImages: wrap(mk('rooms').array('images', 8)),     // used by the add-room / add-room-type forms: upload first, the links are saved with the room
 };
