@@ -61,6 +61,7 @@ router.use('/offline', require('../offline-review.routes'));
 router.use('/restaurant', require('../restaurant.routes'));
 router.use('/accommodation', require('../accommodation.routes'));
 router.use('/cashier', require('../cashier.routes'));
+router.use('/manager', require('../manager.routes'));               // owner / manager command centre
 router.use('/public/qr', require('../guest.public.routes'));
 router.use('/public/kiosk', require('../selfservice.public.routes'));
 router.use('/public/store', require('../storefront.public.routes'));
