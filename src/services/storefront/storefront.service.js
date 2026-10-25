@@ -229,7 +229,9 @@ async function tables(token, { branchId, date, time, partySize = 1 }) {
   return {
     durationMinutes: dur, slots, depositRequired: !!rs.depositRequired, deposit: money(rs.depositCents || 0),
     tables: list.map((x) => {
-      const reserved = taken.has(String(x._id)); const occupied = isNow && x.status !== 'AVAILABLE';
+      const soon = startsAt.getTime() < Date.now() + dur * 60000; // the party seated now is still there during this slot
+      const inUse = x.status !== 'AVAILABLE' || !!x.currentOrderId;
+      const reserved = taken.has(String(x._id)) || (soon && x.status === 'RESERVED'); const occupied = (isNow || soon) && inUse && x.status !== 'RESERVED';
       const small = x.seats < partySize;
       return { id: x._id, name: x.name, seats: x.seats, area: an.get(String(x.areaId)), free: !reserved && !occupied && !small, reason: reserved ? 'RESERVED' : occupied ? 'OCCUPIED' : small ? 'TOO_SMALL' : null };
     }),
