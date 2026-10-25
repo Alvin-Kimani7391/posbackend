@@ -39,6 +39,11 @@ const settingsSchema = z.object({
     tables: z.object({ enabled: z.boolean(), requirePayment: z.boolean(), openTime: z.string().regex(/^\d{1,2}:\d{2}$/), closeTime: z.string().regex(/^\d{1,2}:\d{2}$/), slotMinutes: z.coerce.number().int().min(15).max(240), minLeadMinutes: z.coerce.number().int().min(0).max(1440), maxAdvanceDays: z.coerce.number().int().min(1).max(365) }).partial(),
     rooms: z.object({ enabled: z.boolean() }).partial(),
   }).partial().optional(),
+  rider: z.object({
+    enabled: z.boolean(), selfClaim: z.boolean(), requirePaymentBeforeDelivered: z.boolean(), allowCash: z.boolean(), allowMpesa: z.boolean(), autoArrive: z.boolean(), shareRiderPhone: z.boolean(),
+    alertDistancesM: z.array(z.coerce.number().int().min(10).max(5000)).min(1).max(6),
+    pay: z.object({ mode: z.enum(['NONE', 'FLAT', 'FEE_PERCENT']), flatCents: money0, feePercent: z.coerce.number().min(0).max(100) }).partial(),
+  }).partial().strict().optional(),
   guestOrdering: z.object({
     tableMode: z.enum(H.GUEST_MODES), roomMode: z.enum(H.GUEST_MODES), maxAutoOrderCents: money0, selfSeat: z.boolean(), requireName: z.boolean(), requirePhone: z.boolean(),
     maxItemsPerRequest: z.coerce.number().int().min(1).max(100), maxQuantityPerItem: z.coerce.number().int().min(1).max(200), allowNotes: z.boolean(), showPrices: z.boolean(), allowBillRequest: z.boolean(),

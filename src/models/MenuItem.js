@@ -16,7 +16,7 @@ const s = new Schema({
   variants: [{ name: { type: String, required: true }, price: Number, priceDelta: { type: Number, default: 0 }, portionMultiplier: { type: Number, default: 1, min: 0.01 }, active: { type: Boolean, default: true } }],
   requireVariant: { type: Boolean, default: false },
   modifierGroupIds: [{ type: Schema.Types.ObjectId, ref: 'ModifierGroup' }],
-  timedPrices: [{ _id: false, label: String, windows: [window], price: Number, percentOff: Number, branchIds: [{ type: Schema.Types.ObjectId, ref: 'Branch' }] }], // happy hour / promotions
+  timedPrices: [{ _id: false, label: String, windows: [window], price: Number, percentOff: Number, branchIds: [{ type: Schema.Types.ObjectId, ref: 'Branch' }], promoRef: { type: Schema.Types.ObjectId, ref: 'TvPromotion' } }], // happy hour (promoRef = created by a Live TV promotion) / promotions
   menuPeriods: [window],                                                          // breakfast / lunch / dinner availability
   taxRate: { type: Number, default: 0, min: 0, max: 100 },
   serviceChargeable: { type: Boolean, default: true },

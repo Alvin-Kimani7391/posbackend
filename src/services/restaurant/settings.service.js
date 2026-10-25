@@ -15,6 +15,7 @@ async function updateSettings(businessId, userId, patch) {
   const merge = (target, src) => { for (const [k, v] of Object.entries(src)) { if (v && typeof v === 'object' && !Array.isArray(v)) { if (!target[k]) target[k] = {}; merge(target[k], v); } else target[k] = v; } };
   for (const [k, v] of Object.entries(patch)) { if (v && typeof v === 'object' && !Array.isArray(v)) { const cur = settings[k] && settings[k].toObject ? settings[k].toObject() : (settings[k] || {}); merge(cur, v); settings[k] = cur; } else settings[k] = v; }
   await settings.save();
+  if (patch.rider || patch.storefront) require('../delivery/tracking.service').forgetSettings(businessId);    // rider settings are cached for 30 s
   if (patch.serviceMode) {                                           // RESTAURANT / ACCOMMODATION / BOTH only switches the accommodation module on or off; nothing is deleted
     await Business.updateOne({ _id: businessId }, { $set: { 'featureSettings.accommodation': patch.serviceMode !== 'RESTAURANT' } });
     require('../../utils/businessContext').invalidateBusinessContext(businessId);

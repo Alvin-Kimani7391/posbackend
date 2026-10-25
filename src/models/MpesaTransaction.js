@@ -56,6 +56,7 @@ const mpesaTransactionSchema = new Schema(
     storePay: { kind: { type: String, enum: ['RESERVATION', 'STAY', 'ORDER'] }, refId: Schema.Types.ObjectId, accountId: Schema.Types.ObjectId, settledAt: Date, error: String },   // a deposit paid from the storefront
     guestPay: { kind: { type: String, enum: ['BILL', 'STAY'] }, refId: Schema.Types.ObjectId, orderId: Schema.Types.ObjectId, placeKey: String, placeLabel: String, accountId: Schema.Types.ObjectId, settleStartedAt: Date, settledAt: Date, error: String, tries: { type: Number, default: 0 } }, // STK started by a guest from the QR page; the server finishes it even if the phone closed the page
     kioskPay: { orderId: Schema.Types.ObjectId, billId: Schema.Types.ObjectId, settleStartedAt: Date, settledAt: Date, error: String, tries: { type: Number, default: 0 } }, // STK started from the self-service kiosk; the server finishes it even if the screen closed
+    riderPay: { orderId: Schema.Types.ObjectId, riderId: Schema.Types.ObjectId, collectionId: Schema.Types.ObjectId, settleStartedAt: Date, settledAt: Date, error: String, tries: { type: Number, default: 0 } },   // STK sent by a rider at the customer's door
     lastCheckedAt: { type: Date },
     escalatedAt: { type: Date }, // set once a genuinely-unresolved PENDING transaction has been flagged to management (see reapAbandoned)
   },

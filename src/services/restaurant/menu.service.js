@@ -124,7 +124,7 @@ const priceHistory = (businessId, id) => AuditLog.find({ businessId, entityType:
  */
 // Short-lived cache: the menu is rebuilt for every table, waiter and QR scan otherwise. Cleared on every menu write; 10 s max otherwise.
 const MENU_TTL = 10000; const menuCache = new Map();
-const bustMenu = (businessId) => { const p = String(businessId) + ':'; for (const k of menuCache.keys()) if (k.startsWith(p)) menuCache.delete(k); };
+const bustMenu = (businessId) => { const p = String(businessId) + ':'; for (const k of menuCache.keys()) if (k.startsWith(p)) menuCache.delete(k); try { require('../tv/tv.service').menuChanged(businessId); } catch (e) { /* TV refresh is best-effort */ } };
 async function getMenu(businessId, user, { branchId, orderType = 'DINE_IN', now } = {}) {
   C.assertBranchAccess(user, branchId);
   const key = `${businessId}:${branchId}:${orderType}`; const hit = menuCache.get(key);

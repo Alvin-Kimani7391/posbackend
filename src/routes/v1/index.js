@@ -64,5 +64,10 @@ router.use('/cashier', require('../cashier.routes'));
 router.use('/public/qr', require('../guest.public.routes'));
 router.use('/public/kiosk', require('../selfservice.public.routes'));
 router.use('/public/store', require('../storefront.public.routes'));
+router.use('/public/rider', require('../rider.public.routes'));        // rider QR: context + sign-in
+router.use('/rider', require('../rider.routes'));                     // rider app
+router.use('/delivery-live', require('../delivery-live.routes'));     // staff live board, rider cash, rider QR
+router.use('/public/tv', require('../tv.public.routes'));              // TV: pair, content, heartbeat, stream
+router.use('/tv', require('../tv.routes'));                          // owner / manager: screens, playlists, promotions, publish
 
 module.exports = router;

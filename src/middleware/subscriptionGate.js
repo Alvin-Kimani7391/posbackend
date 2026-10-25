@@ -15,7 +15,7 @@ const ALWAYS_ALLOWED = [
   /^\/meta(\/|$)/, /^\/auth(\/|$)/, /^\/billing(\/|$)/, /^\/announcements(\/|$)/, /^\/notifications(\/|$)/,
   /^\/tickets(\/|$)/, /^\/admin(\/|$)/, /^\/payments\/mpesa\/(callback|c2b)(\/|$)/,
   /^\/sms-hooks(\/|$)/,
-  /^\/public\/(qr|store)(\/|$)/,   // guest QR page + storefront: their own guest-account token, not a staff token
+  /^\/public\/(qr|store|tv)(\/|$)/,   // guest QR page + storefront: their own guest-account token, not a staff token
     /^\/sync(\/|$)/,   // offline sales already happened; a locked shop must still be able to deliver them (flagged at ingest)
 ];
 

@@ -71,7 +71,13 @@ const orderSchema = new Schema({
   delivery: {
     contactName: String, phone: String, address: String, landmark: String, instructions: String, fee: { type: Number, default: 0 },
     lat: Number, lng: Number, distanceKm: Number, etaMinutes: Number, mapsUrl: String, payment: { type: String, default: 'CASH' }, trackKey: { type: String, index: true }, online: { type: Boolean, default: false },
-    riderId: Schema.Types.ObjectId, riderName: String, status: { type: String, enum: C.DELIVERY_STATUS }, assignedAt: Date, outForDeliveryAt: Date, deliveredAt: Date, failReason: String,
+    riderId: Schema.Types.ObjectId, riderName: String, riderPhone: String, status: { type: String, enum: C.DELIVERY_STATUS }, assignedAt: Date, outForDeliveryAt: Date, deliveredAt: Date, failReason: String,
+    // ---- rider app + live tracking (services/delivery) ----
+    pickedUpAt: Date, arrivedAt: Date, arrivedFarM: Number,                       // arrivedFarM: how far from the pin the rider was when he pressed "Arrived" (null = close enough)
+    customerLive: { lat: Number, lng: Number, at: Date },                         // the customer moved their pin / shared their live spot
+    tracking: { distanceM: Number, etaMinutes: Number, lat: Number, lng: Number, speed: Number, heading: Number, at: Date, minDistanceM: Number, alertsSent: [Number], nearNotified: Boolean },
+    alerts: { type: [new Schema({ id: String, kind: String, distanceM: Number, message: String, at: { type: Date, default: Date.now } }, { _id: false })], default: undefined },
+    rating: { stars: { type: Number, min: 1, max: 5 }, comment: String, at: Date },
     platform: String, commissionPercent: { type: Number, default: 0 },
   },
   // Self-service kiosk orders only (source KIOSK). paymentState gates the kitchen: items stay HELD until it is PAID.

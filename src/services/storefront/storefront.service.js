@@ -181,7 +181,12 @@ function trackView(o, sb, rc) {
     message: ({ AWAITING_PAYMENT: 'Waiting for your M-PESA payment. Your order is held for a few minutes.', RECEIVED: 'We have your order.', CONFIRMED: 'Your order is confirmed.', PREPARING: 'The kitchen is preparing your food.', READY: 'Your food is ready and waiting for the rider.', ON_THE_WAY: 'Your rider is on the way.', DELIVERED: 'Delivered. Enjoy your meal!', CANCELLED: state === 'EXPIRED' ? 'This order was released because it was not paid in time.' : 'This order was cancelled.', FAILED: 'We could not deliver this order. Please call us.' })[stage],
   };
 }
-const trackFull = async (o) => trackView(o, await StoreBooking.findOne({ businessId: o.businessId, kind: 'ORDER', refId: o._id }), await RC.getContext(o.businessId));
+const trackFull = async (o) => {
+  const view = trackView(o, await StoreBooking.findOne({ businessId: o.businessId, kind: 'ORDER', refId: o._id }), await RC.getContext(o.businessId));
+  // live rider block (position, distance, ETA, alerts, steps). Old pages ignore it; the new tracking screen draws it.
+  if (o.delivery && o.delivery.trackKey && o.delivery.riderId) { try { view.live = await require('../delivery/tracking.service').customerLive(o.businessId, o.delivery.trackKey); } catch (e) { /* tracking is a bonus: never break the order page */ } }
+  return view;
+};
 async function track(token, trackKey) {
   const r = await open(token);
   const o = await RestaurantOrder.findOne({ businessId: r.businessId, 'delivery.trackKey': String(trackKey) });
@@ -533,4 +538,4 @@ async function sweep() {
   await expireUnpaid();
 }
 
-module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment };
+module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment, open };

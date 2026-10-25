@@ -483,11 +483,14 @@ async function assignRider(businessId, user, id, { riderId }) {
   const out = await C.inTx(async (session) => {
     const order = await C.loadOrder(businessId, id, session); C.assertBranchAccess(user, order.branchId); C.assertOpen(order);
     if (order.orderType !== 'DELIVERY') throw ApiError.badRequest('Not a delivery order', 'NOT_DELIVERY');
-    const r = await User.findOne({ _id: riderId, businessId, status: 'active', role: ROLES.DELIVERY_RIDER }).select('name').session(session); if (!r) throw ApiError.badRequest('Rider not found', 'USER_NOT_FOUND');
-    order.delivery.riderId = r._id; order.delivery.riderName = r.name; order.delivery.status = 'ASSIGNED'; order.delivery.assignedAt = new Date();
+    if (['OUT_FOR_DELIVERY', 'DELIVERED'].includes(order.delivery.status)) throw ApiError.conflict(`Delivery is already ${order.delivery.status === 'DELIVERED' ? 'delivered' : 'on the road'}. It cannot be given to another rider.`, 'INVALID_DELIVERY_STATE');
+    const r = await User.findOne({ _id: riderId, businessId, status: 'active', role: ROLES.DELIVERY_RIDER }).select('name phone').session(session); if (!r) throw ApiError.badRequest('Rider not found', 'USER_NOT_FOUND');
+    order.delivery.riderId = r._id; order.delivery.riderName = r.name; order.delivery.riderPhone = r.phone; order.delivery.status = 'ASSIGNED'; order.delivery.assignedAt = new Date();
+    order.delivery.pickedUpAt = undefined; order.delivery.arrivedAt = undefined;          // a new rider starts from the restaurant
     C.touch(order, user._id, 'delivery.assign', r.name); await order.save({ session }); return order;
   });
   C.notifyUser(businessId, riderId, { type: 'DELIVERY_ASSIGNED', title: `Delivery ${out.orderNumber}`, message: `${out.delivery.address}`, branchId: out.branchId, entityType: 'RestaurantOrder', entityId: out._id });
+  require('../delivery/tracking.service').onAssigned(out, { _id: out.delivery.riderId, name: out.delivery.riderName }).catch(() => {});   // rider's phone + the customer's tracking page
   return out;
 }
 
@@ -499,12 +502,15 @@ async function setDeliveryStatus(businessId, user, id, { status, reason }) {
   const allowed = { ASSIGNED: ['OUT_FOR_DELIVERY'], OUT_FOR_DELIVERY: ['DELIVERED', 'FAILED'], PENDING: ['ASSIGNED'], FAILED: ['OUT_FOR_DELIVERY'] };
   if (!(allowed[order.delivery.status] || []).includes(status)) throw ApiError.conflict(`Delivery is ${order.delivery.status}`, 'INVALID_DELIVERY_STATE');
   if (status === 'OUT_FOR_DELIVERY' && !order.items.some((i) => i.status === 'READY' || i.status === 'SERVED')) throw ApiError.conflict('The food is not ready', 'ITEMS_NOT_READY');
+  if (status === 'DELIVERED') await require('../delivery/delivery-payment.service').assertCanDeliver(order, user);     // a rider cannot finish a delivery that has not been paid
   const now = new Date();
   order.delivery.status = status; if (status === 'OUT_FOR_DELIVERY') order.delivery.outForDeliveryAt = now; if (status === 'DELIVERED') order.delivery.deliveredAt = now; if (status === 'FAILED') order.delivery.failReason = reason;
   if (status === 'OUT_FOR_DELIVERY') order.items.forEach((i) => { if (i.status === 'READY') { i.status = 'SERVED'; i.servedAt = now; } });
   C.touch(order, user._id, `delivery.${status.toLowerCase()}`, reason); await order.save();
   if (status === 'DELIVERED' || status === 'OUT_FOR_DELIVERY') await bills.tryCloseOrder(businessId, id, user);
-  return C.loadOrder(businessId, id);
+  const fresh = await C.loadOrder(businessId, id);
+  await require('../delivery/tracking.service').onStatus(fresh, status, user, reason);      // customer alert, live board, cashier notice (never throws)
+  return fresh;
 }
 
 async function collectPickup(businessId, user, id, { collectedBy }) {

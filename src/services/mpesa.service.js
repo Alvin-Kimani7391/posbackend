@@ -638,6 +638,7 @@ async function handleCallback(businessId, body) {
   if (txn.status === 'SUCCESS' && txn.guestPay && txn.guestPay.kind) require('./hospitality/guest-portal.service').finalizeByTxn(txn._id);
   if (txn.status === 'SUCCESS' && txn.kioskPay && txn.kioskPay.orderId) require('./restaurant/selfservice.service').finalizeByTxn(txn._id);
   if (txn.status === 'SUCCESS' && txn.storePay && txn.storePay.kind) require('./storefront/storefront.service').settleByTxn(txn._id);
+  if (txn.status === 'SUCCESS' && txn.riderPay && txn.riderPay.orderId) require('./delivery/delivery-payment.service').finalizeByTxn(txn._id);   // rider took M-PESA at the customer's door
 
   if (txn.status === 'FAILED' && !callbackSaysSuccess) {
     await notificationService.notifyManagement(businessId, {

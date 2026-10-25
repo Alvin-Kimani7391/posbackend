@@ -24,6 +24,8 @@ const RESTAURANT_PERMISSIONS = Object.freeze([
   'restaurant.shifts.self', 'restaurant.shifts.view', 'restaurant.shifts.manage',
   'restaurant.tips.view', 'restaurant.tips.manage',
   'restaurant.delivery.self', 'restaurant.delivery.view', 'restaurant.delivery.manage',
+  'restaurant.delivery.cash',   // receive a rider's cash at the till and see who is holding money
+  'restaurant.delivery.qr',     // print / rotate the rider QR code
   'restaurant.incidents.create', 'restaurant.incidents.manage',
   'restaurant.reports.view', 'restaurant.reports.staff', // cost / profit figures additionally need reports.profit
   // guest QR ordering: see and answer guest orders and calls; manage QR codes
@@ -46,7 +48,7 @@ const ROLE_GRANTS = {
   [ROLES.CASHIER]: [
     'restaurant.menu.view', 'restaurant.tables.view', 'restaurant.tables.view_all', 'restaurant.orders.view', 'restaurant.orders.view_all',
     'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.pay', 'restaurant.bills.split',
-    'restaurant.reservations.view', 'restaurant.tips.view', 'restaurant.delivery.view',
+    'restaurant.reservations.view', 'restaurant.tips.view', 'restaurant.delivery.view', 'restaurant.delivery.cash',
     'restaurant.guest.view', 'restaurant.guest.respond',
     'accommodation.rooms.view', 'accommodation.stays.view', 'accommodation.folio.pay',
     'cashier.view', 'cashier.drawer',
@@ -84,7 +86,7 @@ const ROLE_GRANTS = {
     'restaurant.bills.view', 'restaurant.bills.generate', 'restaurant.bills.split', 'restaurant.bills.pay',
     'restaurant.kitchen.view', 'restaurant.kitchen.expedite', 'restaurant.reservations.view', 'restaurant.reservations.manage',
     'restaurant.incidents.create', 'restaurant.incidents.manage', 'restaurant.shifts.self', 'restaurant.shifts.view', 'restaurant.shifts.manage',
-    'restaurant.tips.view', 'restaurant.delivery.view', 'restaurant.delivery.manage', 'restaurant.reports.view',
+    'restaurant.tips.view', 'restaurant.delivery.view', 'restaurant.delivery.manage', 'restaurant.delivery.cash', 'restaurant.reports.view',
     'restaurant.guest.view', 'restaurant.guest.respond', 'restaurant.guest.qr', 'accommodation.rooms.view', 'accommodation.stays.view',
     'sales.view', 'customers.view', 'customers.create', 'shifts.open', 'shifts.close', 'shifts.view',
     'notifications.view', 'notifications.send', 'tickets.view', 'tickets.create',

@@ -9,6 +9,8 @@ const { objectId } = require('../validators/common');
 const svc = require('../services/storefront/storefront.service');
 const acct = require('../services/hospitality/guest-account.service');
 const hv = require('../validators/hospitality.validator');
+const rv = require('../validators/rider.validator');
+const cust = require('../services/delivery/customer-tracking.service');
 
 const lim = (windowMs, max) => rateLimit({ windowMs, max, keyGenerator: (req) => `${req.params.token || ''}:${req.ip}`, standardHeaders: true, legacyHeaders: false, message: { success: false, message: 'Too many requests. Please wait a moment.', code: 'RATE_LIMITED' } });
 const read = lim(60000, 90); const poll = lim(60000, 40); const write = lim(10 * 60000, 20); const pay = lim(15 * 60000, 10);
@@ -52,6 +54,15 @@ router.get('/:token/deposit/:reference', poll, validate({ params: z.object({ tok
 router.post('/:token/delivery/:key/pay', pay, validate({ params: z.object({ token: z.string().max(120), key: z.string().regex(/^[a-f0-9]{16}$/) }), body: z.object({ payerPhone: str(20).min(9) }).strict() }), h((r) => svc.orderPayStart(t(r), r.params.key, r.body)));
 router.get('/:token/pay/:reference', poll, validate({ params: z.object({ token: z.string().max(120), reference: z.string().regex(/^MPX-[A-F0-9]{12}$/) }) }), h((r) => svc.depositStatus(t(r), r.params.reference)));
 router.get('/:token/receipts/:reference', poll, validate({ params: z.object({ token: z.string().max(120), reference: z.string().regex(/^(MPX-[A-F0-9]{12}|(BILL|DESK)-[a-f0-9]{24}-[a-f0-9]{24})$/) }), query: z.object({ phone: str(20).optional() }) }), h((r) => svc.receipt(t(r), r, r.params.reference)));
+
+// ---- LIVE rider tracking for one delivery (Uber-style): polling twin + live stream + "I moved" + rating + lock-screen alerts
+const trk = { params: rv.trackParams };
+router.get('/:token/delivery/:key/live', poll, validate({ ...trk, query: rv.liveQuery }), h((r) => cust.live(t(r), r.params.key, r.query)));
+router.get('/:token/delivery/:key/stream', validate(trk), catchAsync((req, res) => cust.openStream(t(req), req.params.key, req, res)));
+router.post('/:token/delivery/:key/location', write, validate({ ...trk, body: rv.moveBody }), h((r) => cust.move(t(r), r.params.key, r.body)));
+router.post('/:token/delivery/:key/rate', write, validate({ ...trk, body: rv.rateBody }), h((r) => cust.rate(t(r), r.params.key, r.body)));
+router.get('/:token/push/key', read, validate(tok), h((r) => cust.pushKey(t(r))));
+router.post('/:token/delivery/:key/push', write, validate({ ...trk, body: rv.pushBody }), h((r) => cust.subscribePush(t(r), r.params.key, r.body, r.headers['user-agent'])));
 
 // ---- ONE account for the storefront and the table/room QR page (same GuestAccount): register, sign in, Google, profile, history
 router.post('/:token/account/register', auth, validate({ ...tok, body: hv.acctReg }), h((r) => acct.register(t(r), r.body), 'OK', 201));

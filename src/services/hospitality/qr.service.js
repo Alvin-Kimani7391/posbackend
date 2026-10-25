@@ -13,13 +13,13 @@ const C = require('./common');
 
 const secret = () => process.env.QR_SECRET || require('../../config/env').jwt.secret;
 const sig = (kind, id, ver) => crypto.createHmac('sha256', secret()).update(`${kind}:${id}:${ver}`).digest('base64url').slice(0, 22);
-const KIND_CHAR = { TABLE: 't', ROOM: 'r', STORE: 'b' };
-const CHAR_KIND = { t: 'TABLE', r: 'ROOM', b: 'STORE' };
+const KIND_CHAR = { TABLE: 't', ROOM: 'r', STORE: 'b', RIDER: 'd' };
+const CHAR_KIND = { t: 'TABLE', r: 'ROOM', b: 'STORE', d: 'RIDER' };
 
 const makeToken = (kind, doc) => `${KIND_CHAR[kind]}_${doc._id}_${doc.qrVersion || 1}_${sig(kind, doc._id, doc.qrVersion || 1)}`;
 
 function parseToken(token) {
-  const m = /^([trb])_([a-f0-9]{24})_(\d{1,6})_([A-Za-z0-9_-]{22})$/.exec(String(token || ''));
+  const m = /^([trbd])_([a-f0-9]{24})_(\d{1,6})_([A-Za-z0-9_-]{22})$/.exec(String(token || ''));
   const bad = () => ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID');
   if (!m) throw bad();
   const kind = CHAR_KIND[m[1]]; const want = sig(kind, m[2], m[3]);
@@ -39,9 +39,11 @@ async function resolveStore(businessId, ver) {
   return { kind: 'STORE', doc: { _id: ctx.business._id, businessId: ctx.business._id, active: true }, ctx, store: st, mode: 'STORE', stay: null };
 }
 const storeToken = (businessId, qrVersion = 1) => `b_${businessId}_${qrVersion}_${sig('STORE', businessId, qrVersion)}`;
+const riderToken = (businessId, qrVersion = 1) => `d_${businessId}_${qrVersion}_${sig('RIDER', businessId, qrVersion)}`;
 
 async function resolve(token, { store = false } = {}) {
   const { kind, id, ver } = parseToken(token);
+  if (kind === 'RIDER') throw ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID');   // the rider QR only opens the rider app (services/delivery/rider-access.service)
   if (kind === 'STORE') { if (!store) throw ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID'); return resolveStore(id, ver); }
   const doc = kind === 'TABLE' ? await RestaurantTable.findById(id) : await Room.findById(id);
   const gone = () => ApiError.notFound('This QR code is not valid any more. Please ask a member of staff.', 'QR_INVALID');
@@ -107,4 +109,4 @@ async function rotateStore(businessId, user) {
   await C.getContext(businessId); await RestaurantSettings.updateOne({ businessId }, { $inc: { 'storefront.qrVersion': 1 } });
   return storeQr(businessId, user);
 }
-module.exports = { storeToken, storeQr, rotateStore, makeToken, parseToken, resolve, urlFor, listQr, rotate, setEnabled };
+module.exports = { riderToken, storeToken, storeQr, rotateStore, makeToken, parseToken, resolve, urlFor, listQr, rotate, setEnabled };

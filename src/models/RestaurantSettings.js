@@ -56,6 +56,18 @@ const restaurantSettingsSchema = new Schema({
     tables: { enabled: { type: Boolean, default: true }, requirePayment: { type: Boolean, default: true }, openTime: { type: String, default: '10:00' }, closeTime: { type: String, default: '22:00' }, slotMinutes: { type: Number, default: 30, min: 15, max: 240 }, minLeadMinutes: { type: Number, default: 30, min: 0, max: 1440 }, maxAdvanceDays: { type: Number, default: 30, min: 1, max: 365 } },
     rooms: { enabled: { type: Boolean, default: true } },
   },
+  // Delivery riders: the rider QR code, live tracking alerts, payment rules and pay. See services/delivery.
+  rider: {
+    enabled: { type: Boolean, default: true },
+    qrVersion: { type: Number, default: 1 },                                         // rotating it invalidates every printed rider QR
+    selfClaim: { type: Boolean, default: false },                                    // riders may pick up unassigned deliveries themselves
+    requirePaymentBeforeDelivered: { type: Boolean, default: true },
+    allowCash: { type: Boolean, default: true }, allowMpesa: { type: Boolean, default: true },
+    alertDistancesM: { type: [Number], default: undefined },                         // customer is told at these distances (default 500, 200, 100, 50)
+    autoArrive: { type: Boolean, default: false },                                   // mark "arrived" by itself when the rider is at the pin
+    shareRiderPhone: { type: Boolean, default: true },                               // the customer sees a call button once the rider is on the way
+    pay: { mode: { type: String, enum: ['NONE', 'FLAT', 'FEE_PERCENT'], default: 'NONE' }, flatCents: { type: Number, default: 0, min: 0 }, feePercent: { type: Number, default: 100, min: 0, max: 100 } },
+  },
   // Self-service kiosk (customer orders and pays on a touchscreen). The owner decides if it exists at all; everything is enforced on the server.
   selfService: {
     enabled: { type: Boolean, default: false },
