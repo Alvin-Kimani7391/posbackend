@@ -163,6 +163,7 @@ async function queue(businessId, user, { branchId, stationId, status, includeCom
   const f = { businessId, branchId };
   if (stationId) f.stationId = stationId;
   f.status = status ? status : { $in: includeCompleted ? ['NEW', 'ACCEPTED', 'PREPARING', 'READY', 'COMPLETED'] : ['NEW', 'ACCEPTED', 'PREPARING', 'READY'] };
+  if (!includeCompleted && !status) f.$nor = [{ status: 'READY', expoConfirmedAt: { $ne: null } }];      // "Handed to waiter" takes the ticket off the board
   if (includeCompleted) f.receivedAt = { $gte: new Date(Date.now() - sinceMinutes * 60000) };
   const tickets = await KitchenTicket.find(f).sort({ priority: -1, receivedAt: 1 }).limit(300);
   const now = Date.now(); const lim = ctx.settings.kitchenDelayMinutes;
