@@ -73,7 +73,7 @@ async function listQr(businessId, user, { kind, branchId }) {
   const ctx = await C.getAccContext(businessId);
   if (kind === 'ROOM') C.assertAccommodation(ctx);
   const f = { businessId, active: true, ...C.branchFilter(C.branchScope(user, branchId)) };
-  const docs = kind === 'TABLE' ? await RestaurantTable.find(f).sort({ name: 1 }) : await Room.find(f).sort({ number: 1 });
+  const docs = kind === 'TABLE' ? await RestaurantTable.find(f).sort({ name: 1 }).collation({ locale: 'en', numericOrdering: true }) : await Room.find(f).sort({ number: 1 });
   const branches = new Map((await Branch.find({ businessId }).select('name')).map((b) => [String(b._id), b.name]));
   return docs.map((d) => { const t = makeToken(kind, d); return { id: d._id, kind, label: kind === 'TABLE' ? `Table ${d.name}` : `Room ${d.number}`, branch: branches.get(String(d.branchId)), branchId: d.branchId, enabled: d.qrEnabled !== false, version: d.qrVersion || 1, token: t, url: urlFor(ctx, t) }; });
 }

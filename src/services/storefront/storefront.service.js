@@ -220,7 +220,7 @@ async function tables(token, { branchId, date, time, partySize = 1 }) {
   const startsAt = date && time ? S.zonedDate(date, time, r.ctx.timeZone) : new Date();
   const endsAt = new Date(startsAt.getTime() + dur * 60000); const isNow = startsAt.getTime() - Date.now() < 30 * 60000;
   const [list, areas, busy] = await Promise.all([
-    RestaurantTable.find({ businessId: r.businessId, branchId: b._id, active: true }).sort({ name: 1 }),
+    RestaurantTable.find({ businessId: r.businessId, branchId: b._id, active: true }).sort({ name: 1 }).collation({ locale: 'en', numericOrdering: true }),
     RestaurantArea.find({ businessId: r.businessId, branchId: b._id }).select('name'),
     Reservation.find({ businessId: r.businessId, branchId: b._id, status: { $in: RESERVATION_ACTIVE }, startsAt: { $lt: endsAt }, endsAt: { $gt: startsAt } }).select('tableIds'),
   ]);

@@ -6,6 +6,7 @@ const RestaurantArea = require('../../models/RestaurantArea');
 const User = require('../../models/User');
 const ApiError = require('../../utils/ApiError');
 const C = require('./common');
+const { fromCents } = require('../../utils/money');
 
 const FREE_STATES = ['AVAILABLE'];
 
@@ -29,7 +30,7 @@ async function floor(businessId, user, { branchId, areaId }) {
   C.assertBranchAccess(user, branchId);
   const all = C.can(user, 'restaurant.tables.view_all');
   const f = { businessId, branchId, active: true }; if (areaId) f.areaId = areaId;
-  const tables = await RestaurantTable.find(f).populate('areaId', 'name type').populate('waiterId', 'name').sort({ name: 1 });
+  const tables = await RestaurantTable.find(f).populate('areaId', 'name type').populate('waiterId', 'name').sort({ name: 1 }).collation({ locale: 'en', numericOrdering: true });
   const orders = await RestaurantOrder.find({ _id: { $in: tables.map((t) => t.currentOrderId).filter(Boolean) } }).select('orderNumber waiterId waiterName guestCount totals billStatus firstSentAt items.status items.readyAt createdAt priority');
   const byId = new Map(orders.map((o) => [String(o._id), o]));
   const now = Date.now();
@@ -38,7 +39,7 @@ async function floor(businessId, user, { branchId, areaId }) {
     const live = o ? o.items.filter((i) => i.status !== 'CANCELLED') : [];
     return {
       ...t.toJSON(), occupiedMinutes: t.seatedAt && t.status !== 'AVAILABLE' ? Math.floor((now - t.seatedAt) / 60000) : null,
-      order: o ? { _id: o._id, orderNumber: o.orderNumber, waiterName: o.waiterName, guestCount: o.guestCount, total: o.totals.total, billStatus: o.billStatus, priority: o.priority,
+      order: o ? { _id: o._id, orderNumber: o.orderNumber, waiterName: o.waiterName, guestCount: o.guestCount, total: fromCents(o.totals.total), billStatus: o.billStatus, priority: o.priority,
         waitingForFoodMinutes: o.firstSentAt && live.some((i) => ['PENDING', 'ACCEPTED', 'PREPARING'].includes(i.status)) ? Math.floor((now - o.firstSentAt) / 60000) : null,
         readyItems: live.filter((i) => i.status === 'READY').length, pendingItems: live.filter((i) => ['PENDING', 'ACCEPTED', 'PREPARING'].includes(i.status)).length } : null,
     };
