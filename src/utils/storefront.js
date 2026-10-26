@@ -10,14 +10,36 @@ function distanceKm(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(h)) * 1.25 * 10) / 10;       // x1.25: roads are longer than the straight line
 }
-/** Fee, range and minimum order for one delivery. `from` may be missing (branch has no pin): then only the base fee applies. */
-function deliveryTerms(d, { from, to, subtotalCents = 0 }) {
-  const out = { ok: true, reason: null, code: null, distanceKm: null, feeCents: d.baseFeeCents || 0, minOrderCents: d.minOrderCents || 0 };
-  if (validPoint(from) && validPoint(to)) {
-    out.distanceKm = distanceKm({ lat: num(from.lat), lng: num(from.lng) }, { lat: num(to.lat), lng: num(to.lng) });
-    if (d.maxRadiusKm > 0 && out.distanceKm > d.maxRadiusKm) return { ...out, ok: false, code: 'OUT_OF_RANGE', reason: `Sorry, we deliver within ${d.maxRadiusKm} km. You are about ${out.distanceKm} km away.` };
-    out.feeCents = Math.round((d.baseFeeCents || 0) + (d.perKmCents || 0) * out.distanceKm);
-  } else if (d.maxRadiusKm > 0) return { ...out, ok: false, code: 'NO_LOCATION', reason: 'Please pin your location on the map so we can check we deliver to you.' };
+const norm = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+/** The owner's delivery zone (county + town) the customer picked, or null when it is not on the owner's list / switched off. */
+const findZone = (d, county, town) => (d.zones || []).find((z) => z.active !== false && norm(z.county) === norm(county) && norm(z.town) === norm(town)) || null;
+/**
+ * Fee, range and minimum order for one delivery. The fee is ALWAYS worked out here from the owner's settings, never taken from the customer.
+ *   d.feeMode FIXED    -> one flat fee (d.fixedFeeCents) for every order
+ *   d.feeMode DISTANCE -> base fee + per km from the branch to the customer's map pin (the original behaviour, and the default)
+ *   d.feeMode ZONE     -> the owner's price list: each county / town has its own fee. The customer picks a town from the list (method 'ZONE'),
+ *                         or drops a map pin (method 'PIN') which is then priced base fee + per km (can be switched off with d.zoneAllowPin = false).
+ * `from` may be missing (branch has no pin): then only the base fee applies to a pin order.
+ */
+function deliveryTerms(d, { from, to, subtotalCents = 0, method = 'PIN', county, town } = {}) {
+  const mode = d.feeMode || 'DISTANCE';
+  const out = { ok: true, reason: null, code: null, distanceKm: null, feeCents: 0, minOrderCents: d.minOrderCents || 0, feeMode: mode, method: 'PIN', county: null, town: null };
+  const both = validPoint(from) && validPoint(to);
+  if (method === 'ZONE') {
+    if (mode !== 'ZONE') return { ...out, ok: false, code: 'ZONE_NOT_OFFERED', reason: 'Please pin your location on the map.' };
+    const z = findZone(d, county, town);
+    if (!z) return { ...out, ok: false, code: 'NO_ZONE', reason: 'Sorry, we do not deliver to that town yet. Please choose another town from the list.' };
+    out.method = 'ZONE'; out.county = z.county; out.town = z.town; out.feeCents = Math.max(0, Math.round(z.feeCents || 0));
+    if (both) out.distanceKm = distanceKm({ lat: num(from.lat), lng: num(from.lng) }, { lat: num(to.lat), lng: num(to.lng) });   // only for the ETA
+  } else {
+    if (mode === 'ZONE' && d.zoneAllowPin === false) return { ...out, ok: false, code: 'PIN_NOT_ALLOWED', reason: 'Please choose your county and town from the list.' };
+    out.feeCents = mode === 'FIXED' ? (d.fixedFeeCents || 0) : (d.baseFeeCents || 0);
+    if (both) {
+      out.distanceKm = distanceKm({ lat: num(from.lat), lng: num(from.lng) }, { lat: num(to.lat), lng: num(to.lng) });
+      if (d.maxRadiusKm > 0 && out.distanceKm > d.maxRadiusKm) return { ...out, ok: false, code: 'OUT_OF_RANGE', reason: `Sorry, we deliver within ${d.maxRadiusKm} km. You are about ${out.distanceKm} km away.` };
+      if (mode !== 'FIXED') out.feeCents = Math.round((d.baseFeeCents || 0) + (d.perKmCents || 0) * out.distanceKm);
+    } else if (d.maxRadiusKm > 0) return { ...out, ok: false, code: 'NO_LOCATION', reason: 'Please pin your location on the map so we can check we deliver to you.' };
+  }
   if (subtotalCents && out.minOrderCents && subtotalCents < out.minOrderCents) return { ...out, ok: false, code: 'BELOW_MINIMUM', reason: `The minimum delivery order is KSh ${(out.minOrderCents / 100).toFixed(0)}.` };
   return out;
 }
@@ -56,4 +78,4 @@ function kePhone(raw) {
 const last4 = (p) => String(p || '').replace(/\D/g, '').slice(-4);
 const newKey = () => crypto.randomBytes(8).toString('hex');
 const mapsLink = (lat, lng) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-module.exports = { distanceKm, deliveryTerms, etaMinutes, withinHours, reservationSlots, slotProblem, kePhone, last4, newKey, mapsLink, validPoint, zonedDate };
+module.exports = { distanceKm, deliveryTerms, findZone, etaMinutes, withinHours, reservationSlots, slotProblem, kePhone, last4, newKey, mapsLink, validPoint, zonedDate };

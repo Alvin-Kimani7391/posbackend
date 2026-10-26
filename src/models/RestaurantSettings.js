@@ -66,6 +66,11 @@ const restaurantSettingsSchema = new Schema({
     delivery: {
       enabled: { type: Boolean, default: true }, paused: { type: Boolean, default: false },
       mode: { type: String, enum: ['AUTO', 'CONFIRM'], default: 'AUTO' },          // AUTO = straight to the kitchen; CONFIRM = staff open the order and send it
+      // How the delivery fee is worked out: FIXED = one flat fee, DISTANCE = base + per km from the pin, ZONE = the owner's price list per county / town.
+      feeMode: { type: String, enum: ['FIXED', 'DISTANCE', 'ZONE'], default: 'DISTANCE' },
+      fixedFeeCents: { type: Number, default: 0, min: 0 },
+      zoneAllowPin: { type: Boolean, default: true },                               // ZONE mode: may customers also use a map pin (priced base + per km)?
+      zones: { type: [new Schema({ county: { type: String, trim: true, maxlength: 60, required: true }, town: { type: String, trim: true, maxlength: 80, required: true }, feeCents: { type: Number, default: 0, min: 0 }, active: { type: Boolean, default: true } }, { _id: false })], default: [] },
       baseFeeCents: { type: Number, default: 0, min: 0 }, perKmCents: { type: Number, default: 0, min: 0 }, minOrderCents: { type: Number, default: 0, min: 0 },
       maxRadiusKm: { type: Number, default: 0, min: 0, max: 500 }, minutesPerKm: { type: Number, default: 3, min: 0, max: 30 }, bufferMinutes: { type: Number, default: 10, min: 0, max: 120 },
       hoursStart: { type: String }, hoursEnd: { type: String },

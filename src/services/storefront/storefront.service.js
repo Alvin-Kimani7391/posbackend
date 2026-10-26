@@ -92,7 +92,9 @@ async function context(token) {
     business: { name: ctx.business.name, logo: ctx.business.logo, phone: ctx.business.phone, currency: ctx.business.currency || 'KES', timezone: ctx.timeZone, address: ctx.business.address },
     store: { tagline: st.tagline, welcomeMessage: st.welcomeMessage, themeColor: st.themeColor || '#0f766e' },
     branches: branches.map((b) => ({ id: b._id, name: b.name, phone: b.phone, address: b.address, hasPin: !!pointOf(st, b._id), location: pointOf(st, b._id) })),
-    delivery: { enabled: d.enabled !== false, paused: !!d.paused, openNow: S.withinHours(now, ctx.timeZone, d.hoursStart, d.hoursEnd), hours: d.hoursStart && d.hoursEnd ? `${d.hoursStart} - ${d.hoursEnd}` : null, baseFee: money(d.baseFeeCents), perKm: money(d.perKmCents), minOrder: money(d.minOrderCents), maxRadiusKm: d.maxRadiusKm || null, allowCash: cashOk },
+    delivery: { feeMode: d.feeMode || 'DISTANCE', fixedFee: money(d.fixedFeeCents), zoneAllowPin: d.zoneAllowPin !== false,
+      zones: (d.zones || []).filter((z) => z.active !== false).map((z) => ({ county: z.county, town: z.town, fee: money(z.feeCents) })),
+      enabled: d.enabled !== false, paused: !!d.paused, openNow: S.withinHours(now, ctx.timeZone, d.hoursStart, d.hoursEnd), hours: d.hoursStart && d.hoursEnd ? `${d.hoursStart} - ${d.hoursEnd}` : null, baseFee: money(d.baseFeeCents), perKm: money(d.perKmCents), minOrder: money(d.minOrderCents), maxRadiusKm: d.maxRadiusKm || null, allowCash: cashOk },
     tables: { enabled: ctx.features.tables !== false && t.enabled !== false, openTime: t.openTime || '10:00', closeTime: t.closeTime || '22:00', depositRequired: !!ctx.settings.reservation?.depositRequired, deposit: money(ctx.settings.reservation?.depositCents || 0), requirePayment: mp && t.requirePayment !== false,
       minSpendPerGuest: money(ctx.settings.reservation?.minSpendPerGuestCents || 0), holdMinutes: ctx.settings.reservation?.holdMinutes ?? 15, durationMinutes: ctx.settings.reservation?.durationMinutes || 90, lockMinutes: ctx.settings.reservation?.lockMinutes ?? 30 },
     rooms: { enabled: !!accOn, depositRequired: !!dep.required },
@@ -114,11 +116,11 @@ async function menu(token, { branchId } = {}) {
 }
 
 // ------------------------------------------------------------------ delivery
-async function deliveryQuote(token, { branchId, lat, lng, subtotal }) {
+async function deliveryQuote(token, { branchId, lat, lng, subtotal, method, county, town }) {
   const r = await open(token); const d = r.store.delivery || {}; const b = await pickBranch(r, branchId);
   if (d.enabled === false || d.paused) throw ApiError.conflict('Delivery is paused right now. You can still reserve a table.', 'DELIVERY_PAUSED');
-  const t = S.deliveryTerms(d, { from: pointOf(r.store, b._id), to: { lat, lng }, subtotalCents: Math.round((subtotal || 0) * 100) });
-  return { ok: t.ok, code: t.code, reason: t.reason, distanceKm: t.distanceKm, fee: money(t.feeCents), minOrder: money(t.minOrderCents), etaMinutes: S.etaMinutes(d, { prepMinutes: [], distanceKm: t.distanceKm }) };
+  const t = S.deliveryTerms(d, { from: pointOf(r.store, b._id), to: { lat, lng }, subtotalCents: Math.round((subtotal || 0) * 100), method: method || 'PIN', county, town });
+  return { ok: t.ok, code: t.code, reason: t.reason, distanceKm: t.distanceKm, fee: money(t.feeCents), feeMode: t.feeMode, method: t.method, county: t.county, town: t.town, minOrder: money(t.minOrderCents), etaMinutes: S.etaMinutes(d, { prepMinutes: [], distanceKm: t.distanceKm }) };
 }
 
 async function placeDelivery(token, body, account) {
@@ -128,20 +130,25 @@ async function placeDelivery(token, body, account) {
   if (!S.withinHours(new Date(), ctx.timeZone, d.hoursStart, d.hoursEnd)) throw ApiError.conflict(`We deliver between ${d.hoursStart} and ${d.hoursEnd}.`, 'DELIVERY_CLOSED');
   const b = await pickBranch(r, body.branchId);
   const phone = S.kePhone(body.phone); if (!phone) throw ApiError.badRequest('Enter a valid phone number, for example 0712 345 678', 'INVALID_PHONE');
-  if (!S.validPoint({ lat: body.lat, lng: body.lng })) throw ApiError.badRequest('Please pin your delivery location on the map', 'NO_LOCATION');
+  const byZone = body.locationMethod === 'ZONE';
+  if (byZone && (!body.county || !body.town)) throw ApiError.badRequest('Please choose your county and town', 'NO_ZONE');
+  if (!byZone && !S.validPoint({ lat: body.lat, lng: body.lng })) throw ApiError.badRequest('Please pin your delivery location on the map', 'NO_LOCATION');
+  const hasPin = S.validPoint({ lat: body.lat, lng: body.lng });
   const mp = await mpesaOn(r.businessId); const cashOk = (d.payment || 'MPESA_OR_CASH') !== 'MPESA' || !mp;
   const method = body.payMethod || (mp ? 'MPESA' : 'CASH');
   if (method === 'MPESA' && !mp) throw ApiError.badRequest('Paying by M-PESA is not set up here. Please choose cash on delivery.', 'MPESA_NOT_ENABLED');
   if (method === 'CASH' && !cashOk) throw ApiError.badRequest('Please pay with M-PESA - cash on delivery is not offered.', 'CASH_NOT_ALLOWED');
   const recent = await RestaurantOrder.countDocuments({ businessId: r.businessId, source: 'ONLINE', customerPhone: phone, createdAt: { $gt: new Date(Date.now() - 10 * 60000) }, status: { $ne: 'CANCELLED' } });
   if (recent >= 3) throw ApiError.conflict('You already have several orders in progress. Please wait a few minutes.', 'TOO_MANY_ORDERS');
-  const terms = S.deliveryTerms(d, { from: pointOf(st, b._id), to: { lat: body.lat, lng: body.lng } });
+  const terms = S.deliveryTerms(d, { from: pointOf(st, b._id), to: hasPin ? { lat: body.lat, lng: body.lng } : undefined, method: byZone ? 'ZONE' : 'PIN', county: body.county, town: body.town });   // the fee is worked out HERE from the owner's settings, never taken from the browser
   if (!terms.ok) throw ApiError.badRequest(terms.reason, terms.code);
+  // Rider and manager must see where to go: for a county / town order the area is added to what the customer typed, so every screen, print-out and notification shows it.
+  const fullAddress = terms.method === 'ZONE' ? `${body.address}, ${terms.town}, ${terms.county}` : body.address;
   const actor = await C.guestActor(r.businessId); const trackKey = S.newKey();
   const { order, replayed } = await orders.createOrder(r.businessId, actor, {
     branchId: b._id, orderType: 'DELIVERY', source: 'ONLINE', guestCount: 1, customerName: body.name, customerPhone: phone, notes: body.notes,
     clientRef: `web-${body.clientRef}`, deviceId: 'web', _guest: true,
-    delivery: { contactName: body.name, phone, address: body.address, landmark: body.landmark, instructions: body.instructions, fee: terms.feeCents, lat: Number(body.lat), lng: Number(body.lng), distanceKm: terms.distanceKm, mapsUrl: S.mapsLink(body.lat, body.lng), payment: method, trackKey, online: true },
+    delivery: { contactName: body.name, phone, address: fullAddress, landmark: body.landmark, instructions: body.instructions, fee: terms.feeCents, ...(hasPin ? { lat: Number(body.lat), lng: Number(body.lng), mapsUrl: S.mapsLink(body.lat, body.lng) } : {}), distanceKm: terms.distanceKm, locationMethod: terms.method, feeMode: terms.feeMode, county: terms.county || undefined, town: terms.town || undefined, payment: method, trackKey, online: true },
   });
   if (replayed) return trackFull(order);
   let sb;
@@ -162,7 +169,7 @@ async function placeDelivery(token, body, account) {
     if (method === 'CASH' && (d.mode || 'AUTO') === 'AUTO') await orders.sendOrder(r.businessId, actor, order._id, {});
   } catch (e) { await RestaurantOrder.deleteOne({ _id: order._id, status: 'OPEN' }); if (sb) await StoreBooking.deleteOne({ _id: sb._id }); throw e; }   // nothing half-made is left on the POS
   const fresh = await RestaurantOrder.findById(order._id);
-  if (method === 'CASH') notify(r, b, [...STAFF, 'RECEPTIONIST'], `New delivery order ${fresh.orderNumber}`, `${body.name} (${phone}) - ${body.address}. Cash on delivery. Open Delivery to ${(d.mode || 'AUTO') === 'AUTO' ? 'assign a rider' : 'confirm and send it to the kitchen'}.`, 'RestaurantOrder', fresh._id);
+  if (method === 'CASH') notify(r, b, [...STAFF, 'RECEPTIONIST'], `New delivery order ${fresh.orderNumber}`, `${body.name} (${phone}) - ${fullAddress}. Delivery fee KSh ${(terms.feeCents / 100).toFixed(0)}. Cash on delivery. Open Delivery to ${(d.mode || 'AUTO') === 'AUTO' ? 'assign a rider' : 'confirm and send it to the kitchen'}.`, 'RestaurantOrder', fresh._id);
   return trackView(fresh, sb, await RC.getContext(r.businessId));
 }
 
