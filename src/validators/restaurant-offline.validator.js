@@ -58,7 +58,7 @@ const replayBody = z.object({
   ops: z.array(z.unknown()).min(1).max(200),       // each op is validated one by one so a single bad op never rejects the whole batch
 });
 const snapshotQuery = z.object({ branchId: objectId, since: z.coerce.date().optional() });
-const opsQuery = z.object({ branchId: objectId.optional(), status: z.enum(['PENDING', 'APPLIED', 'CONFLICT']).optional(), reviewed: z.coerce.boolean().optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(30) });
+const opsQuery = z.object({ branchId: objectId.optional(), status: z.enum(['PENDING', 'APPLIED', 'CONFLICT']).optional(), reviewed: z.enum(['true', 'false']).transform((x) => x === 'true').optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(30) });
 const idParam = z.object({ id: objectId });
 
 module.exports = { opSchema, replayBody, snapshotQuery, opsQuery, idParam };
