@@ -42,6 +42,7 @@ const opSchema = z.discriminatedUnion('type', [
   op('serve', { orderRef, payload: z.object({ itemRefs: z.array(itemRef).max(100).optional(), allReady: z.boolean().optional() }).refine((b) => b.allReady || b.itemRefs?.length, 'Choose items or allReady') }),
   op('cancelItem', { orderRef, itemRef, payload: z.object({ reason: str(300).optional(), quantity: z.coerce.number().positive().optional() }).optional() }),
   op('cancelOrder', { orderRef, payload: z.object({ reason: z.string().trim().min(3).max(300) }) }),
+  op('handoff', { orderRef, itemRefs: z.array(itemRef).min(1).max(100) }),            // kitchen: "Handed to waiter"
   op('generateBill', { orderRef, payload: z.object({ label: str(60).optional(), customerId: objectId.optional() }).optional() }),
   op('pay', { billRef, payload: z.object({ customerId: objectId.optional(), payments: z.array(payment).min(1).max(10) }) }),
   op('addTip', { billRef, payload: z.object({ amountCents: posCents, method: z.enum(['CASH', 'MPESA', 'MOBILE_MONEY', 'CARD', 'BANK', 'OTHER']), reference: str(100).optional(), waiterId: objectId.optional() }) }),

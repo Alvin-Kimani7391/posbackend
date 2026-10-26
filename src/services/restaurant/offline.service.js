@@ -17,6 +17,7 @@ const Supplier = require('../../models/Supplier');
 const Reservation = require('../../models/Reservation');
 const RestaurantOrder = require('../../models/RestaurantOrder');
 const RestaurantBill = require('../../models/RestaurantBill');
+const KitchenTicket = require('../../models/KitchenTicket');
 const User = require('../../models/User');
 const Stay = require('../../models/Stay');
 const Room = require('../../models/Room');
@@ -137,6 +138,13 @@ const HANDLERS = {
   },
   async cancelItem(c, o) { const id = await resolveOrder(c, o.orderRef); const order = await loadOrder(c, id); if (!order) throw ApiError.notFound('Order not found', 'ORDER_NOT_FOUND'); const r = await orders.cancelItem(c.businessId, c.user, id, await resolveItem(order, o.itemRef), { ...(o.payload || {}), expectedVersion: undefined }); return orderOut(r.order || r); },
   async cancelOrder(c, o) { const id = await resolveOrder(c, o.orderRef); const r = await orders.cancelOrder(c.businessId, c.user, id, o.payload); return orderOut(r.order || r); },
+  async handoff(c, o) {
+    const id = await resolveOrder(c, o.orderRef); const order = await loadOrder(c, id); if (!order) throw ApiError.notFound('Order not found', 'ORDER_NOT_FOUND');
+    const ids = new Set(); for (const ref of o.itemRefs) ids.add(String(await resolveItem(order, ref)));
+    const tickets = await KitchenTicket.find({ businessId: c.businessId, orderId: id, expoConfirmedAt: { $in: [null, undefined] } });
+    let n = 0; for (const t of tickets) if (t.items.some((i) => ids.has(String(i.orderItemId)))) { await kitchen.expoConfirm(c.businessId, c.user, t._id); n += 1; }
+    return { orderId: id, handedOff: n };
+  },
   async generateBill(c, o) { const id = await resolveOrder(c, o.orderRef); const b = await bills.generateBill(c.businessId, c.user, id, o.payload || {}); return { billId: b._id, billNumber: b.billNumber, orderId: id, total: b.total, balance: b.balance }; },
   async pay(c, o) {
     const id = await resolveBill(c, o.billRef);
