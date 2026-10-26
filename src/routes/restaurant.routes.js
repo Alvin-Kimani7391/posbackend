@@ -216,4 +216,13 @@ router.get('/self-service/orders', P('restaurant.bills.view'), validate({ query:
 router.post('/self-service/orders/:id/confirm-cash', P('restaurant.bills.pay'), validate({ ...id, body: sv.confirmCashBody }), idempotent('POST /restaurant/self-service/confirm-cash'), sc.confirmCash);
 router.post('/self-service/orders/:id/reprint', P('restaurant.bills.view'), validate(id), sc.staffReprint);
 
+// ---- history + search (read-only): all orders, past deliveries / pickups, past guest QR requests and calls
+const hist = require('../controllers/history.controller'); const hq = require('../validators/history.validator');
+const { userHasPermission } = require('../middleware/auth'); const ApiError = require('../utils/ApiError');
+const anyOf = (...perms) => (req, res, next) => (perms.some((x) => userHasPermission(req.user, x)) ? next() : next(ApiError.forbidden(`Missing permission: ${perms[0]}`, 'PERMISSION_DENIED')));
+router.get('/history/orders', P('restaurant.orders.view'), validate({ query: hq.orders }), hist.orders);
+router.get('/history/deliveries', anyOf('restaurant.delivery.view', 'restaurant.delivery.self'), validate({ query: hq.orders }), hist.deliveries);
+router.get('/history/guest', gq, P('restaurant.guest.view'), validate({ query: hq.guest }), hist.guest);
+router.get('/reports/orders', P('restaurant.reports.view'), validate({ query: hq.orders }), hist.reportOrders);
+
 module.exports = router;

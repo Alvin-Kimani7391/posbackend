@@ -559,8 +559,9 @@ async function myDeliveries(businessId, user, { status }) {
   return RestaurantOrder.find(f).select('orderNumber delivery totals customerName customerPhone items.name items.quantity').sort({ createdAt: -1 });
 }
 async function listDeliveries(businessId, user, { branchId, status }) {
-  const f = { businessId, ...C.branchFilter(C.branchScope(user, branchId)), orderType: 'DELIVERY', status: 'OPEN' }; if (status) f['delivery.status'] = status;
-  return RestaurantOrder.find(f).select('orderNumber delivery totals customerName customerPhone createdAt').sort({ createdAt: 1 });
+  // DELIVERY and PICKUP orders: the Delivery & pickup screen has a tab for each (pickups were missing because orderType was never selected)
+  const f = { businessId, ...C.branchFilter(C.branchScope(user, branchId)), orderType: { $in: ['DELIVERY', 'PICKUP'] }, status: 'OPEN' }; if (status) f['delivery.status'] = status;
+  return RestaurantOrder.find(f).select('orderNumber orderType billStatus pickup pickupNumber delivery totals customerName customerPhone createdAt').sort({ createdAt: 1 });
 }
 
 // ------------------------------------------------------------------ offline replay
