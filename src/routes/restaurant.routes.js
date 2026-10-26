@@ -15,6 +15,7 @@ const { uploadMenuImage } = require('../middleware/hospitalityUpload');
 router.use(authenticate, requireFeature('restaurantOrdering'));
 const tbl = requireFeature('tableManagement'); const kds = requireFeature('kitchenDisplay'); const rcp = requireFeature('recipeManagement'); const rsv = requireFeature('reservations');
 const id = { params: v.idParam };
+router.use('/offline', require('./restaurant-offline.routes')); // offline snapshot + ordered, idempotent replay of queued operations
 
 // ---- settings, areas, stations
 router.get('/storefront/qr', P('restaurant.guest.qr'), c.storeQr);
