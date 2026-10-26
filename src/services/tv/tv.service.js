@@ -211,7 +211,7 @@ function itemView(it, { orderType, branchId, badges, hideSoldOut }) {
     discountPercent: promo && base ? Math.round(((base - live) / base) * 100) : null, promoLabel: it.promoLabel || null, badge: badges.get(idStr(it._id)) || null,
     isCombo: !!it.isCombo, soldOut, available: it.available !== false, allergens: it.allergens || [] };
 }
-async function renderPlaylist({ businessId, branchId, snapshot, settings, business, now = new Date() }) {
+async function renderPlaylist({ businessId, branchId, snapshot, settings, business, now = new Date(), withSchedule = false }) {
   const tz = business.timezone || 'Africa/Nairobi'; const orderType = snapshot.orderType || 'DINE_IN';
   const menuSvc = require('../restaurant/menu.service');
   let menu = { categories: [] };
@@ -220,7 +220,8 @@ async function renderPlaylist({ businessId, branchId, snapshot, settings, busine
   for (const c of menu.categories) for (const i of c.items) { byId.set(idStr(i._id), { ...i, categoryName: c.name }); const k = idStr(c._id || 'none'); if (!byCat.has(k)) byCat.set(k, []); byCat.get(k).push(byId.get(idStr(i._id))); }
   const out = []; const skipped = [];
   for (const s of snapshot.slides) {
-    if (!slideLive(s, now, tz)) continue;
+    const live = slideLive(s, now, tz);
+    if (!live && !(withSchedule && s.enabled !== false)) continue;      // withSchedule: also render slides that are not live yet, so an offline screen can switch dayparts by itself
     const badges = new Map((s.badges || []).map((b) => [idStr(b.menuItemId), b.badge]));
     const ctx = { orderType, branchId, badges, hideSoldOut: settings.hideSoldOut };
     const base = { id: idStr(s._id), type: s.type, layout: s.layout, title: s.title || null, subtitle: s.subtitle || null, durationSec: s.durationSec || snapshot.defaultSeconds || 12, transition: s.transition || 'FADE' };
@@ -247,7 +248,10 @@ async function renderPlaylist({ businessId, branchId, snapshot, settings, busine
         if (rooms.length) slide = { ...base, rooms };
       }
     } else if (s.type === 'TEXT') slide = { ...base, text: s.text };
-    if (slide) out.push(slide); else skipped.push(base.id);
+    if (slide) {
+      if (withSchedule) { const sc = s.schedule && (s.schedule.toObject ? s.schedule.toObject() : s.schedule); const has = sc && Object.values(sc).some((v) => v && (!Array.isArray(v) || v.length)); slide.live = live; slide.schedule = has ? sc : null; }
+      out.push(slide);
+    } else skipped.push(base.id);
   }
   return { slides: out, skipped };
 }
@@ -261,8 +265,11 @@ async function buildContent(screen) {
   const pub = pl && pl.publishedVersion ? await TvPublication.findOne({ playlistId: pl._id, version: pl.publishedVersion }).lean() : null;
   if (!pub) return { ...head, version: 0, theme: resolveTheme(settings.theme), ticker: settings.ticker || null, slides: [], empty: 'NOT_PUBLISHED' };
   const snap = pub.snapshot; snap.slides = snap.slides.map((s) => ({ ...s, schedule: s.schedule }));
-  const { slides } = await renderPlaylist({ businessId: bid, branchId: screen.branchId, snapshot: { ...snap, slides: snap.slides.map((s) => ({ ...s, toObject: undefined })) }, settings, business, now });
-  return { ...head, version: pl.publishedVersion, theme: resolveTheme(settings.theme, snap.theme), ticker: snap.ticker || settings.ticker || null, slides, empty: slides.length ? null : 'NOTHING_TO_SHOW' };
+  const { slides: all } = await renderPlaylist({ businessId: bid, branchId: screen.branchId, snapshot: { ...snap, slides: snap.slides.map((s) => ({ ...s, toObject: undefined })) }, settings, business, now, withSchedule: true });
+  const slides = all.filter((x) => x.live !== false).map(({ live, schedule, ...rest }) => rest);
+  // Scheduled slides (breakfast, happy hour...): ship every one with its time window so a screen that LOSES THE INTERNET still switches by itself.
+  const offlineSlides = all.some((x) => x.schedule) ? all.map(({ live, ...rest }) => rest) : undefined;
+  return { ...head, version: pl.publishedVersion, theme: resolveTheme(settings.theme, snap.theme), ticker: snap.ticker || settings.ticker || null, slides, ...(offlineSlides ? { offlineSlides } : {}), empty: slides.length ? null : 'NOTHING_TO_SHOW' };
 }
 /** Manager preview of the DRAFT (never visible on a TV). */
 async function previewDraft(bid, user, id, branchId) {
