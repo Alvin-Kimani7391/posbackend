@@ -6,6 +6,7 @@
  * booking code + the last 4 digits of their phone.
  */
 const ApiError = require('../../utils/ApiError');
+const addonAccess = require('../addon.entitlement'); // premium add-ons
 const RestaurantOrder = require('../../models/RestaurantOrder');
 const RestaurantTable = require('../../models/RestaurantTable');
 const RestaurantArea = require('../../models/RestaurantArea');
@@ -47,6 +48,7 @@ const FRONT = ['MANAGER', 'RECEPTIONIST', 'CASHIER'];
 async function open(token) {
   const r = await qr.resolve(token, { store: true });
   if (r.kind !== 'STORE') throw ApiError.notFound('This QR code is not valid any more.', 'QR_INVALID');
+  await addonAccess.assertEntitled(r.doc.businessId, 'storefront'); // premium add-on
   return { ...r, businessId: r.doc.businessId };
 }
 const branchesOf = (businessId) => Branch.find({ businessId, status: 'active' }).sort({ isMainBranch: -1, name: 1 });
@@ -579,4 +581,7 @@ async function sweep() {
   await expireUnpaid();
 }
 
-module.exports = { context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, cancelReservation, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment, open };
+/** Customer-tracking routes also need the Live tracking add-on. */
+async function assertAddon(token, key) { const r = await open(token); await addonAccess.assertEntitled(r.businessId, key); return true; }
+
+module.exports = { assertAddon, context, menu, accountFrom, deliveryQuote, placeDelivery, track, orderPayStart, tables, reserveTable, reservationLookup, cancelReservation, rooms, bookRoom, bookingLookup, depositStart, depositStatus, receipt, history, settleByTxn, sweep, onBillPaid, onDeskPayment, open };

@@ -7,6 +7,7 @@ const v = require('../validators/billing.validator');
 const biz = { params: v.businessParamSchema };
 const id = { params: v.idParamSchema };
 
+router.use('/addons', require('./addon.admin.routes')); // premium add-on catalogue, grants, promotions
 router.get('/overview', c.overview);
 router.post('/run-cycle', c.runCycle);
 router.post('/backfill', validate({ body: v.backfillSchema }), c.backfill);

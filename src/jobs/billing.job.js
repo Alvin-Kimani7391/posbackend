@@ -23,7 +23,7 @@ async function claimInvoiceKey(invId, key, marks) {
 }
 
 async function processReminders(sub, settings, now) {
-  const invoices = await Invoice.find({ subscriptionId: sub._id, status: { $in: ['PENDING', 'PARTIAL'] } }).sort({ dueDate: 1 });
+  const invoices = await Invoice.find({ subscriptionId: sub._id, status: { $in: ['PENDING', 'PARTIAL'] }, 'meta.addon': { $ne: true } }).sort({ dueDate: 1 }); // add-on invoices follow addon.service's own flow
   const before = [...(settings.reminders?.beforeDueDays || [])].sort((a, b) => a - b);
   const over = [...(settings.reminders?.overdueDays || [])].sort((a, b) => a - b);
   const graceDays = sub.graceDaysOverride ?? settings.enforcement?.graceDays ?? 7;
@@ -104,6 +104,7 @@ async function runCycle({ now = new Date(), force = false } = {}) {
     }
 
     await safe('trial reminders', () => processTrials(settings, now));
+    await safe('addon renewals', () => require('../services/addon.service').runRenewals(now));
     return { advanced: due.length, reviewed: owing.length };
   } finally {
     running = false;

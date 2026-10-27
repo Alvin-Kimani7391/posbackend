@@ -15,6 +15,7 @@ router.use(authenticate);
 
 // Any logged-in user (shows the lock screen / banner). Amounts are only included for users who may see billing.
 router.get('/status', controller.status);
+router.use('/addons', require('./addon.routes')); // premium add-ons
 
 router.get('/overview', requirePermission('billing.view'), controller.overview);
 router.get('/invoices', requirePermission('billing.view'), validate({ query: v.listQuery }), controller.invoices);

@@ -41,6 +41,7 @@ const subscriptionPaymentSchema = new Schema(
 
     review: { by: { type: Schema.Types.ObjectId, ref: 'User' }, byName: String, at: Date, note: String },
 
+    targetInvoiceId: { type: Schema.Types.ObjectId }, // invoice the payer chose to pay (e.g. an add-on); settled first
     allocations: [{ _id: false, invoiceId: Schema.Types.ObjectId, invoiceNumber: String, amount: Number }],
     creditAddedCents: { type: Number, default: 0 },
     allocatedAt: { type: Date, default: null },

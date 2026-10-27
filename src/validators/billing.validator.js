@@ -17,6 +17,7 @@ const paging = {
 const stkSchema = z.object({
   phone: z.string().trim().min(9).max(15),
   // PayHero charges whole shillings, so STK amounts must be whole shillings.
+  invoiceId: objectId.optional(), // pay a specific invoice first (e.g. a premium add-on)
   amountCents: z.coerce.number().int().min(LIMITS.STK_MIN_CENTS).max(LIMITS.STK_MAX_CENTS).multipleOf(100, 'Amount must be in whole shillings'),
 });
 
@@ -24,6 +25,7 @@ const manualSchema = z.object({
   // Kenya: the pasted M-PESA message (required, checked in the service). Tanzania: message and/or the typed transaction code.
   mpesaMessage: z.string().trim().max(1000).default(''),
   transactionCode: z.string().trim().max(20).optional().or(z.literal('')),
+  invoiceId: objectId.optional(),
   provider: z.string().trim().max(40).optional().or(z.literal('')), // TZ: M-Pesa | Mixx by Yas | Airtel Money | HaloPesa | Bank
   amountCents: z.coerce.number().int().positive().max(MANUAL_MAX_ANY).optional(),
 });

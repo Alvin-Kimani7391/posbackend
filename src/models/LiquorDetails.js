@@ -26,4 +26,7 @@ liquorDetailsSchema.pre('validate', function check(next) {
   if (this.tot && this.tot.bottleProductId && !(this.tot.ml > 0)) return next(new Error('Tot size (ml) is required'));
   return next();
 });
+// exciseCentsPerUnit is stored (and returned) in integer cents. `excisePerUnit` is the same value in currency units so screens never have to guess.
+liquorDetailsSchema.set('toJSON', { transform: (doc, ret) => { if (ret.exciseCentsPerUnit != null) ret.excisePerUnit = ret.exciseCentsPerUnit / 100; return ret; } });
+liquorDetailsSchema.set('toObject', { transform: (doc, ret) => { if (ret.exciseCentsPerUnit != null) ret.excisePerUnit = ret.exciseCentsPerUnit / 100; return ret; } });
 module.exports = model('LiquorDetails', liquorDetailsSchema);

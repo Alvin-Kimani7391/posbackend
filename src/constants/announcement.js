@@ -12,6 +12,7 @@ const ANNOUNCEMENT_PAGES = [
   'notifications', 'settings', 'audit',
   // restaurant & accommodation screens (hx-*.html)
   'hx-dashboard', 'hx-floor', 'hx-kitchen', 'hx-bills', 'hx-reservations', 'hx-delivery', 'hx-menu', 'hx-stock', 'hx-guest', 'hx-staff',
+  'hx-selfservice', 'hx-storefront', 'hx-live', 'hx-tv', 'billing',
   'hx-desk', 'hx-rooms', 'hx-stays', 'hx-housekeeping', 'hx-reports', 'hx-setup', 'hx-settings', 'hx-services',
 ];
 

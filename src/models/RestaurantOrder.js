@@ -108,6 +108,9 @@ orderSchema.index({ businessId: 1, branchId: 1, deviceId: 1, clientRef: 1 }, { u
 orderSchema.index({ businessId: 1, 'selfService.publicCode': 1 }, { unique: true, partialFilterExpression: { 'selfService.publicCode': { $type: 'string' } } });
 orderSchema.index({ source: 1, 'selfService.paymentState': 1, 'selfService.expiresAt': 1 }, { partialFilterExpression: { source: 'KIOSK' } });
 
+// Live TV order-status boards refresh the moment any order changes (debounced; a no-op when no TV is connected).
+orderSchema.post('save', (doc) => { try { require('../services/tv/tv.service').ordersChanged(doc.businessId, doc.branchId); } catch (e) { /* never break an order write */ } });
+
 moneyPaths(orderSchema, ['totals.itemsTotal', 'totals.serviceCharge', 'totals.tax', 'totals.total', 'totals.discount', 'delivery.fee', 'items.unitPrice', 'items.basePrice', 'items.costUnit', 'items.discount', 'items.modifiers.priceDelta', 'items.modifiers.costDelta']);
 
 module.exports = model('RestaurantOrder', orderSchema);

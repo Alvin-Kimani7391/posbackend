@@ -5,6 +5,7 @@ const details = require('../services/liquor/details.service');
 const empties = require('../services/liquor/empties.service');
 const tots = require('../services/liquor/tots.service');
 const reports = require('../services/liquor/liquor-report.service');
+const till = require('../services/liquor/till.service');
 const { fromCents } = require('../utils/money');
 
 const h = (status, message, fn) => catchAsync(async (req, res) => sendSuccess(res, status, message, await fn(req)));
@@ -14,6 +15,7 @@ module.exports = {
   getSettings: h(200, 'Liquor settings fetched', async (r) => ({ settings: await settings.get(b(r)) })),
   updateSettings: h(200, 'Liquor settings saved', async (r) => ({ settings: await settings.update(b(r), u(r), r.body) })),
   status: h(200, 'Status fetched', async (r) => settings.status(b(r))),
+  tillContext: h(200, 'Till data fetched', async (r) => till.context(b(r))),
 
   listDetails: h(200, 'Liquor products fetched', async (r) => details.list(b(r), r.query)),
   getDetails: h(200, 'Liquor details fetched', async (r) => ({ details: await details.get(b(r), r.params.productId) })),

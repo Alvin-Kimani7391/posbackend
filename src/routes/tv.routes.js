@@ -6,6 +6,7 @@ const router = require('express').Router();
 const { z } = require('zod');
 const validate = require('../middleware/validate');
 const requireFeature = require('../middleware/requireFeature');
+const requireAddon = require('../middleware/requireAddon');
 const catchAsync = require('../utils/catchAsync');
 const { sendSuccess } = require('../utils/ApiResponse');
 const { authenticate, requirePermission: P } = require('../middleware/auth');
@@ -13,7 +14,7 @@ const { uploadTvImage } = require('../middleware/tvUpload');
 const v = require('../validators/tv.validator');
 const svc = require('../services/tv/tv.service');
 
-router.use(authenticate, requireFeature('restaurantOrdering'));
+router.use(authenticate, requireFeature('restaurantOrdering'), requireAddon('livetv')); // premium add-on
 const h = (fn, msg = 'OK', status = 200) => catchAsync(async (req, res) => sendSuccess(res, status, msg, await fn(req)));
 const id = { params: v.idParam }; const b = (r) => r.businessId; const u = (r) => r.user;
 

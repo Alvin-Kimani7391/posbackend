@@ -58,6 +58,9 @@ router.get('/:token/receipts/:reference', poll, validate({ params: z.object({ to
 
 // ---- LIVE rider tracking for one delivery (Uber-style): polling twin + live stream + "I moved" + rating + lock-screen alerts
 const trk = { params: rv.trackParams };
+const liveGate = catchAsync(async (req, res, next) => { await svc.assertAddon(req.params.token, 'livetracking'); next(); }); // premium add-on
+router.use('/:token/delivery/:key', liveGate);
+router.use('/:token/push', liveGate);
 router.get('/:token/delivery/:key/live', poll, validate({ ...trk, query: rv.liveQuery }), h((r) => cust.live(t(r), r.params.key, r.query)));
 router.get('/:token/delivery/:key/stream', validate(trk), catchAsync((req, res) => cust.openStream(t(req), req.params.key, req, res)));
 router.post('/:token/delivery/:key/location', write, validate({ ...trk, body: rv.moveBody }), h((r) => cust.move(t(r), r.params.key, r.body)));

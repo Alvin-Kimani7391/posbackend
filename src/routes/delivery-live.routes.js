@@ -7,11 +7,12 @@ const c = require('../controllers/rider.controller');
 const v = require('../validators/rider.validator');
 const validate = require('../middleware/validate');
 const requireFeature = require('../middleware/requireFeature');
+const requireAddon = require('../middleware/requireAddon');
 const { authenticate, requirePermission: P } = require('../middleware/auth');
 
 router.get('/stream', validate({ query: v.streamQuery }), c.staffStream);       // ticket-authenticated
 
-router.use(authenticate, requireFeature('restaurantOrdering'));
+router.use(authenticate, requireFeature('restaurantOrdering'), requireAddon('livetracking')); // premium add-on
 router.post('/stream-ticket', P('restaurant.delivery.view'), c.ticket('staff'));
 router.get('/board', P('restaurant.delivery.view'), validate({ query: v.branchQuery }), c.board);
 router.get('/orders/:id', P('restaurant.delivery.view'), validate({ params: v.idParam }), c.orderTrack);

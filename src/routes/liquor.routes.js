@@ -12,6 +12,7 @@ router.use(authenticate);
 // ---- policy: licence, hours, dry days, age, empties mode
 const comp = requireFeature('liquorCompliance');
 router.get('/status', P('sales.create'), c.status); // the till shows "open until 23:00 / closed: dry day" from this
+router.get('/till/context', P('sales.create'), c.tillContext); // age rules + alcohol product ids + returnable containers, for any cashier; cached on the till for offline
 router.get('/settings', comp, P('liquor.settings'), c.getSettings);
 router.put('/settings', comp, P('liquor.settings'), validate({ body: v.settingsBody }), c.updateSettings);
 

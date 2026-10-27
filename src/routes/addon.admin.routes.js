@@ -1,0 +1,20 @@
+/** ADMIN side, mounted by billing.admin.routes.js at /api/v1/admin/billing/addons. */
+const router = require('express').Router();
+const c = require('../controllers/addon.controller');
+const validate = require('../middleware/validate');
+const v = require('../validators/addon.validator');
+router.get('/', c.adminList);
+router.post('/', validate({ body: v.createBody }), c.adminCreate);
+router.post('/seed', c.adminSeed);
+router.get('/base-plans', c.adminBasePlans);
+router.put('/base-plans', validate({ body: v.basePlanBody }), c.adminSetBasePlan);
+router.post('/promote', validate({ body: v.promoteBody }), c.adminPromote);
+router.get('/business/:businessId', validate({ params: v.businessParam }), c.adminBusiness);
+router.post('/business/:businessId/:key/grant', validate({ params: v.bizKeyParam, body: v.grantBody }), c.adminGrant);
+router.post('/business/:businessId/:key/revoke', validate({ params: v.bizKeyParam }), c.adminRevoke);
+router.put('/business/:businessId/:key/price', validate({ params: v.bizKeyParam, body: v.priceBody }), c.adminPrice);
+router.put('/:key', validate({ params: v.keyParam, body: v.updateBody }), c.adminUpdate);
+router.patch('/:key/active', validate({ params: v.keyParam, body: v.activeBody }), c.adminActive);
+router.post('/:key/grant-existing', validate({ params: v.keyParam, body: v.grantBody }), c.adminGrantExisting);
+router.delete('/:key', validate({ params: v.keyParam }), c.adminRemove);
+module.exports = router;

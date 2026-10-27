@@ -41,6 +41,8 @@ const offlinePaymentSchema = z
     amountTenderedCents: cents.optional(),
     reference: z.string().trim().max(60).optional(),
     mpesa: mpesaClaimSchema.optional(),
+    network: z.string().trim().max(40).optional(),      // MOBILE_MONEY: which rail (Airtel Money, T-Kash, ...)
+    payerPhone: z.string().trim().max(16).optional(),
   })
   .refine((p) => p.method !== 'MPESA' || !!p.mpesa, { message: 'M-PESA payments need the M-PESA code and the payer phone', path: ['mpesa'] });
 
@@ -66,7 +68,7 @@ const offlineSaleSchema = z.object({
   taxCents: cents,
   totalCents: cents,
   catalogVersion: z.string().trim().max(64).optional(),
-  ageCheck: z.object({ confirmedOfAge: z.boolean().optional(), idType: z.string().trim().max(30).optional(), idLast4: z.string().trim().max(12).optional() }).optional(), // wines & spirits: age check done at the till
+  ageCheck: z.object({ confirmedOfAge: z.boolean().optional(), idType: z.string().trim().max(30).optional(), idLast4: z.string().trim().max(12).optional(), method: z.enum(['CONFIRMED', 'ID', 'DOB']).optional(), ageYears: z.number().int().min(0).max(130).optional() }).optional(), // wines & spirits: age check done at the till
   notes: z.string().trim().max(300).optional(),
 });
 

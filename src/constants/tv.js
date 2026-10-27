@@ -1,5 +1,10 @@
 /** Live TV (digital menu board) constants. */
-const SLIDE_TYPES = ['MENU_ITEMS', 'CATEGORY', 'PROMO', 'MEDIA', 'ROOMS', 'TEXT'];
+const SLIDE_TYPES = ['MENU_ITEMS', 'CATEGORY', 'PROMO', 'MEDIA', 'ROOMS', 'TEXT', 'ORDERS'];
+// Live order status (optional slide / side panel). BOARD = Preparing | Ready columns, CARDS = one card per order with a progress bar,
+// NOW_SERVING = huge ready numbers + small preparing list, MINIMAL = clean big-number list.
+const ORDER_STYLES = ['BOARD', 'CARDS', 'NOW_SERVING', 'MINIMAL'];
+const ORDER_TYPES = ['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'COUNTER', 'BAR_TAB', 'ROOM_SERVICE', 'PICKUP'];
+const ORDER_PANEL_POSITIONS = ['RIGHT', 'LEFT', 'BOTTOM'];
 const LAYOUTS = ['HERO', 'GRID', 'LIST', 'COMBO', 'SPLIT', 'FULLSCREEN', 'BANNER'];
 const BADGES = ['NEW', 'BESTSELLER', 'HOT', 'SPICY', 'VEGAN', 'CHEFS_PICK', 'LIMITED'];
 const TRANSITIONS = ['FADE', 'SLIDE', 'ZOOM', 'NONE'];
@@ -12,4 +17,4 @@ const THEMES = {
 };
 const LIMITS = { SCREENS: 20, PLAYLISTS: 30, SLIDES: 40, ITEMS_PER_SLIDE: 12, SLIDE_SECONDS: { min: 4, max: 120 }, PAIR_MINUTES: 15, PAIR_ATTEMPTS: 8, OFFLINE_AFTER_SEC: 90, HISTORY: 25 };
 const HEX = /^#[0-9a-fA-F]{6}$/;
-module.exports = { SLIDE_TYPES, LAYOUTS, BADGES, TRANSITIONS, THEMES, THEME_KEYS: Object.keys(THEMES), LIMITS, HEX };
+module.exports = { ORDER_STYLES, ORDER_TYPES, ORDER_PANEL_POSITIONS, SLIDE_TYPES, LAYOUTS, BADGES, TRANSITIONS, THEMES, THEME_KEYS: Object.keys(THEMES), LIMITS, HEX };

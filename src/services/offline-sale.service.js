@@ -14,6 +14,7 @@
 const mongoose = require('mongoose');
 const pharmacyGuard = require('./pharmacy-guard.service');
 const liquorGuard = require('./liquor/liquor-guard.service');
+const AgeCheckLog = require('../models/AgeCheckLog');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const ProductVariant = require('../models/ProductVariant');
@@ -316,7 +317,11 @@ async function ingestOfflineSale(ctx) {
       flags.push(flag('CREDIT_LIMIT_EXCEEDED', 'HIGH', `${customer.name} would owe ${customer.outstandingBalance + balance}c against a limit of ${customer.creditLimit}c`));
     }
   }
-  if (s.payments.some((p) => p.method === 'CARD' || p.method === 'BANK' || p.method === 'MOBILE_MONEY') && !caps.allowCard) flags.push(flag('METHOD_NOT_ALLOWED', 'HIGH', 'A card or bank payment was recorded but these cannot be verified offline and are not allowed'));
+  if (s.payments.some((p) => p.method === 'CARD' || p.method === 'BANK') && !caps.allowCard) flags.push(flag('METHOD_NOT_ALLOWED', 'HIGH', 'A card or bank payment was recorded but these cannot be verified offline and are not allowed'));
+  if (s.payments.some((p) => p.method === 'MOBILE_MONEY')) {
+    if (!caps.allowManualMpesa && !caps.allowCard) flags.push(flag('METHOD_NOT_ALLOWED', 'HIGH', 'A mobile-money payment was recorded offline but manual mobile money was not allowed on this till'));
+    else flags.push(flag('MOBILE_MONEY_UNVERIFIED', 'WARN', 'Mobile-money payment typed in offline: check the reference against the network statement'));
+  }
 
   // ---- 6. shift ----
   let shift = null;
@@ -422,6 +427,9 @@ async function ingestOfflineSale(ctx) {
           doc.externalTransactionId = r.payment.externalTransactionId;
           doc.metadata = r.payment.metadata;
         }
+        if (p.method === 'MOBILE_MONEY') {
+          doc.metadata = { network: p.network || 'OTHER', payerPhone: p.payerPhone, verifyStatus: 'PENDING', enteredOffline: true };
+        }
         paymentDocs.push(doc);
       }
       if (paymentDocs.length) await Payment.create(paymentDocs, { session });
@@ -484,6 +492,12 @@ async function ingestOfflineSale(ctx) {
         }],
         { session }
       );
+
+      // Wines & spirits: the age check the cashier did at the till is logged exactly like an online one.
+      if (s.ageCheck && s.ageCheck.confirmedOfAge && liquorGuard.isOn(business)) {
+        const ac = s.ageCheck;
+        await AgeCheckLog.create([{ businessId, branchId, saleId, cashierId: cashier._id, outcome: 'PASSED', method: ac.method || (ac.idType ? 'ID' : 'CONFIRMED'), idType: ac.idType, idLast4: ac.idLast4 ? String(ac.idLast4).slice(-4) : undefined, ageYears: ac.ageYears, at: soldAt }], { session });
+      }
 
       await AuditLog.create(
         [{

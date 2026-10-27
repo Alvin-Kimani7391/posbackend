@@ -7,6 +7,8 @@ const hex = z.string().regex(T.HEX);
 const cents = z.coerce.number().min(0).transform((v) => Math.round(v * 100));
 const schedule = z.object({ days: z.array(z.number().int().min(0).max(6)).optional(), start: hhmm.optional(), end: hhmm.optional(), startDate: ymd.optional(), endDate: ymd.optional() }).strict();
 const theme = z.object({ preset: z.enum(T.THEME_KEYS), primary: hex, secondary: hex, accent: hex, text: hex, background: hex, showClock: z.boolean(), showLogo: z.boolean(), showTicker: z.boolean() }).partial().strict();
+const ordersCfg = z.object({ style: z.enum(T.ORDER_STYLES), showItems: z.boolean(), showTable: z.boolean(), showCustomer: z.boolean(), showTime: z.boolean(), maxOrders: z.coerce.number().int().min(3).max(24), orderTypes: z.array(z.enum(T.ORDER_TYPES)).max(7) }).partial().strict();
+const ordersPanel = z.object({ enabled: z.boolean(), position: z.enum(T.ORDER_PANEL_POSITIONS), maxOrders: z.coerce.number().int().min(3).max(16) }).partial().strict();
 const idParam = z.object({ id: objectId });
 
 const settingsBody = z.object({ theme: theme.optional(), ticker: str(240).optional(), tagline: str(80).optional(), currencyDisplay: z.enum(['SYMBOL', 'CODE', 'NONE']).optional(), hideSoldOut: z.boolean().optional() }).strict();
@@ -16,8 +18,9 @@ const slide = z.object({
   schedule: schedule.optional(), menuItemIds: z.array(objectId).max(60).optional(), categoryIds: z.array(objectId).max(20).optional(), roomTypeIds: z.array(objectId).max(20).optional(),
   promotionId: objectId.optional(), mediaId: objectId.optional(), text: str(400).optional(), limit: z.coerce.number().int().min(1).max(T.LIMITS.ITEMS_PER_SLIDE).optional(),
   badges: z.array(z.object({ menuItemId: objectId, badge: z.enum(T.BADGES) })).max(60).optional(),
+  orders: ordersCfg.optional(),
 }).strict();
-const playlistBody = z.object({ name: str(80).min(1), kind: z.enum(['RESTAURANT', 'GUEST']).optional(), orderType: z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'ROOM_SERVICE']).optional(), defaultSeconds: z.coerce.number().int().min(4).max(120).optional(), theme: theme.optional(), ticker: str(240).optional(), slides: z.array(slide).max(T.LIMITS.SLIDES).optional() }).strict();
+const playlistBody = z.object({ name: str(80).min(1), kind: z.enum(['RESTAURANT', 'GUEST']).optional(), orderType: z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'ROOM_SERVICE']).optional(), defaultSeconds: z.coerce.number().int().min(4).max(120).optional(), theme: theme.optional(), ticker: str(240).optional(), ordersPanel: ordersPanel.optional(), slides: z.array(slide).max(T.LIMITS.SLIDES).optional() }).strict();
 const playlistUpdate = playlistBody.omit({ slides: true }).partial();
 const slidesBody = z.object({ slides: z.array(slide).max(T.LIMITS.SLIDES) }).strict();
 const publishBody = z.object({ note: str(200).optional() }).strict();

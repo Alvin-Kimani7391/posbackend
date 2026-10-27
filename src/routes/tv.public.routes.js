@@ -19,6 +19,7 @@ const noStore = (res) => res.set('Cache-Control', 'no-store');
 
 router.post('/pair', pairLimit, validate({ body: v.pairBody }), catchAsync(async (req, res) => { noStore(res); sendSuccess(res, 200, 'Screen paired', await svc.pair(req.body.code, meta(req))); }));
 router.get('/content', dev, catchAsync(async (req, res) => { noStore(res); const s = await svc.authDevice(tokenOf(req)); sendSuccess(res, 200, 'OK', await svc.content(s, meta(req), req.query.etag)); }));
+router.get('/orders', dev, catchAsync(async (req, res) => { noStore(res); const s = await svc.authDevice(tokenOf(req)); sendSuccess(res, 200, 'OK', await svc.orders(s)); }));
 router.post('/heartbeat', dev, validate({ body: v.beat }), catchAsync(async (req, res) => { noStore(res); const s = await svc.authDevice(tokenOf(req)); sendSuccess(res, 200, 'OK', await svc.heartbeat(s, meta(req))); }));
 router.post('/error', dev, validate({ body: v.errBody }), catchAsync(async (req, res) => { const s = await svc.authDevice(tokenOf(req)); sendSuccess(res, 200, 'OK', await svc.reportError(s, req.body.message)); }));
 router.get('/stream', catchAsync(async (req, res) => { const s = await svc.authDevice(tokenOf(req)); await svc.heartbeat(s, meta(req)); svc.stream(s, req, res); }));

@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const ApiError = require('../../utils/ApiError');
+const addonAccess = require('../addon.entitlement'); // premium add-on
 const T = require('../../constants/tv');
 const { ROLES } = require('../../constants/roles');
 const { assertBranchAccess, canAccessBranch } = require('../../utils/branchAccess');
@@ -18,6 +19,7 @@ const Branch = require('../../models/Branch');
 const MenuItem = require('../../models/MenuItem');
 const Category = require('../../models/Category');
 const RoomType = require('../../models/RoomType');
+const RestaurantOrder = require('../../models/RestaurantOrder');
 const { TvPlaylist, TvPublication, TvPromotion, TvMedia, TvSettings, TvScreen } = require('../../models/TvModels');
 
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
@@ -43,6 +45,14 @@ function menuChanged(bid) {
   const t = setTimeout(() => { timers.delete(k); push(k, 'refresh', { reason: 'menu' }); }, 2000); if (t.unref) t.unref(); timers.set(k, t);
 }
 
+/** Called whenever a restaurant order is saved (model hook). Debounced; does nothing at all when no TV is listening. */
+const otimers = new Map();
+function ordersChanged(bid, branchId) {
+  if (!hub.listeners(chan(bid))) return;
+  const k = `${bid}:${branchId}`; if (otimers.has(k)) return;
+  const t = setTimeout(() => { otimers.delete(k); push(bid, 'orders', { branchId: idStr(branchId) }); }, 900); if (t.unref) t.unref(); otimers.set(k, t);
+}
+
 // ------------------------------------------------------------------ settings
 async function getSettings(bid) {
   let s = await TvSettings.findOne({ businessId: bid });
@@ -64,7 +74,7 @@ async function options(bid, user) {
   ]);
   return { menuItems: items.map((i) => ({ ...i, basePrice: fromCents(i.basePrice), soldOut: !!(i.soldOut && i.soldOut.flag) })), categories: cats,
     roomTypes: rooms.map((r) => ({ ...r, baseRate: fromCents(r.baseRate) })), branches: branches.filter((b) => canAccessBranch(user, b._id)),
-    themes: T.THEMES, slideTypes: T.SLIDE_TYPES, layouts: T.LAYOUTS, badges: T.BADGES, transitions: T.TRANSITIONS, limits: T.LIMITS };
+    themes: T.THEMES, orderStyles: T.ORDER_STYLES, orderTypes: T.ORDER_TYPES, slideTypes: T.SLIDE_TYPES, layouts: T.LAYOUTS, badges: T.BADGES, transitions: T.TRANSITIONS, limits: T.LIMITS };
 }
 
 // ------------------------------------------------------------------ media
@@ -156,7 +166,7 @@ async function removePlaylist(bid, user, id) {
   const sc = await TvScreen.find({ businessId: bid, playlistId: p._id }).select('_id'); await TvScreen.updateMany({ businessId: bid, playlistId: p._id }, { $unset: { playlistId: 1 } });
   push(bid, 'refresh', { reason: 'playlist', screenIds: sc.map((s) => idStr(s._id)) }); await log(bid, user, 'playlist.archive', 'TvPlaylist', p._id); return { archived: true };
 }
-const snapshotOf = (p) => ({ name: p.name, kind: p.kind, orderType: p.orderType, defaultSeconds: p.defaultSeconds, theme: p.theme ? (p.theme.toObject ? p.theme.toObject() : p.theme) : {}, ticker: p.ticker, slides: p.slides.map((s) => s.toObject()) });
+const snapshotOf = (p) => ({ name: p.name, kind: p.kind, orderType: p.orderType, defaultSeconds: p.defaultSeconds, theme: p.theme ? (p.theme.toObject ? p.theme.toObject() : p.theme) : {}, ticker: p.ticker, ordersPanel: p.ordersPanel ? (p.ordersPanel.toObject ? p.ordersPanel.toObject() : p.ordersPanel) : undefined, slides: p.slides.map((s) => s.toObject()) });
 async function validateForPublish(bid, p) {
   const live = p.slides.filter((s) => s.enabled !== false);
   if (!live.length) throw ApiError.badRequest('Add and enable at least one slide before publishing', 'EMPTY_PLAYLIST');
@@ -184,7 +194,7 @@ async function publish(bid, user, id, note) {
 const history = (bid, id) => TvPublication.find({ businessId: bid, playlistId: id }).sort({ version: -1 }).select('version note publishedBy createdAt').populate('publishedBy', 'name');
 async function rollback(bid, user, id, version) {
   const p = await getPlaylist(bid, id); const pub = await TvPublication.findOne({ businessId: bid, playlistId: p._id, version }); if (!pub) throw nf('That version');
-  const s = pub.snapshot; p.set({ name: s.name, kind: s.kind, orderType: s.orderType, defaultSeconds: s.defaultSeconds, theme: s.theme, ticker: s.ticker }); p.slides = s.slides.map(({ _id, ...r }) => r);
+  const s = pub.snapshot; p.set({ name: s.name, kind: s.kind, orderType: s.orderType, defaultSeconds: s.defaultSeconds, theme: s.theme, ticker: s.ticker, ordersPanel: s.ordersPanel || undefined }); p.slides = s.slides.map(({ _id, ...r }) => r);
   p.draftVersion += 1; await p.save(); await log(bid, user, 'rollback.draft', 'TvPlaylist', p._id, { fromVersion: version });
   return publish(bid, user, id, `Rollback to version ${version}`);
 }
@@ -211,6 +221,41 @@ function itemView(it, { orderType, branchId, badges, hideSoldOut }) {
     discountPercent: promo && base ? Math.round(((base - live) / base) * 100) : null, promoLabel: it.promoLabel || null, badge: badges.get(idStr(it._id)) || null,
     isCombo: !!it.isCombo, soldOut, available: it.available !== false, allergens: it.allergens || [] };
 }
+// ------------------------------------------------------------------ live order status (optional: an ORDERS slide and / or a side panel)
+const normOrdersCfg = (c = {}) => { const o = c && c.toObject ? c.toObject() : c || {}; const n = Number(o.maxOrders);
+  return { style: T.ORDER_STYLES.includes(o.style) ? o.style : 'BOARD', showItems: o.showItems === true, showTable: o.showTable !== false, showCustomer: o.showCustomer === true, showTime: o.showTime !== false,
+    maxOrders: n >= 3 && n <= 24 ? Math.round(n) : 12, orderTypes: (o.orderTypes || []).filter((t) => T.ORDER_TYPES.includes(t)) }; };
+const normPanel = (p) => { const o = p && p.toObject ? p.toObject() : p; if (!o || !o.enabled) return null; const n = Number(o.maxOrders);
+  return { enabled: true, position: T.ORDER_PANEL_POSITIONS.includes(o.position) ? o.position : 'RIGHT', maxOrders: n >= 3 && n <= 16 ? Math.round(n) : 8 }; };
+const wantsOrders = (snap) => !!normPanel(snap.ordersPanel) || (snap.slides || []).some((s) => s.type === 'ORDERS' && s.enabled !== false);
+const firstName = (n) => { const f = String(n || '').trim().split(/\s+/)[0]; return f ? f.slice(0, 14) : null; };
+const shortNo = (o) => o.pickupNumber || ((/(\d+)$/.exec(String(o.orderNumber || '')) || [])[1] || String(o.orderNumber || '')).replace(/^0+(?=\d)/, '');
+/** One order as a customer-safe row (first name only, no money, no staff names). Returns null when there is nothing to show. */
+function orderRow(o, now = Date.now()) {
+  const items = (o.items || []).filter((i) => !i.parentItemId && !['DRAFT', 'HELD', 'CANCELLED'].includes(i.status));
+  const open = items.filter((i) => i.status !== 'SERVED'); if (!open.length) return null;
+  const dStatus = o.delivery && o.delivery.status; if (o.orderType === 'DELIVERY' && ['DELIVERED', 'FAILED'].includes(dStatus)) return null;
+  let stage = open.every((i) => i.status === 'READY') ? 'READY' : items.some((i) => ['PREPARING', 'READY', 'SERVED'].includes(i.status)) ? 'PREPARING' : 'RECEIVED';
+  if (stage === 'READY' && o.orderType === 'DELIVERY' && dStatus === 'OUT_FOR_DELIVERY') stage = 'ON_THE_WAY';
+  const done = items.reduce((a, i) => a + (['READY', 'SERVED'].includes(i.status) ? 1 : i.status === 'PREPARING' ? 0.5 : 0), 0);
+  const sentAt = o.firstSentAt || o.createdAt; const elapsed = Math.max(0, Math.round((now - new Date(sentAt)) / 60000));
+  const prep = Math.max(0, ...open.map((i) => Number(i.prepMinutes) || 0)); const readyAt = stage === 'READY' ? open.reduce((m, i) => (i.readyAt && new Date(i.readyAt) > m ? new Date(i.readyAt) : m), new Date(0)) : null;
+  return { id: idStr(o._id), number: shortNo(o), table: o.tableName || null, orderType: o.orderType, customer: firstName(o.customerName), stage, progress: Math.round((done / items.length) * 100), elapsedMin: elapsed,
+    etaMin: stage === 'READY' || !prep ? null : Math.max(1, prep - elapsed), readyAt: readyAt && readyAt.getTime() > 0 ? readyAt : null, sentAt,
+    items: open.slice(0, 8).map((i) => ({ name: [i.name, i.variantName && `(${i.variantName})`].filter(Boolean).join(' '), qty: i.quantity, status: i.status })), more: Math.max(0, open.length - 8) };
+}
+async function ordersFeed({ businessId, branchId }) {
+  const now = Date.now(); const since = new Date(now - 12 * 3600 * 1000);
+  const rows = await RestaurantOrder.find({ businessId, branchId, status: { $in: ['OPEN', 'CLOSED'] }, createdAt: { $gte: since }, 'items.status': { $in: ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'] } })
+    .sort({ createdAt: 1 }).limit(120).select('orderNumber pickupNumber orderType tableName customerName firstSentAt createdAt delivery.status items.status items.name items.quantity items.variantName items.parentItemId items.prepMinutes items.readyAt').lean();
+  return { orders: rows.map((o) => orderRow(o, now)).filter(Boolean).slice(0, 60), at: new Date(now) };
+}
+const sampleOrders = () => { const now = new Date(); const it = (...n) => n.map(([name, qty, status]) => ({ name, qty, status }));
+  const mk = (id, number, stage, extra = {}) => ({ id, number, table: null, orderType: 'TAKEAWAY', customer: null, stage, progress: { RECEIVED: 0, PREPARING: 55, READY: 100, ON_THE_WAY: 100 }[stage], elapsedMin: 6, etaMin: stage === 'READY' ? null : 5, readyAt: stage === 'READY' ? now : null, sentAt: now, items: [], more: 0, ...extra });
+  return [mk('d1', '101', 'READY', { items: it(['Chicken burger', 1, 'READY'], ['Fries', 1, 'READY']) }), mk('d2', '102', 'READY', { table: 'Table 4', orderType: 'DINE_IN', items: it(['Grilled tilapia', 2, 'READY']) }),
+    mk('d3', '103', 'PREPARING', { customer: 'Wanjiru', items: it(['Beef pizza', 1, 'PREPARING'], ['Soda', 2, 'READY']) }), mk('d4', '104', 'PREPARING', { table: 'Table 9', orderType: 'DINE_IN', progress: 30, items: it(['Pilau', 3, 'PREPARING']) }),
+    mk('d5', '105', 'RECEIVED', { items: it(['Wings', 1, 'PENDING'], ['Milkshake', 1, 'PENDING']) }), mk('d6', '106', 'RECEIVED', { orderType: 'DELIVERY', items: it(['Family combo', 1, 'PENDING']) }), mk('d7', '107', 'RECEIVED', { items: it(['Chapati & beans', 2, 'PENDING']) })]; };
+
 async function renderPlaylist({ businessId, branchId, snapshot, settings, business, now = new Date(), withSchedule = false }) {
   const tz = business.timezone || 'Africa/Nairobi'; const orderType = snapshot.orderType || 'DINE_IN';
   const menuSvc = require('../restaurant/menu.service');
@@ -248,6 +293,7 @@ async function renderPlaylist({ businessId, branchId, snapshot, settings, busine
         if (rooms.length) slide = { ...base, rooms };
       }
     } else if (s.type === 'TEXT') slide = { ...base, text: s.text };
+    else if (s.type === 'ORDERS') slide = { ...base, orders: normOrdersCfg(s.orders) };
     if (slide) {
       if (withSchedule) { const sc = s.schedule && (s.schedule.toObject ? s.schedule.toObject() : s.schedule); const has = sc && Object.values(sc).some((v) => v && (!Array.isArray(v) || v.length)); slide.live = live; slide.schedule = has ? sc : null; }
       out.push(slide);
@@ -269,14 +315,18 @@ async function buildContent(screen) {
   const slides = all.filter((x) => x.live !== false).map(({ live, schedule, ...rest }) => rest);
   // Scheduled slides (breakfast, happy hour...): ship every one with its time window so a screen that LOSES THE INTERNET still switches by itself.
   const offlineSlides = all.some((x) => x.schedule) ? all.map(({ live, ...rest }) => rest) : undefined;
-  return { ...head, version: pl.publishedVersion, theme: resolveTheme(settings.theme, snap.theme), ticker: snap.ticker || settings.ticker || null, slides, ...(offlineSlides ? { offlineSlides } : {}), empty: slides.length ? null : 'NOTHING_TO_SHOW' };
+  const feed = wantsOrders(snap) ? await ordersFeed({ businessId: bid, branchId: screen.branchId }) : null;
+  return { ...head, version: pl.publishedVersion, theme: resolveTheme(settings.theme, snap.theme), ticker: snap.ticker || settings.ticker || null, slides, ...(offlineSlides ? { offlineSlides } : {}),
+    ordersPanel: normPanel(snap.ordersPanel), ordersFeed: !!feed, ...(feed ? { orders: feed.orders } : {}), empty: slides.length ? null : 'NOTHING_TO_SHOW' };
 }
 /** Manager preview of the DRAFT (never visible on a TV). */
 async function previewDraft(bid, user, id, branchId) {
   assertBranchAccess(user, branchId); const p = await getPlaylist(bid, id);
   const [business, settings] = await Promise.all([Business.findById(bid).select('name logo currency timezone featureSettings').lean(), getSettings(bid)]);
   const snap = snapshotOf(p); const { slides, skipped } = await renderPlaylist({ businessId: bid, branchId, snapshot: snap, settings, business });
-  return { draft: true, version: p.draftVersion, business: { name: business.name, logo: business.logo || null, currency: business.currency }, theme: resolveTheme(settings.theme, snap.theme), ticker: snap.ticker || settings.ticker || null, slides, skippedSlideIds: skipped };
+  let feed = wantsOrders(snap) ? await ordersFeed({ businessId: bid, branchId }) : null; let sample = false; if (feed && !feed.orders.length) { feed = { orders: sampleOrders() }; sample = true; }   // empty kitchen: show demo orders so the owner can judge the styling
+  return { draft: true, version: p.draftVersion, business: { name: business.name, logo: business.logo || null, currency: business.currency }, theme: resolveTheme(settings.theme, snap.theme), ticker: snap.ticker || settings.ticker || null, slides, skippedSlideIds: skipped,
+    ordersPanel: normPanel(snap.ordersPanel), ordersFeed: !!feed, ordersSample: sample, ...(feed ? { orders: feed.orders } : {}) };
 }
 
 // ------------------------------------------------------------------ screens (manager side)
@@ -345,6 +395,7 @@ async function authDevice(token) {
   if (!oid(id) || !secret) throw bad();
   const s = await TvScreen.findById(id); if (!s || !s.tokenHash || !eq(s.tokenHash, sha(secret))) throw bad();
   if (s.status !== 'PAIRED') throw ApiError.forbidden(s.status === 'DISABLED' ? 'This screen was switched off by a manager.' : 'This screen was revoked.', `TV_${s.status}`);
+  await addonAccess.assertEntitled(s.businessId, 'livetv'); // premium add-on: screens go dark when it lapses
   return s;
 }
 async function touch(s, { ip, ua, shownVersion, appVersion }) {
@@ -357,15 +408,17 @@ async function content(s, meta, ifEtag) {
   if (ifEtag && ifEtag === etag) return { unchanged: true, etag, pollSeconds: c.pollSeconds };
   return { ...c, etag };
 }
+/** Lightweight live order status for ONE screen (its branch). Polled every few seconds and pushed by the 'orders' stream event. */
+async function orders(s) { const f = await ordersFeed({ businessId: s.businessId, branchId: s.branchId }); return { orders: f.orders, at: f.at }; }
 async function heartbeat(s, meta) { await touch(s, meta); return { ok: true, serverTime: new Date() }; }
 async function reportError(s, message) { await TvScreen.updateOne({ _id: s._id }, { $set: { lastError: { message: String(message).slice(0, 300), at: new Date() } }, $inc: { errorCount: 1 } }); return { ok: true }; }
 function stream(s, req, res) {
   const id = idStr(s._id);
-  return hub.subscribe(chan(s.businessId), req, res, { hello: { screenId: id }, filter: (d) => !d.screenIds || d.screenIds.includes(id) });
+  return hub.subscribe(chan(s.businessId), req, res, { hello: { screenId: id }, filter: (d) => (!d.screenIds || d.screenIds.includes(id)) && (!d.branchId || d.branchId === idStr(s.branchId)) });
 }
 /** Cron: remove expired announcements. (Offline state is computed from lastSeenAt on read, so nothing else needs sweeping.) */
 async function sweep() { await TvScreen.updateMany({ 'announcement.until': { $lt: new Date() } }, { $unset: { announcement: 1 } }); }
 
 module.exports = { getSettings, updateSettings, options, listMedia, addMedia, removeMedia, listPromos, savePromo, togglePromo, removePromo, listPlaylists, getPlaylist, createPlaylist, updatePlaylist, setSlides, removePlaylist,
   publish, history, rollback, previewDraft, listScreens, createScreen, updateScreen, newPairCode, setScreenStatus, enableScreen, command, announce, overview, removeScreen, audit,
-  pair, authDevice, content, heartbeat, reportError, stream, sweep, menuChanged, buildContent, resolveTheme };
+  pair, authDevice, content, orders, ordersChanged, heartbeat, reportError, stream, sweep, menuChanged, buildContent, resolveTheme };

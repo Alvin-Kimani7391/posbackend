@@ -9,6 +9,7 @@
  * Nothing the browser sends (price, total, payment status, business id, cashier) is ever trusted.
  */
 const crypto = require('crypto');
+const addonAccess = require('../addon.entitlement'); // premium add-on
 const mongoose = require('mongoose');
 const RestaurantOrder = require('../../models/RestaurantOrder');
 const RestaurantTable = require('../../models/RestaurantTable');
@@ -60,6 +61,7 @@ async function resolve(token, { allowDisabled = false } = {}) {
   const ss = ctx.settings.selfService || {};
   if ((ss.kioskVersion || 1) !== ver) throw ApiError.notFound('This kiosk link is not valid any more. Please ask a member of staff.', 'KIOSK_INVALID');
   if (!allowDisabled) {
+    await addonAccess.assertEntitled(businessId, 'selfservice'); // premium add-on
     if (ctx.business.status && ctx.business.status !== 'active') throw ApiError.forbidden('This business is not taking orders right now.', 'BUSINESS_INACTIVE');
     if (!ctx.features.ordering) throw ApiError.forbidden('Ordering is not available here.', 'FEATURE_DISABLED');
     if (!ss.enabled) throw ApiError.forbidden('Self-service ordering is switched off. Please order at the counter.', 'SELF_SERVICE_DISABLED');

@@ -18,8 +18,9 @@ const id = { params: v.idParam };
 router.use('/offline', require('./restaurant-offline.routes')); // offline snapshot + ordered, idempotent replay of queued operations
 
 // ---- settings, areas, stations
-router.get('/storefront/qr', P('restaurant.guest.qr'), c.storeQr);
-router.post('/storefront/qr/rotate', P('restaurant.guest.qr'), c.storeQrRotate);
+const requireAddon = require('../middleware/requireAddon');
+router.get('/storefront/qr', requireAddon('storefront'), P('restaurant.guest.qr'), c.storeQr);
+router.post('/storefront/qr/rotate', requireAddon('storefront'), P('restaurant.guest.qr'), c.storeQrRotate);
 router.get('/tracking', P('restaurant.settings.view'), c.getTracking);   // ingredient tracking on/off + setup progress (NOT behind the recipe gate: it is how you turn it on)
 router.put('/tracking', P('restaurant.settings.manage'), validate({ body: v.trackingBody }), c.setTracking);
 router.get('/operations', P('restaurant.settings.view'), validate({ query: v.operationsQuery }), c.getOperations);
@@ -210,11 +211,11 @@ router.post('/orders/:id/claim', P('restaurant.orders.create'), validate({ param
 
 // ---- self-service kiosk (staff side): the owner's link + the cashier's "confirm cash" desk. The customer side is public: routes/selfservice.public.routes.js
 const sc = require('../controllers/selfservice.controller'); const sv = require('../validators/selfservice.validator');
-router.get('/self-service/link', P('restaurant.settings.manage'), sc.link);
-router.post('/self-service/link/rotate', P('restaurant.settings.manage'), sc.rotateLink);
-router.get('/self-service/orders', P('restaurant.bills.view'), validate({ query: sv.staffList }), sc.staffList);
-router.post('/self-service/orders/:id/confirm-cash', P('restaurant.bills.pay'), validate({ ...id, body: sv.confirmCashBody }), idempotent('POST /restaurant/self-service/confirm-cash'), sc.confirmCash);
-router.post('/self-service/orders/:id/reprint', P('restaurant.bills.view'), validate(id), sc.staffReprint);
+router.get('/self-service/link', requireAddon('selfservice'), P('restaurant.settings.manage'), sc.link);
+router.post('/self-service/link/rotate', requireAddon('selfservice'), P('restaurant.settings.manage'), sc.rotateLink);
+router.get('/self-service/orders', requireAddon('selfservice'), P('restaurant.bills.view'), validate({ query: sv.staffList }), sc.staffList);
+router.post('/self-service/orders/:id/confirm-cash', requireAddon('selfservice'), P('restaurant.bills.pay'), validate({ ...id, body: sv.confirmCashBody }), idempotent('POST /restaurant/self-service/confirm-cash'), sc.confirmCash);
+router.post('/self-service/orders/:id/reprint', requireAddon('selfservice'), P('restaurant.bills.view'), validate(id), sc.staffReprint);
 
 // ---- history + search (read-only): all orders, past deliveries / pickups, past guest QR requests and calls
 const hist = require('../controllers/history.controller'); const hq = require('../validators/history.validator');

@@ -7,6 +7,10 @@ const schedule = new Schema({ days: { type: [Number], default: undefined }, star
 const theme = new Schema({ preset: { type: String, enum: T.THEME_KEYS }, primary: hex, secondary: hex, accent: hex, text: hex, background: hex,
   showClock: Boolean, showLogo: Boolean, showTicker: Boolean }, { _id: false });
 
+const ordersCfg = new Schema({ style: { type: String, enum: T.ORDER_STYLES }, showItems: Boolean, showTable: Boolean, showCustomer: Boolean, showTime: Boolean,
+  maxOrders: { type: Number, min: 3, max: 24 }, orderTypes: [{ type: String, enum: T.ORDER_TYPES }] }, { _id: false });
+const ordersPanel = new Schema({ enabled: Boolean, position: { type: String, enum: T.ORDER_PANEL_POSITIONS }, maxOrders: { type: Number, min: 3, max: 16 } }, { _id: false });
+
 const slide = new Schema({
   type: { type: String, enum: T.SLIDE_TYPES, required: true },
   layout: { type: String, enum: T.LAYOUTS, default: 'GRID' },
@@ -19,6 +23,7 @@ const slide = new Schema({
   promotionId: oid('TvPromotion'), mediaId: oid('TvMedia'), text: { type: String, trim: true, maxlength: 400 },
   limit: { type: Number, min: 1, max: T.LIMITS.ITEMS_PER_SLIDE },
   badges: [{ _id: false, menuItemId: oid('MenuItem'), badge: { type: String, enum: T.BADGES } }],
+  orders: ordersCfg,                               // ORDERS slides: how the live order status is drawn
 }, { _id: true });
 
 const playlistSchema = new Schema({
@@ -28,6 +33,7 @@ const playlistSchema = new Schema({
   orderType: { type: String, enum: ['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'ROOM_SERVICE'], default: 'DINE_IN' },
   defaultSeconds: { type: Number, default: 12, min: 4, max: 120 },
   theme, ticker: { type: String, trim: true, maxlength: 240 },
+  ordersPanel,                                     // optional live-order side panel shown on top of every slide
   slides: { type: [slide], default: [] },          // DRAFT: the TV never sees this until published
   draftVersion: { type: Number, default: 1 },
   publishedVersion: { type: Number, default: 0 },

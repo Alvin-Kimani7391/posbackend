@@ -42,6 +42,7 @@ const billingPlanSchema = new Schema(
   currency: { type: String, enum: BILLING_CURRENCIES, default: 'KES' }, // currency of every amount on this document
 
     isActive: { type: Boolean, default: true },
+    businessTypes: [{ type: String, trim: true }], // base plan new businesses of these types start on
     phases: { type: [phaseSchema], validate: [(v) => v.length > 0, 'A plan needs at least one phase'] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },

@@ -46,7 +46,7 @@ function toClient(p) {
 
 /* ----------------------------- STK push ----------------------------- */
 
-async function initiateStk(businessId, user, { phone, amountCents }) {
+async function initiateStk(businessId, user, { phone, amountCents, invoiceId }) {
   const sub = await Subscription.findOne({ businessId });
   if (!sub) throw ApiError.notFound('No subscription found for this business');
   if (sub.status === 'CANCELLED') throw ApiError.badRequest('This subscription is cancelled. Contact support.', 'SUBSCRIPTION_CANCELLED');
@@ -68,7 +68,7 @@ async function initiateStk(businessId, user, { phone, amountCents }) {
   const callbackToken = crypto.randomBytes(24).toString('hex');
   const payment = await SubscriptionPayment.create({
     businessId, subscriptionId: sub._id, currency: sub.currency || DEFAULT_BILLING_CURRENCY, initiatedBy: user._id, source: 'OWNER', method: 'STK', status: 'PENDING',
-    amount: amountCents, claimedAmount: amountCents, reference, callbackToken, phone: payhero.normalizePhone(phone),
+    amount: amountCents, claimedAmount: amountCents, reference, callbackToken, phone: payhero.normalizePhone(phone), targetInvoiceId: invoiceId || undefined,
   });
 
   try {
@@ -192,7 +192,7 @@ async function handleCallback(paymentId, token, body) {
 
 /* ------------------------- manual (pasted SMS) ------------------------- */
 
-async function submitManual(businessId, user, { mpesaMessage, amountCents, transactionCode, provider }) {
+async function submitManual(businessId, user, { mpesaMessage, amountCents, transactionCode, provider, invoiceId }) {
   const settings = await settingsSvc.get();
   const sub = await Subscription.findOne({ businessId });
   if (!sub) throw ApiError.notFound('No subscription found for this business');
@@ -247,7 +247,7 @@ async function submitManual(businessId, user, { mpesaMessage, amountCents, trans
     payment = await SubscriptionPayment.create({
       businessId, subscriptionId: sub._id, currency, initiatedBy: user._id, source: 'OWNER', method: 'MPESA_MANUAL', status: 'SUBMITTED',
       amount, claimedAmount: amount, reference: `BLM-${crypto.randomBytes(6).toString('hex').toUpperCase()}`,
-      provider: provider || undefined,
+      provider: provider || undefined, targetInvoiceId: invoiceId || undefined,
       mpesaReceiptNumber: code, receiptKey: code, mpesaMessage: parsed.text.slice(0, 1000),
       parsed: { code, amountCents: parsed.amountCents, recipient: parsed.recipient }, flags,
     });

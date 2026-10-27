@@ -79,7 +79,7 @@ async function ensureDefaultPlan(currency = DEFAULT_BILLING_CURRENCY) {
 }
 
 /** Plans only ever apply to businesses of the plan's own currency - a TZS business can never be put on a KES plan. */
-async function resolvePlan(planKey, currency = DEFAULT_BILLING_CURRENCY) {
+async function resolvePlan(planKey, currency = DEFAULT_BILLING_CURRENCY, businessType) {
   const cur = normCurrency(currency);
   if (planKey) {
     const plan = await BillingPlan.findOne({ key: planKey, isActive: true });
@@ -88,6 +88,10 @@ async function resolvePlan(planKey, currency = DEFAULT_BILLING_CURRENCY) {
       throw ApiError.badRequest(`That plan is priced in ${plan.currency || DEFAULT_BILLING_CURRENCY}, but this business pays in ${cur}.`, 'PLAN_CURRENCY_MISMATCH');
     }
     return plan;
+  }
+  if (businessType) {
+    const typed = await BillingPlan.findOne({ isActive: true, currency: cur, businessTypes: businessType });
+    if (typed) return typed; // admin-chosen base plan for this business type
   }
   const settings = await settingsSvc.get();
   const defaultKey = cur === 'TZS' ? (settings.defaultPlanKeyTZ || PLAN_KEY_BY_CURRENCY.TZS) : (settings.defaultPlanKey || PLAN_KEY_BY_CURRENCY.KES);
@@ -208,7 +212,8 @@ async function startSubscription(businessId, { planKey, startPhaseKey, startAt =
   const existing = await Subscription.findOne({ businessId });
   if (existing) return existing;
   const currency = await currencyOf(businessId);
-  const plan = await resolvePlan(planKey, currency);
+  const bizType = (await Business.findById(businessId).select('businessType').lean())?.businessType;
+  const plan = await resolvePlan(planKey, currency, bizType);
   let index = 0;
   if (startPhaseKey) {
     index = plan.phases.findIndex((p) => p.key === startPhaseKey);
@@ -296,9 +301,12 @@ async function advanceSubscription(subId, now = new Date()) {
 
 /* ===================== allocation (oldest invoice first) ===================== */
 
-async function allocateFIFO(subId, amount, session) {
-  const invoices = await Invoice.find({ subscriptionId: subId, status: { $in: ['PENDING', 'PARTIAL'] } })
+async function allocateFIFO(subId, amount, session, firstInvoiceId) {
+  const found = await Invoice.find({ subscriptionId: subId, status: { $in: ['PENDING', 'PARTIAL'] } })
     .sort({ dueDate: 1, createdAt: 1 }).session(session);
+  // Order: the invoice the payer chose, then the base subscription, then premium add-ons (an unchosen payment never pays an add-on before the base charge).
+  const rank = (i) => (firstInvoiceId && String(i._id) === String(firstInvoiceId) ? 0 : i.meta && i.meta.addon ? 2 : 1);
+  const invoices = found.map((i, n) => ({ i, n })).sort((a, b) => rank(a.i) - rank(b.i) || a.n - b.n).map((x) => x.i);
   let remaining = amount;
   const allocations = [];
   for (const inv of invoices) {
@@ -323,7 +331,7 @@ async function allocatePayment(paymentId) {
     if (!p) return null;
     const sub = await Subscription.findById(p.subscriptionId).session(session);
     if (!sub) throw new Error('Subscription missing for payment');
-    const { allocations, leftover } = await allocateFIFO(sub._id, p.amount, session);
+    const { allocations, leftover } = await allocateFIFO(sub._id, p.amount, session, p.targetInvoiceId);
     p.allocations = allocations; p.creditAddedCents = leftover; p.allocatedAt = new Date();
     await p.save({ session });
     sub.creditCents += leftover; sub.totalPaidCents += p.amount; sub.lastPaymentAt = new Date();
@@ -387,11 +395,12 @@ async function reconcile(subId, { now = new Date() } = {}) {
   if (!sub) return null;
   const settings = await settingsSvc.get();
 
-  const open = await Invoice.find({ subscriptionId: sub._id, status: { $in: ['PENDING', 'PARTIAL'] } }).select('amount amountPaid dueDate').lean();
+  const open = await Invoice.find({ subscriptionId: sub._id, status: { $in: ['PENDING', 'PARTIAL'] } }).select('amount amountPaid dueDate meta').lean();
   let openBalance = 0; let arrears = 0; let oldest = null;
   for (const i of open) {
     const bal = i.amount - i.amountPaid;
     openBalance += bal;
+    if (i.meta && i.meta.addon) continue; // add-on invoices never count as arrears: unpaid add-on = that feature off, never the whole account
     if (i.dueDate <= now) { arrears += bal; if (!oldest || i.dueDate < oldest) oldest = i.dueDate; }
   }
   sub.openBalanceCents = openBalance; sub.arrearsCents = arrears; sub.oldestOverdueAt = oldest;
@@ -415,6 +424,7 @@ async function reconcile(subId, { now = new Date() } = {}) {
 
   if (change === 'LOCKED') await notify.locked(sub, { auto: true });
   if (change === 'UNLOCKED') await notify.restored(sub);
+  try { await require('./addon.service').syncPaid(sub.businessId); } catch (e) { console.error('[addons] sync after reconcile failed', e.message); }
   return sub;
 }
 
