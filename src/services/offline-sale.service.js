@@ -13,6 +13,7 @@
  */
 const mongoose = require('mongoose');
 const pharmacyGuard = require('./pharmacy-guard.service');
+const liquorGuard = require('./liquor/liquor-guard.service');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const ProductVariant = require('../models/ProductVariant');
@@ -172,6 +173,9 @@ async function ingestOfflineSale(ctx) {
 
   // Pharmacy: prescription / dispenser / restricted checks cannot run on an offline till, so such sales are escalated to review.
   try { (await pharmacyGuard.offlineFlags(business, products)).forEach((f) => flags.push(flag(f.code, f.level, f.message))); } catch (e) { console.error('[pharmacy] offline check failed', e.message); }
+
+  // Wines & spirits: hours / dry day / licence / missing age check cannot be refused after the fact, so they are escalated to review.
+  try { (await liquorGuard.offlineFlags(business, products, { soldAt: s.soldAt, hasAgeCheck: !!(s.ageCheck && s.ageCheck.confirmedOfAge) })).forEach((f) => flags.push(flag(f.code, f.level, f.message))); } catch (e) { console.error('[liquor] offline check failed', e.message); }
 
   const taxInclusive = !!(business.taxSettings && business.taxSettings.taxInclusive);
   const maxDiscountPercent = caps.maxDiscountPercent == null ? 0 : caps.maxDiscountPercent;

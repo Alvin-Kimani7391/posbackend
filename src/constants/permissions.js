@@ -138,4 +138,4 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
 });
 
 // Restaurant permissions + defaults for every role are merged in from their own file.
-module.exports = require('./tvPermissions').extend(require('./restaurantPermissions').extend({ PERMISSIONS, DEFAULT_ROLE_PERMISSIONS }));
+module.exports = require('./liquorPermissions').extend(require('./shopPermissions').extend(require('./tvPermissions').extend(require('./restaurantPermissions').extend({ PERMISSIONS, DEFAULT_ROLE_PERMISSIONS }))));

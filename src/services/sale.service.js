@@ -22,6 +22,7 @@ const serialService = require('./serial.service');
 const { normalizeSerial } = require('../utils/imei');
 const batchService = require('./batch.service');
 const pharmacyGuard = require('./pharmacy-guard.service');
+const liquorGuard = require('./liquor/liquor-guard.service');
 const tradeInService = require('./tradein.service');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
@@ -211,6 +212,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
   // --- Pharmacy: dispenser / prescription / restricted-medicine rules. Throws when the sale is not allowed; null outside pharmacies. ---
   const pharmacyCtx = await pharmacyGuard.assess({ business, businessId, user: cashierUser, items: builtItems, prescriptionId: payload.prescriptionId, poisonsBook: payload.poisonsBook, countersign: payload.countersign });
 
+  // --- Wines & spirits: licence / hours / dry days, age check, empties deposit, tots. Throws when the sale is not allowed; null outside liquor shops. ---
+  const liquorCtx = await liquorGuard.assess({ business, businessId, branchId, user: cashierUser, items: builtItems, payload });
+
   // --- Cart-level discount, validated against the same role limit ---
   const cartDiscount = payload.cartDiscount || 0;
   const subtotalAfterItemDiscount = builtItems.reduce((s, i) => s + i._meta.grossLineTotal - i._meta.discountApplied, 0);
@@ -361,6 +365,8 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
       // Pharmacy: dispensing record (prescription + patient + dispenser + sale + batches) in the same transaction.
       await pharmacyGuard.recordWithinSale({ ctx: pharmacyCtx, sale, user: cashierUser, allocByItem, session });
+      // Wines & spirits: age-check log, container movements and open-bottle draws in the same transaction.
+      await liquorGuard.recordWithinSale({ ctx: liquorCtx, sale, user: cashierUser, customerId: customer?._id, session });
 
       // Payments - manual recording for CASH/CARD/BANK; MPESA picks up
       // provider/externalTransactionId/metadata resolved above. Swapping in
@@ -614,6 +620,8 @@ async function cancelSale(businessId, userId, id, reason) {
 
       // A device taken in part-payment goes back to the customer (only if it is still in stock).
       if (sale.tradeInIds?.length) await tradeInService.reverseForSale({ businessId, saleId: sale._id, user: { _id: userId }, session });
+      // Wines & spirits: tots go back to the open-bottle pool and container movements are reversed.
+      await liquorGuard.reverseForSale({ businessId, saleId: sale._id, userId, session });
 
       if (sale.balance > 0 && sale.customerId) {
         const customer = await Customer.findOne({ _id: sale.customerId, businessId }).session(session);

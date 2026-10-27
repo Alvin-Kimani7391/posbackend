@@ -66,6 +66,7 @@ const offlineSaleSchema = z.object({
   taxCents: cents,
   totalCents: cents,
   catalogVersion: z.string().trim().max(64).optional(),
+  ageCheck: z.object({ confirmedOfAge: z.boolean().optional(), idType: z.string().trim().max(30).optional(), idLast4: z.string().trim().max(12).optional() }).optional(), // wines & spirits: age check done at the till
   notes: z.string().trim().max(300).optional(),
 });
 

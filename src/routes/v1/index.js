@@ -60,6 +60,8 @@ router.use('/offline', require('../offline-review.routes'));
 
 router.use('/restaurant', require('../restaurant.routes'));
 router.use('/accommodation', require('../accommodation.routes'));
+router.use('/shop', require('../shop.routes'));
+router.use('/liquor', require('../liquor.routes'));              // wines & spirits: licence, hours, age check, empties, tots, reports                    // general shop: import, held sales, promotions, bulk prices, barcodes, reports
 router.use('/cashier', require('../cashier.routes'));
 router.use('/manager', require('../manager.routes'));               // owner / manager command centre
 router.use('/public/qr', require('../guest.public.routes'));

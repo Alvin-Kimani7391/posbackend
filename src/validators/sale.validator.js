@@ -35,6 +35,9 @@ const createSaleSchema = z.object({
   tradeIns: z.array(objectId).max(3).optional(), // ACCEPTED trade-in ids used as part-payment
   poisonsBook: z.object({ purchaserName: z.string().trim().min(2).max(120), purchaserAddress: z.string().trim().min(3).max(200), idNumber: z.string().trim().max(40).optional(), purpose: z.string().trim().min(2).max(200), signed: z.literal(true) }).optional(), // pharmacy: Poisons Book details for a Part I poison sold without a prescription
   countersign: z.object({ name: z.string().trim().min(2).max(120), relationship: z.string().trim().max(60).optional(), signed: z.literal(true) }).optional(), // pharmacy: patient/representative countersignature for controlled drugs
+  ageCheck: z.object({ confirmedOfAge: z.boolean().optional(), looksUnderAge: z.boolean().optional(), idType: z.enum(['NATIONAL_ID', 'PASSPORT', 'DRIVING_LICENCE', 'MILITARY_ID', 'OTHER']).optional(), idLast4: z.string().trim().min(2).max(12).optional(), dob: z.coerce.date().optional() }).optional(), // wines & spirits: age check on alcohol
+  emptiesReturned: z.array(z.object({ containerTypeId: objectId, quantity: z.coerce.number().int().positive().max(5000) })).max(20).optional(), // wines & spirits: empties handed back with this sale
+  overrideReason: z.string().trim().max(200).optional(), // wines & spirits: manager reason to sell outside hours / over the limit
   prescriptionId: objectId.optional(),                       // pharmacy: the validated prescription being dispensed
   items: z.array(saleItemSchema).min(1),
   payments: z.array(paymentInputSchema).default([]),

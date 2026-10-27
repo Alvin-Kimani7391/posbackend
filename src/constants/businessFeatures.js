@@ -8,7 +8,7 @@
 
 const BUSINESS_TYPES = [
   'supermarket', 'electronics', 'clothing', 'hardware', 'cosmetics',
-  'restaurant', 'general_shop', 'wholesale', 'garage', 'pharmacy', 'other',
+  'restaurant', 'general_shop', 'wholesale', 'garage', 'pharmacy', 'wines_spirits', 'other',
 ];
 
 const FEATURE_KEYS = [
@@ -36,6 +36,12 @@ const FEATURE_KEYS = [
   'multiWarehouse',
   'layaway',
   'tradeIn',
+  'liquorCompliance',  // wines & spirits: licence, trading hours, dry days, per-sale limit
+  'ageVerification',   // wines & spirits: age check on every alcohol sale (logged)
+  'emptiesTracking',   // wines & spirits: returnable bottles / crates and deposits
+  'totSales',          // wines & spirits: sell tots from open bottles
+  'heldSales',   // park a customer's cart and serve the next one, recall later
+  'promotions',  // dated offers: % off, amount off, fixed price, multi-buy
   // pharmacy
   'pharmacyDispensing',
   'prescriptionManagement',
@@ -48,22 +54,23 @@ const FEATURE_KEYS = [
 // (e.g. a pharmacy cannot turn off batch tracking or quarantine.)
 const LOCKED_ON = {
   pharmacy: ['expiryTracking', 'batchTracking', 'quarantineManagement', 'recallManagement'],
+  wines_spirits: ['liquorCompliance', 'ageVerification'], // the legal checks cannot be switched off by a cashier-level mistake; only changed with the business type
 };
 
 const BUSINESS_FEATURE_DEFAULTS = {
-  supermarket: { expiryTracking: true, batchTracking: true, unitConversions: true, loyaltyProgram: true },
-  electronics: { serialNumberTracking: true, warrantyManagement: true, repairManagement: true, layaway: true, tradeIn: true },
-  clothing: { productVariants: true, loyaltyProgram: true, layaway: true },
-  hardware: { unitConversions: true, quotationManagement: true, deliveryManagement: true },
+  supermarket: { expiryTracking: true, batchTracking: true, unitConversions: true, loyaltyProgram: true, heldSales: true, promotions: true },
+  electronics: { serialNumberTracking: true, warrantyManagement: true, repairManagement: true, layaway: true, tradeIn: true, heldSales: true, promotions: true },
+  clothing: { productVariants: true, loyaltyProgram: true, layaway: true, heldSales: true, promotions: true },
+  hardware: { unitConversions: true, quotationManagement: true, deliveryManagement: true, heldSales: true, promotions: true },
   cosmetics: {
     expiryTracking: true, batchTracking: true, productVariants: true, loyaltyProgram: true,
-    quarantineManagement: true, recallManagement: true,
+    quarantineManagement: true, recallManagement: true, heldSales: true, promotions: true,
   },
   restaurant: {
     restaurantOrdering: true, tableManagement: true, kitchenDisplay: true, recipeManagement: true,
     reservations: true, batchTracking: true, guestQrOrdering: true,
   },
-  general_shop: { layaway: true },
+  general_shop: { layaway: true, heldSales: true, promotions: true },
   wholesale: {
     wholesalePricing: true, unitConversions: true, quotationManagement: true,
     deliveryManagement: true, multiWarehouse: true, customerCredit: true,
@@ -73,6 +80,10 @@ const BUSINESS_FEATURE_DEFAULTS = {
     expiryTracking: true, batchTracking: true, pharmacyDispensing: true,
     prescriptionManagement: true, restrictedProductControl: true,
     recallManagement: true, quarantineManagement: true,
+  },
+  wines_spirits: {
+    liquorCompliance: true, ageVerification: true, emptiesTracking: true, totSales: true,
+    unitConversions: true, batchTracking: true, loyaltyProgram: true, heldSales: true, promotions: true, wholesalePricing: true,
   },
   other: {},
 };
