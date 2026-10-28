@@ -15,7 +15,7 @@ const s = new Schema({
   cancelAtPeriodEnd: { type: Boolean, default: false }, cancelledAt: { type: Date }, cancelReason: { type: String, maxlength: 300 },
   complimentary: { type: Boolean, default: false }, complimentaryUntil: { type: Date },
   source: { type: String, enum: ['OWNER', 'ADMIN'], default: 'OWNER' },
-  history: [{ _id: false, at: Date, type: String, note: String, by: String }],
+  history: [{ _id: false, at: Date, type: { type: String }, note: String, by: String }],
   notifiedKeys: [{ type: String }],
 }, { timestamps: true });
 s.index({ businessId: 1, addonKey: 1 }, { unique: true });

@@ -120,4 +120,15 @@ async function quote(businessId, { branchId, lines }) {
   return { lines: out, totalSuggestedDiscount: fromCents(total) };
 }
 
-module.exports = { create, update, setStatus, remove, list, get, activeNow, quote, discountFor, present };
+/** Best offer discount (cents) for one line from a list of active promos, or 0. The sale services use it so an offer the till applied
+ *  counts as the owner's own preset (exempt from the cashier's discount limit), exactly like a product's standing discount. */
+function bestFor(promos, product, unitPrice, qty) {
+  let best = 0;
+  for (const promo of promos) {
+    if (!appliesTo(promo, product) || qty < (promo.minQty || 0)) continue;
+    best = Math.max(best, discountFor(promo, unitPrice, qty));
+  }
+  return best;
+}
+
+module.exports = { create, update, setStatus, remove, list, get, activeNow, quote, discountFor, bestFor, present };

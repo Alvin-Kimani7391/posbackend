@@ -70,7 +70,7 @@ const BUSINESS_FEATURE_DEFAULTS = {
     restaurantOrdering: true, tableManagement: true, kitchenDisplay: true, recipeManagement: true,
     reservations: true, batchTracking: true, guestQrOrdering: true,
   },
-  general_shop: { layaway: true, heldSales: true, promotions: true },
+  general_shop: { layaway: true, heldSales: true, promotions: true, customerCredit: true },
   wholesale: {
     wholesalePricing: true, unitConversions: true, quotationManagement: true,
     deliveryManagement: true, multiWarehouse: true, customerCredit: true,

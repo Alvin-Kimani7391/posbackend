@@ -30,6 +30,7 @@ const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange, getStockLevel } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice } = require('./sale-pricing.util');
 const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
+const promoSvc = require('./shop/promotion.service');
 const { resolveWarehouse, saleStockTarget } = require('./warehouse.resolver');
 const { resolveUnit, wholesaleUnitPrice, retailUnitPrice, round3, wholesaleFloorPerBase } = require('../utils/units');
 
@@ -111,6 +112,10 @@ async function createSale(businessId, branchId, cashierUser, payload) {
   const wholesaleFeatureOn = business.featureSettings?.wholesalePricing === true;
   const qtyByProduct = sumQuantityByProduct(payload.items); // MOQ counted per product across the whole sale
 
+  // Offers running now (general shop). A discount that matches an offer is the owner's own preset, not a cashier discount.
+  let activePromos = [];
+  if (business.featureSettings?.promotions) { try { activePromos = await promoSvc.activeNow(businessId, branchId); } catch (e) { activePromos = []; } }
+
   const builtItems = [];
   for (const rawItem of payload.items) {
     const product = await Product.findOne({ _id: rawItem.productId, businessId, status: 'active' });
@@ -163,7 +168,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
 
     // Preset (owner-configured) part of the discount, recomputed from the
     // Product record - never taken from the client.
-    const presetLineDiscount = Math.min(Math.round((product.defaultDiscount || 0) * unit.factor * rawItem.quantity), grossForLimit);
+    const presetLineDiscount = Math.min(Math.max(Math.round((product.defaultDiscount || 0) * unit.factor * rawItem.quantity), activePromos.length ? promoSvc.bestFor(activePromos, product, unitPrice, rawItem.quantity) : 0), grossForLimit);
 
     // Whatever exceeds the preset was typed in by the cashier and is subject
     // to the role limit. The 1-cent tolerance absorbs rounding differences
