@@ -1,6 +1,8 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
+
+
 const TYPES = ['PERCENT', 'AMOUNT_OFF', 'FIXED_PRICE', 'MULTI_BUY'];
 // PERCENT: value = % off the unit price. AMOUNT_OFF: value = cents off EACH unit. FIXED_PRICE: value = the unit price (cents) while the offer runs.
 // MULTI_BUY: buy `buyQty`, pay for `payQty` (3 for the price of 2). Applies to complete groups only.
