@@ -2,7 +2,8 @@ const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
 
 const EXPENSE_CATEGORIES = ['Rent', 'Electricity', 'Water', 'Transport', 'Salary', 'Packaging', 'Internet', 'Maintenance', 'Other',
-  'Wages', 'Food Purchases', 'Gas & Fuel', 'Licences', 'Marketing', 'Cleaning', 'Insurance', 'Taxes'];
+  'Wages', 'Food Purchases', 'Gas & Fuel', 'Licences', 'Marketing', 'Cleaning', 'Insurance', 'Taxes',
+  'Yard Rental', 'Loaders & Offloading', 'Vehicle Costs', 'Bank Charges', 'Stationery', 'Subscriptions', 'Loan Interest', 'Tools'];
 
 const expenseSchema = new Schema(
   {
@@ -20,6 +21,11 @@ const expenseSchema = new Schema(
     receiptImage: { type: String },
 
     expenseDate: { type: Date, default: Date.now },
+
+    // hardware: how this spend is treated in the books (only OPERATING reduces operating profit) and optional due date for unpaid bills
+    kind: { type: String, enum: ['OPERATING', 'INVENTORY', 'CAPITAL', 'LOAN_REPAYMENT', 'OWNER_WITHDRAWAL'], default: 'OPERATING' },
+    payee: { type: String, trim: true },
+    dueDate: { type: Date }, paidAt: { type: Date },
 
     status: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },

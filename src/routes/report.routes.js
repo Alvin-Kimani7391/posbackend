@@ -2,6 +2,8 @@ const router = require('express').Router();
 const controller = require('../controllers/report.controller');
 const validate = require('../middleware/validate');
 const { authenticate, requirePermission } = require('../middleware/auth');
+const saleHistory = require('../controllers/saleHistory.controller');
+const shq = require('../validators/saleHistory.validator');
 const { reportQuery, reportDetailQuery, inventoryReportQuery, wholesaleReportQuery } = require('../validators/report.validator');
 
 router.use(authenticate);
@@ -13,6 +15,8 @@ router.use(requirePermission('reports.view'));
 router.get('/dashboard', validate({ query: reportQuery }), controller.dashboard);
 router.get('/sales', validate({ query: reportQuery }), controller.sales);
 router.get('/sales/detail', validate({ query: reportDetailQuery }), controller.salesDetail);
+router.get('/sales/all', validate({ query: shq.list }), saleHistory.list);                       // every sale, many filters
+router.get('/sales/all/:id', validate({ params: shq.idParam }), saleHistory.detail);           // one sale in full
 router.get('/payments/detail', validate({ query: reportDetailQuery }), controller.paymentsDetail);
 router.get('/expenses/detail', validate({ query: reportDetailQuery }), controller.expensesDetail);
 router.get('/profit', requirePermission('reports.profit'), validate({ query: reportQuery }), controller.profit);

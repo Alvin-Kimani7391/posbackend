@@ -22,7 +22,7 @@ const saleItemSchema = new Schema(
     baseQuantity: { type: Number },
     unitPrice: { type: Number, required: true },        // integer cents, authoritative price at sale time
     // Which price produced unitPrice. RETAIL = default (all older/garage/repair lines); WHOLESALE = MOQ reached; OVERRIDE = manual.
-    priceType: { type: String, enum: ['RETAIL', 'WHOLESALE', 'OVERRIDE'], default: 'RETAIL' },
+    priceType: { type: String, enum: ['RETAIL', 'WHOLESALE', 'OVERRIDE', 'CONTRACT'], default: 'RETAIL' },
     costPriceSnapshot: { type: Number, required: true }, // integer cents, for profit calculation
     // Wholesale value of ONE sold unit (cents) at sale time, when a wholesale price exists. Lets reports show how much
     // MORE a retail sale earned than the same goods would have earned at the wholesale price.

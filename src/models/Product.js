@@ -8,6 +8,7 @@ const PRICING_MODES = ['RETAIL_FIRST', 'WHOLESALE_FIRST'];
 const UNITS = [
   'piece', 'kg', 'g', 'litre', 'ml', 'metre', 'box', 'packet', 'service',
   'bundle', 'carton', 'dozen', 'pack', 'bag', 'sack', 'bottle', 'tin', 'sachet', 'roll', 'pair', 'set', 'tray', 'crate', 'pallet', 'tablet', 'strip',
+  'm2', 'm3', 'tonne', // hardware: area, volume, weight
 ];
 
 // Other ways to buy / move / sell the same stock (utils/units.js). Stock is ALWAYS kept in the base unit (Product.unit);

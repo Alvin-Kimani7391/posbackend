@@ -18,6 +18,9 @@ const ROLES = Object.freeze({
   DELIVERY_RIDER: 'DELIVERY_RIDER',
   RECEPTIONIST: 'RECEPTIONIST',   // accommodation: front desk (bookings, check-in / check-out, folios)
   HOUSEKEEPER: 'HOUSEKEEPER',     // accommodation: cleans rooms, reports maintenance
+  SALES_REP: 'SALES_REP',       // hardware / building materials: quotations, contractor accounts
+  DISPATCHER: 'DISPATCHER',     // hardware: schedules deliveries, assigns drivers and vehicles
+  DRIVER: 'DRIVER',             // hardware: updates own deliveries, records proof of delivery
   PHARMACIST: 'PHARMACIST',     // pharmacy: dispensing and clinical review. Still needs a verified pharmacyCredential to dispense.
 });
 

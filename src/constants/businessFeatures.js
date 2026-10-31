@@ -42,6 +42,9 @@ const FEATURE_KEYS = [
   'totSales',          // wines & spirits: sell tots from open bottles
   'heldSales',   // park a customer's cart and serve the next one, recall later
   'promotions',  // dated offers: % off, amount off, fixed price, multi-buy
+  'contractorPricing',  // hardware: contractor prices and quantity breaks applied automatically at sale
+  'warehouseLocations', // hardware: rack / shelf / bin locations and pick lists
+  'transportManagement', // hardware: fleet, transport pricing, trip costs and job profit
   // pharmacy
   'pharmacyDispensing',
   'prescriptionManagement',
@@ -61,7 +64,7 @@ const BUSINESS_FEATURE_DEFAULTS = {
   supermarket: { expiryTracking: true, batchTracking: true, unitConversions: true, loyaltyProgram: true, heldSales: true, promotions: true },
   electronics: { serialNumberTracking: true, warrantyManagement: true, repairManagement: true, layaway: true, tradeIn: true, heldSales: true, promotions: true },
   clothing: { productVariants: true, loyaltyProgram: true, layaway: true, heldSales: true, promotions: true },
-  hardware: { unitConversions: true, quotationManagement: true, deliveryManagement: true, heldSales: true, promotions: true },
+  hardware: { unitConversions: true, quotationManagement: true, deliveryManagement: true, contractorPricing: true, warehouseLocations: true, transportManagement: true, heldSales: true, promotions: true, customerCredit: true },
   cosmetics: {
     expiryTracking: true, batchTracking: true, productVariants: true, loyaltyProgram: true,
     quarantineManagement: true, recallManagement: true, heldSales: true, promotions: true,

@@ -30,6 +30,7 @@ const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange, getStockLevel } = require('./inventory.service');
 const { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice } = require('./sale-pricing.util');
 const { PRICE_TYPES, resolveUnitPrice, sumQuantityByProduct } = require('../utils/wholesale');
+const hardwareRules = require('./hardware/hardware-rules.service');
 const promoSvc = require('./shop/promotion.service');
 const { resolveWarehouse, saleStockTarget } = require('./warehouse.resolver');
 const { resolveUnit, wholesaleUnitPrice, retailUnitPrice, round3, wholesaleFloorPerBase } = require('../utils/units');
@@ -60,7 +61,7 @@ const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * configured promotion). Only the part ABOVE the preset - what the cashier
  * added by hand - is checked against the role limit, exactly like before.
  */
-async function createSale(businessId, branchId, cashierUser, payload) {
+async function createSale(businessId, branchId, cashierUser, payload, opts = {}) { // opts is internal only (never from a request): trustedPrices lets a quotation conversion keep its locked prices
   // --- Offline-sync / double-submit idempotency: same device replaying the
   // same client-generated transaction id gets back the ORIGINAL sale,
   // never a second one. ---
@@ -143,6 +144,9 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     if (channel === 'WHOLESALE') resolved = { unitPrice: wholesaleUnitPrice(product, variant, unit), priceType: PRICE_TYPES.WHOLESALE };
     else if (!unit.isBase) resolved = { unitPrice: retailUnitPrice(product, variant, unit), priceType: PRICE_TYPES.RETAIL };
     else resolved = resolveUnitPrice({ product, variant, wholesaleFeatureOn, productQuantity: qtyByProduct.get(String(rawItem.productId)) });
+    // Hardware: contractor price / quantity break, fractional + divisibility rules (null outside hardware shops)
+    const hw = await hardwareRules.lineRules({ business, businessId, customer, product, variant, unit, quantity: rawItem.quantity, baseQuantity, unitPrice: resolved.unitPrice, channel });
+    if (hw) resolved = { unitPrice: hw.unitPrice, priceType: hw.priceType };
     let unitPrice = resolved.unitPrice;
     let priceType = resolved.priceType;
     // cost is per SOLD unit, so profit = price - cost works for a bundle exactly as for a single piece
@@ -151,7 +155,7 @@ async function createSale(businessId, branchId, cashierUser, payload) {
     const wholesaleValueSnapshot = wsFloor ? Math.round(wsFloor * unit.factor) : undefined; // what one sold unit is worth at wholesale
 
     if (rawItem.overridePrice !== undefined && rawItem.overridePrice !== null) {
-      if (!canOverridePrice(cashierUser, business)) {
+      if (!opts.trustedPrices && !canOverridePrice(cashierUser, business)) {
         throw ApiError.forbidden('You are not allowed to override prices', 'PRICE_OVERRIDE_DENIED');
       }
       unitPrice = rawItem.overridePrice;
