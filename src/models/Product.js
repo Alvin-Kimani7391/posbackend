@@ -61,6 +61,7 @@ const productSchema = new Schema(
     taxCategory: { type: String, default: 'standard' }, // e.g. standard, zero-rated, exempt
 
     unit: { type: String, enum: UNITS, default: 'piece' }, // BASE unit: stock, batches and the ledger are counted in it
+    unitValue: { type: Number, default: 0, min: 0 },       // size of one item in `unit`, e.g. 200 with unit g = a 200g pack (display only; 0 = not set)
     units: { type: [productUnitSchema], default: [] },     // bigger/other units that convert to the base unit (feature: unitConversions)
 
     trackInventory: { type: Boolean, default: true },

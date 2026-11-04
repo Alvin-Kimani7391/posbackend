@@ -72,6 +72,7 @@ const productBase = z.object({
   taxRate: z.coerce.number().min(0).max(100).optional(),
   taxCategory: z.string().trim().optional(),
   unit: z.enum(Product.UNITS).optional(), // BASE unit
+  unitValue: z.coerce.number().min(0).max(1000000).optional(), // size of one item in `unit`, e.g. 200 (g)
   units: z.array(unitInput).max(10).optional(),
   trackInventory: z.coerce.boolean().optional(),
   trackSerialNumber: z.coerce.boolean().optional(),
