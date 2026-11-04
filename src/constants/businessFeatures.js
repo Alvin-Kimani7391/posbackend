@@ -61,7 +61,7 @@ const LOCKED_ON = {
 };
 
 const BUSINESS_FEATURE_DEFAULTS = {
-  supermarket: { expiryTracking: true, batchTracking: true, unitConversions: true, loyaltyProgram: true, heldSales: true, promotions: true },
+  supermarket: { wholesalePricing: true, expiryTracking: true, batchTracking: true, unitConversions: true, loyaltyProgram: true, heldSales: true, promotions: true },
   electronics: { serialNumberTracking: true, warrantyManagement: true, repairManagement: true, layaway: true, tradeIn: true, heldSales: true, promotions: true },
   clothing: { productVariants: true, loyaltyProgram: true, layaway: true, heldSales: true, promotions: true },
   hardware: { unitConversions: true, quotationManagement: true, deliveryManagement: true, contractorPricing: true, warehouseLocations: true, transportManagement: true, heldSales: true, promotions: true, customerCredit: true },
@@ -73,7 +73,7 @@ const BUSINESS_FEATURE_DEFAULTS = {
     restaurantOrdering: true, tableManagement: true, kitchenDisplay: true, recipeManagement: true,
     reservations: true, batchTracking: true, guestQrOrdering: true,
   },
-  general_shop: { layaway: true, heldSales: true, promotions: true, customerCredit: true },
+  general_shop: { wholesalePricing: true, unitConversions: true, layaway: true, heldSales: true, promotions: true, customerCredit: true },
   wholesale: {
     wholesalePricing: true, unitConversions: true, quotationManagement: true,
     deliveryManagement: true, multiWarehouse: true, customerCredit: true,

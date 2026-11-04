@@ -9,10 +9,19 @@ const ApiError = require('../utils/ApiError');
 const { wholesaleConfigIssues, wholesaleFirstIssues } = require('../utils/wholesale');
 const { unitConfigIssues } = require('../utils/units');
 
+/** Shops and supermarkets can always sell wholesale / use pack units: switch the feature on the first time it is used. */
+const SHOP_TYPES = ['supermarket', 'general_shop'];
+async function autoEnableForShops(business, businessId, key) {
+  if (!business || !SHOP_TYPES.includes(business.businessType)) return;
+  await Business.updateOne({ _id: businessId }, { $set: { [`featureSettings.${key}`]: true } });
+  business.featureSettings = { ...(business.featureSettings || {}), [key]: true };
+}
+
 /** Units (bundle, carton...) need the unitConversions feature and a sane set-up (unique names, factor > 0). */
 async function assertUnitsAllowed(businessId, units, baseUnit) {
   if (!units || !units.length) return;
-  const business = await Business.findById(businessId).select('featureSettings').lean();
+  const business = await Business.findById(businessId).select('featureSettings businessType').lean();
+  if (!business?.featureSettings?.unitConversions) await autoEnableForShops(business, businessId, 'unitConversions');
   if (!business?.featureSettings?.unitConversions) {
     throw ApiError.forbidden('Unit conversion is not enabled for your business. Turn on "Unit conversions" in business settings first.', 'FEATURE_DISABLED');
   }
@@ -31,7 +40,8 @@ async function assertCategoryBelongsToBusiness(businessId, categoryId) {
 
 /** Wholesale can only be switched on when the business has the `wholesalePricing` feature. */
 async function assertWholesaleFeatureOn(businessId) {
-  const business = await Business.findById(businessId).select('featureSettings').lean();
+  const business = await Business.findById(businessId).select('featureSettings businessType').lean();
+  if (!business?.featureSettings?.wholesalePricing) await autoEnableForShops(business, businessId, 'wholesalePricing');
   if (!business?.featureSettings?.wholesalePricing) {
     throw ApiError.forbidden('Wholesale pricing is not enabled for your business. Turn on "Wholesale pricing" in business settings first.', 'FEATURE_DISABLED');
   }
