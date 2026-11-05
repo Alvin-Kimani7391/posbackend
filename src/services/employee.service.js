@@ -82,6 +82,14 @@ async function createEmployee(businessId, createdBy, data) {
     newValue: { name: user.name, role: user.role, phone: user.phone },
   });
 
+  if (user.email) {
+    (async () => {
+      const Business = require('../models/Business');
+      const [business, actor] = await Promise.all([Business.findById(businessId).select('name').lean(), User.findById(createdBy).select('name').lean()]);
+      if (business) await require('./authMail.service').sendEmployeeWelcome({ user, business, addedBy: actor && actor.name, kind: data.pin ? 'pin' : 'password' });
+    })().catch((e) => console.error('[mail] employee welcome failed', e.message));
+  }
+
   return user;
 }
 

@@ -48,9 +48,9 @@ exports.logout = catchAsync(async (req, res) => {
 
 exports.forgotPassword = catchAsync(async (req, res) => {
   const result = await authService.requestPasswordReset(req.body);
-  // rawToken would be sent via SMS/email here; never returned to the client in production.
+  // The reset link is emailed inside the service; the raw token is never returned in production.
   const data = process.env.NODE_ENV === 'production' || !result ? {} : { devOnlyResetToken: result.rawToken };
-  return sendSuccess(res, 200, 'If that account exists, a reset link has been sent', data);
+  return sendSuccess(res, 200, 'If that account exists, a reset link has been emailed', data);
 });
 
 exports.resetPassword = catchAsync(async (req, res) => {

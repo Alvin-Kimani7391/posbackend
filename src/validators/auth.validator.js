@@ -46,12 +46,16 @@ const refreshSchema = z.object({
 
 const forgotPasswordSchema = z.object({
   identifier: z.string().trim().min(3),
+  kind: z.enum(['password', 'pin']).optional(),
 });
 
-const resetPasswordSchema = z.object({
-  token: z.string().min(10),
-  newPassword: z.string().min(8),
-});
+const resetPasswordSchema = z
+  .object({
+    token: z.string().min(10),
+    newPassword: z.string().min(8, 'Password must be at least 8 characters').optional(),
+    newPin: z.string().regex(/^\d{4,8}$/, 'PIN must be 4 to 8 digits').optional(),
+  })
+  .refine((d) => !!d.newPassword !== !!d.newPin, { message: 'Send either newPassword or newPin' });
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),

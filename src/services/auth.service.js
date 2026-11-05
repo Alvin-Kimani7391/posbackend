@@ -73,6 +73,7 @@ async function registerBusinessOwner({ businessName, businessType = 'general_sho
       .catch((e) => console.error('[billing] start failed', e.message));
 
     invalidateBusinessContext(business._id);
+    require('./authMail.service').sendOwnerWelcome({ user, business }).catch((e) => console.error('[mail] owner welcome failed', e.message));
     return { business, user };
   } finally {
     session.endSession();
@@ -192,35 +193,47 @@ async function logout(user) {
   await user.save();
 }
 
-async function requestPasswordReset({ identifier }) {
+/**
+ * Emails a reset link. kind = 'password' (owners, managers, anyone) or 'pin' (employees who sign in with a PIN).
+ * The link is only ever emailed to the address on file, and the answer is always the same so nobody can probe which
+ * accounts exist.
+ */
+async function requestPasswordReset({ identifier, kind = 'password' }) {
+  const mail = require('./authMail.service');
   const isEmail = identifier.includes('@');
   const query = isEmail ? { email: identifier.toLowerCase() } : { phone: { $in: loginPhoneCandidates(identifier) } };
-  const user = await User.findOne(query);
+  if (kind === 'pin') query.employeeCode = { $type: 'string' };
+  const users = await User.find({ ...query, status: 'active' }).limit(5);
 
-  // Always respond as if successful to avoid leaking which accounts exist.
-  if (!user) return null;
-
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  user.passwordResetTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-  user.passwordResetExpires = new Date(Date.now() + 30 * 60 * 1000); // 30 min
-  await user.save();
-
-  // In production this raw token is delivered via SMS/email, never returned in the API response.
-  return { user, rawToken };
+  let firstHit = null;
+  for (const user of users) {
+    if (!user.email) continue; // nowhere to send it; the person must ask their manager
+    const rawToken = await mail.issueResetToken(user._id, 30);
+    if (!firstHit) firstHit = { user, rawToken };
+    const business = await Business.findById(user.businessId).select('name').lean().catch(() => null);
+    await mail.sendResetEmail({ user, rawToken, kind, businessName: business && business.name });
+  }
+  return firstHit;
 }
 
-async function resetPassword({ token, newPassword }) {
+/** Sets a new password (newPassword) or a new employee PIN (newPin) with a valid emailed token. */
+async function resetPassword({ token, newPassword, newPin }) {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const user = await User.findOne({
     passwordResetTokenHash: tokenHash,
     passwordResetExpires: { $gt: new Date() },
-  }).select('+passwordResetTokenHash +passwordResetExpires');
+  }).select('+passwordHash +pinHash +passwordResetTokenHash +passwordResetExpires');
 
   if (!user) {
     throw ApiError.badRequest('Invalid or expired reset token', 'INVALID_RESET_TOKEN');
   }
 
-  user.passwordHash = await User.hashSecret(newPassword);
+  if (newPin) {
+    if (!user.employeeCode) throw ApiError.badRequest('This account does not use a PIN', 'NO_PIN_ACCOUNT');
+    user.pinHash = await User.hashSecret(newPin);
+  } else {
+    user.passwordHash = await User.hashSecret(newPassword);
+  }
   user.passwordResetTokenHash = undefined;
   user.passwordResetExpires = undefined;
   user.refreshTokenVersion += 1; // force re-login everywhere
