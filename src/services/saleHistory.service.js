@@ -76,7 +76,7 @@ async function summary(f, user) {
   const cost = { $sum: { $map: { input: '$items', as: 'i', in: { $multiply: [{ $ifNull: ['$$i.costPriceSnapshot', 0] }, { $ifNull: ['$$i.quantity', 0] }] } } } };
   const [a] = await Sale.aggregate([{ $match: f }, { $facet: {
     tot: [{ $group: { _id: null, sales: { $sum: 1 }, cancelled: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 1, 0] } }, cancelledValue: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, '$total', 0] } },
-      revenue: { $sum: live }, tax: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, '$tax'] } }, discount: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, { $add: [{ $ifNull: ['$itemDiscount', 0] }, { $ifNull: ['$cartDiscount', 0] }] }] } },
+      revenue: { $sum: live }, selling: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, { $subtract: [{ $ifNull: ['$subtotal', 0] }, { $add: [{ $ifNull: ['$itemDiscount', 0] }, { $ifNull: ['$cartDiscount', 0] }] }] }] } }, tax: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, '$tax'] } }, discount: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, { $add: [{ $ifNull: ['$itemDiscount', 0] }, { $ifNull: ['$cartDiscount', 0] }] }] } },
       paid: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, '$amountPaid'] } }, owed: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, { $max: ['$balance', 0] }] } },
       cost: { $sum: { $cond: [{ $eq: ['$saleStatus', 'CANCELLED'] }, 0, cost] } } } }],
     byStatus: [{ $group: { _id: '$paymentStatus', n: { $sum: 1 }, value: { $sum: live } } }],
@@ -91,7 +91,7 @@ async function summary(f, user) {
     byChannel: ((a && a.byChannel) || []).map((x) => ({ channel: x._id, sales: x.n, value: k(x.value) })),
     bySource: ((a && a.bySource) || []).map((x) => ({ source: x._id, sales: x.n, value: k(x.value) })),
   };
-  if (canProfit(user)) { out.cost = k(t.cost || 0); out.estimatedProfit = k((t.revenue || 0) - (t.tax || 0) - (t.cost || 0)); }
+  if (canProfit(user)) { out.cost = k(t.cost || 0); out.estimatedProfit = k((t.selling || 0) - (t.cost || 0)); }
   return out;
 }
 
@@ -121,7 +121,7 @@ async function list(businessId, user, q) {
       subtotal: k(s.subtotal || 0), discount: k((s.itemDiscount || 0) + (s.cartDiscount || 0)), tax: k(s.tax || 0), total: k(s.total || 0), amountPaid: k(s.amountPaid || 0), balance: k(s.balance || 0), refunded: k(refundedCents(s)),
       paymentStatus: s.paymentStatus, saleStatus: s.saleStatus, methods: [...(pm.get(String(s._id)) || [])], isOffline: !!s.isOffline, flagged: s.reviewStatus === 'PENDING', notes: s.notes || '', cancelReason: s.cancelReason || '',
     };
-    if (profit && s.saleStatus !== 'CANCELLED') { const cost = lines.reduce((a, i) => a + (i.costPriceSnapshot || 0) * (i.quantity || 0), 0); row.cost = k(cost); row.profit = k((s.total || 0) - (s.tax || 0) - cost); }
+    if (profit && s.saleStatus !== 'CANCELLED') { const cost = lines.reduce((a, i) => a + (i.costPriceSnapshot || 0) * (i.quantity || 0), 0); row.cost = k(cost); row.profit = k(((s.subtotal || 0) - (s.itemDiscount || 0) - (s.cartDiscount || 0)) - cost); }
     return row;
   });
   const out = { items, total, page, limit, pages: Math.ceil(total / limit) || 1 };
