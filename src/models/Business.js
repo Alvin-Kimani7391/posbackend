@@ -41,6 +41,15 @@ const businessSchema = new Schema(
     businessType: { type: String, enum: BUSINESS_TYPES, default: 'general_shop' },
     businessSubtype: { type: String, trim: true, maxlength: 60 }, // e.g. mini-supermarket, cafe
     featureSettings: { type: featureSettingsSchema, default: () => ({}) },
+    // Owner-controlled access policy: per-role templates + custom groups. See utils/permissionResolver.js.
+    permissionPolicy: {
+      type: new Schema({
+        roleOverrides: [new Schema({ role: { type: String, required: true }, grant: [String], revoke: [String], updatedAt: Date, updatedBy: Schema.Types.ObjectId }, { _id: false })],
+        groups: [new Schema({ name: { type: String, required: true, trim: true, maxlength: 60 }, description: { type: String, trim: true, maxlength: 200 }, color: { type: String, trim: true, maxlength: 20 }, grant: [String], revoke: [String], createdBy: Schema.Types.ObjectId }, { timestamps: true })],
+        version: { type: Number, default: 0 },
+      }, { _id: false }),
+      default: () => ({ roleOverrides: [], groups: [], version: 0 }),
+    },
     onboarding: { type: onboardingSchema, default: () => ({}) },
     phone: { type: String, required: true, trim: true },
     email: { type: String, trim: true, lowercase: true },

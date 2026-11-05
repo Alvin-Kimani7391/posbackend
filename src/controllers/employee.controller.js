@@ -13,7 +13,7 @@ exports.getOne = catchAsync(async (req, res) => {
 });
 
 exports.create = catchAsync(async (req, res) => {
-  const user = await employeeService.createEmployee(req.businessId, req.user._id, req.body);
+  const user = await employeeService.createEmployee(req.businessId, req.user._id, req.body, req.user, { ip: req.ip, userAgent: req.headers['user-agent'] });
   return sendSuccess(res, 201, 'Employee created', { user: user.toSafeJSON() });
 });
 

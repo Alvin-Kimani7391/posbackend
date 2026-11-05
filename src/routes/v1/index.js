@@ -8,6 +8,7 @@ router.use('/billing', require('../billing.routes'));
 router.use('/business', require('../business.routes'));
 router.use('/branches', require('../branch.routes'));
 router.use('/employees', require('../employee.routes'));
+router.use('/permissions', require('../permission.routes'));
 router.use('/categories', require('../category.routes'));
 router.use('/products', require('../product.routes'));
 router.use('/inventory', require('../inventory.routes'));

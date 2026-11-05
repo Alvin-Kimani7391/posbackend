@@ -20,6 +20,10 @@ const userSchema = new Schema(
     // explicitly revoked from the role's defaults.
     grantedPermissions: [{ type: String }],
     revokedPermissions: [{ type: String }],
+    // 'default' = role defaults only. 'custom' = also apply the groups below + the grants/revokes above.
+    // Left unset on old accounts; the resolver infers it (see utils/permissionResolver.js), so no migration is needed.
+    permissionMode: { type: String, enum: ['default', 'custom'] },
+    permissionGroupIds: [{ type: Schema.Types.ObjectId }], // ids of Business.permissionPolicy.groups
 
     employeeCode: { type: String, trim: true },
     language: { type: String, enum: ['en', 'sw'] }, // personal override of the business language
@@ -59,11 +63,15 @@ userSchema.methods.comparePin = function comparePin(plain) {
   return bcrypt.compare(plain, this.pinHash);
 };
 
-userSchema.methods.toSafeJSON = function toSafeJSON() {
+userSchema.methods.toSafeJSON = function toSafeJSON({ withPermissions = false } = {}) {
   const obj = this.toObject();
   delete obj.passwordHash;
   delete obj.pinHash;
   delete obj.refreshTokenVersion;
+  const R = require('../utils/permissionResolver');
+  obj.permissionMode = R.modeOf(this);
+  // Effective permissions are computed on the server so the app never has to guess (login, /auth/me).
+  if (withPermissions) obj.permissions = [...R.effectiveFor(this, { fresh: true })].sort();
   return obj;
 };
 

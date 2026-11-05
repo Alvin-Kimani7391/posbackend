@@ -317,7 +317,7 @@ async function issueRoster(businessId, manager, deviceId, secret) {
   const users = await User.find({
     businessId, status: 'active', 'offlinePin.hash': { $exists: true },
     $or: [{ branchIds: device.branchId }, { role: { $in: [ROLES.OWNER, ROLES.ADMIN] } }],
-  }).select('+offlinePin name role employeeCode branchIds grantedPermissions revokedPermissions');
+  }).select('+offlinePin name role employeeCode branchIds grantedPermissions revokedPermissions permissionMode permissionGroupIds');
 
   const roster = users.map((u) => {
     const caps = {

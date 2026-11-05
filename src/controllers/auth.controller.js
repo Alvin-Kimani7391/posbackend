@@ -6,20 +6,24 @@ const businessService = require('../services/business.service');
 // Country block (flag, currency, "needs country selection") sent with every login so the dashboard can show the flag at once.
 const countryOf = (user) => businessService.getCountrySummary(user.businessId).catch(() => null);
 
+// On login the request has not been through authenticate(), so load the business's access policy first.
+const primePolicy = async (user) => { if (user && user.businessId) { const B = require('../models/Business'); const b = await B.findById(user.businessId).select('permissionPolicy').lean(); require('../utils/permissionResolver').cachePolicy(user.businessId, b && b.permissionPolicy); } };
+
 const meta = (req) => ({ ip: req.ip, userAgent: req.headers['user-agent'] });
 
 exports.register = catchAsync(async (req, res) => {
   const { business, user } = await authService.registerBusinessOwner(req.body);
   return sendSuccess(res, 201, 'Business and owner account created', {
     business,
-    user: user.toSafeJSON(),
+    user: user.toSafeJSON({ withPermissions: true }),
   });
 });
 
 exports.login = catchAsync(async (req, res) => {
   const { user, accessToken, refreshToken } = await authService.loginWithPassword(req.body, meta(req));
+  await primePolicy(user);
   return sendSuccess(res, 200, 'Login successful', {
-    user: user.toSafeJSON(),
+    user: user.toSafeJSON({ withPermissions: true }),
     country: await countryOf(user),
     accessToken,
     refreshToken,
@@ -28,8 +32,9 @@ exports.login = catchAsync(async (req, res) => {
 
 exports.pinLogin = catchAsync(async (req, res) => {
   const { user, accessToken, refreshToken } = await authService.loginWithPin(req.body, meta(req));
+  await primePolicy(user);
   return sendSuccess(res, 200, 'Login successful', {
-    user: user.toSafeJSON(),
+    user: user.toSafeJSON({ withPermissions: true }),
     country: await countryOf(user),
     accessToken,
     refreshToken,
@@ -65,9 +70,9 @@ exports.changePassword = catchAsync(async (req, res) => {
 
 exports.setLanguage = catchAsync(async (req, res) => {
   const user = await authService.setLanguage(req.user, req.body.language);
-  return sendSuccess(res, 200, 'Language updated', { user: user.toSafeJSON() });
+  return sendSuccess(res, 200, 'Language updated', { user: user.toSafeJSON({ withPermissions: true }) });
 });
 
 exports.me = catchAsync(async (req, res) => {
-  return sendSuccess(res, 200, 'Current user', { user: req.user.toSafeJSON(), country: await countryOf(req.user) });
+  return sendSuccess(res, 200, 'Current user', { user: req.user.toSafeJSON({ withPermissions: true }), country: await countryOf(req.user) });
 });

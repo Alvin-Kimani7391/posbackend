@@ -5,7 +5,7 @@ const { verifyAccessToken } = require('../utils/tokens');
 const User = require('../models/User');
 const Business = require('../models/Business');
 const { ROLES } = require('../constants/roles');
-const { DEFAULT_ROLE_PERMISSIONS } = require('../constants/permissions');
+const { userHasPermission, cachePolicy } = require('../utils/permissionResolver');
 
 /**
  * Verifies the JWT, loads the user, and attaches req.user + req.businessId.
@@ -54,11 +54,13 @@ const authenticate = catchAsync(async (req, res, next) => {
 
   // A suspended business is locked out on its very next request,
   // even with a still-valid access token.
-  const business = await Business.findById(user.businessId).select('status language countryCode currency businessType featureSettings').lean();
+  const business = await Business.findById(user.businessId).select('status language countryCode currency businessType featureSettings permissionPolicy').lean();
   if (!business || business.status !== 'active') {
     throw ApiError.forbidden('This business account is suspended. Contact support.', 'BUSINESS_SUSPENDED');
   }
 
+  cachePolicy(user.businessId, business.permissionPolicy); // keeps every permission check on this server instance current, at zero extra queries
+  user.__policy = business.permissionPolicy || null;
   req.user = user;
   req.businessDoc = business; // reused by requireFeature so it needs no second Business query
   req.businessId = user.businessId; // <-- authoritative source of truth everywhere downstream
@@ -89,12 +91,7 @@ function authorizeRole(...allowedRoles) {
   };
 }
 
-function userHasPermission(user, permission) {
-  if (user.role === ROLES.OWNER) return true;
-  if (user.revokedPermissions?.includes(permission)) return false;
-  const defaults = DEFAULT_ROLE_PERMISSIONS[user.role] || [];
-  return defaults.includes(permission) || user.grantedPermissions?.includes(permission);
-}
+// userHasPermission now lives in utils/permissionResolver.js (system default -> role template -> groups -> person).
 
 /** Requires the authenticated user to hold a specific granular permission. */
 function requirePermission(permission) {

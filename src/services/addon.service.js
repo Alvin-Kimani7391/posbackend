@@ -34,7 +34,7 @@ const log = (ba, type, note, by = 'SYSTEM') => { ba.history.push({ at: new Date(
 const oneTime = (a) => !!a && a.billingType === 'ONE_TIME';
 const termMonths = (a) => (oneTime(a) ? LIFETIME_MONTHS : a.intervalMonths || 1);
 const priceFor = (addon, currency) => { const p = (addon.prices || []).find((x) => x.currency === currency); return p ? p.amountCents : undefined; };
-const canManage = (u) => !!u && (u.role === ROLES.OWNER || u.role === ROLES.ADMIN || (u.grantedPermissions || []).includes('billing.pay'));
+const canManage = (u) => !!u && (u.role === ROLES.OWNER || u.role === ROLES.ADMIN || require('../utils/permissionResolver').hasNonDefaultGrant(u, 'billing.pay'));
 const publicView = (a, currency) => ({
   key: a.key, name: a.name, tagline: a.tagline, description: a.description, benefits: a.benefits || [], icon: a.icon, pages: a.pages || [],
   priceCents: priceFor(a, currency) ?? null, currency, intervalMonths: a.intervalMonths, billingType: a.billingType || 'RECURRING', trialDays: a.trialDays || 0,

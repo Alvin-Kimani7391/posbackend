@@ -34,7 +34,7 @@ async function listEmployees(businessId, { page, limit, search }) {
     User.countDocuments(filter),
   ]);
 
-  return { items: items.map((u) => u.toSafeJSON()), total, page, limit, pages: Math.ceil(total / limit) };
+  return { items: items.map((u) => ({ ...u.toSafeJSON(), permissionSummary: { mode: require('../utils/permissionResolver').modeOf(u), groups: (u.permissionGroupIds || []).length, overrides: (u.grantedPermissions || []).length + (u.revokedPermissions || []).length } })), total, page, limit, pages: Math.ceil(total / limit) };
 }
 
 async function getEmployee(businessId, userId) {
@@ -43,7 +43,7 @@ async function getEmployee(businessId, userId) {
   return user;
 }
 
-async function createEmployee(businessId, createdBy, data) {
+async function createEmployee(businessId, createdBy, data, actor, meta) {
   if (RESERVED_ROLES.includes(data.role)) {
     throw ApiError.badRequest('This role cannot be assigned this way', 'INVALID_ROLE');
   }
@@ -72,6 +72,16 @@ async function createEmployee(businessId, createdBy, data) {
     pinHash,
     createdBy,
   });
+
+  // Optional: choose the new hire's access in the same request (groups / extra grants / revokes).
+  if (data.access && Object.keys(data.access).length) {
+    if (!actor || !require('../utils/permissionResolver').userHasPermission(actor, 'employees.permissions')) {
+      await User.deleteOne({ _id: user._id });
+      throw ApiError.forbidden('You are not allowed to set permissions', 'PERMISSION_DENIED');
+    }
+    try { await require('./permission.service').applyToNewEmployee(businessId, actor, user, data.access, meta); }
+    catch (e) { await User.deleteOne({ _id: user._id }); throw e; }
+  }
 
   await AuditLog.create({
     businessId,
@@ -108,7 +118,8 @@ async function updateEmployee(businessId, actorId, userId, updates) {
 
   const oldValue = { name: user.name, role: user.role, branchIds: user.branchIds };
 
-  const editable = ['name', 'email', 'phone', 'role', 'branchIds', 'employeeCode', 'grantedPermissions', 'revokedPermissions'];
+  // Permissions are NOT editable here any more: they go through services/permission.service.js, which enforces the anti-escalation rules.
+  const editable = ['name', 'email', 'phone', 'role', 'branchIds', 'employeeCode'];
   for (const field of editable) {
     if (Object.prototype.hasOwnProperty.call(updates, field)) {
       user[field] = updates[field];

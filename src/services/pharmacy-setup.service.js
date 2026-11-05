@@ -21,7 +21,7 @@ async function status(businessId) {
   const [products, withDetails, staff, suppliers] = await Promise.all([
     Product.countDocuments({ businessId, status: 'active', productType: { $ne: 'service' } }),
     MedicineDetails.countDocuments({ businessId }),
-    User.find({ businessId, status: 'active' }).select('name role grantedPermissions revokedPermissions pharmacyCredential'),
+    User.find({ businessId, status: 'active' }).select('name role grantedPermissions revokedPermissions permissionMode permissionGroupIds pharmacyCredential'),
     Supplier.find({ businessId, status: 'active' }).select('name pharmacyApproval'),
   ]);
   const now = new Date(); const live = (u) => u.pharmacyCredential && u.pharmacyCredential.verifiedAt && (!u.pharmacyCredential.expiresAt || new Date(u.pharmacyCredential.expiresAt) > now);

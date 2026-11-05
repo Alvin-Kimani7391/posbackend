@@ -25,6 +25,7 @@ const PERMISSIONS = Object.freeze([
   'refunds.view', 'refunds.create', 'refunds.approve',
   'expenses.create', 'expenses.view', 'expenses.approve',
   'employees.view', 'employees.create', 'employees.update', 'employees.delete',
+  'employees.permissions', // change what other staff can do (owner-only by default; never given to ADMIN automatically)
   'reports.view', 'reports.profit',
   'settings.view', 'settings.update',
   'payments.view', 'payments.refund',
@@ -48,7 +49,7 @@ const PERMISSIONS = Object.freeze([
 // (enforced in the permission middleware, not just here) regardless of this list.
 const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   [ROLES.OWNER]: [...PERMISSIONS],
-  [ROLES.ADMIN]: [...PERMISSIONS].filter((p) => p !== 'settings.update'),
+  [ROLES.ADMIN]: [...PERMISSIONS].filter((p) => p !== 'settings.update' && p !== 'employees.permissions'),
   [ROLES.MANAGER]: [
     'categories.view', 'categories.create', 'categories.update',
     'products.view', 'products.create', 'products.update',

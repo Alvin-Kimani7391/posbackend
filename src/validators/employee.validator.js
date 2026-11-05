@@ -17,6 +17,8 @@ const createEmployeeSchema = z
     branchIds: z.array(objectId).default([]),
     password: z.string().min(8).optional(),
     pin: z.string().min(4).max(8).optional(),
+    // optional starting access: { mode, groupIds, grant, revoke }
+    access: z.object({ mode: z.enum(['default', 'custom']).optional(), groupIds: z.array(objectId).max(20).optional(), grant: z.array(z.string()).optional(), revoke: z.array(z.string()).optional() }).optional(),
   })
   .refine((data) => data.password || data.pin, {
     message: 'Either password or pin must be provided',
@@ -30,8 +32,6 @@ const updateEmployeeSchema = z.object({
   role: roleEnum.optional(),
   employeeCode: z.string().trim().optional(),
   branchIds: z.array(objectId).optional(),
-  grantedPermissions: z.array(z.string()).optional(),
-  revokedPermissions: z.array(z.string()).optional(),
 });
 
 const statusSchema = z.object({

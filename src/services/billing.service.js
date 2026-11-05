@@ -430,7 +430,7 @@ async function reconcile(subId, { now = new Date() } = {}) {
 
 /* ============================ owner-facing reads ============================ */
 
-const canSeeAmounts = (user) => !!user && (user.role === ROLES.OWNER || user.role === ROLES.ADMIN || (user.grantedPermissions || []).includes('billing.view'));
+const canSeeAmounts = (user) => !!user && (user.role === ROLES.OWNER || user.role === ROLES.ADMIN || require('../utils/permissionResolver').hasNonDefaultGrant(user, 'billing.view'));
 
 async function getStatusLight(businessId, user) {
   const [settings, sub] = await Promise.all([settingsSvc.get(), Subscription.findOne({ businessId }).lean()]);
