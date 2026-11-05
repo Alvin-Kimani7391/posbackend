@@ -16,7 +16,7 @@ const oid = (x) => new mongoose.Types.ObjectId(String(x));
 async function sales(businessId, user, { from, to, branchId, groupBy = 'category' }) {
   if (branchId) assertBranchAccess(user, branchId);
   const m = { businessId: oid(businessId), saleStatus: 'COMPLETED', soldAt: { $gte: from, $lte: to } }; if (branchId) m.branchId = oid(branchId);
-  const rows = await Sale.aggregate([{ $match: m }, { $unwind: '$items' }, { $group: { _id: '$items.productId', name: { $first: '$items.nameSnapshot' }, qty: { $sum: { $ifNull: ['$items.baseQuantity', '$items.quantity'] } }, revenue: { $sum: { $subtract: ['$items.total', '$items.taxAmount'] } }, cost: { $sum: { $multiply: ['$items.costPriceSnapshot', { $ifNull: ['$items.baseQuantity', '$items.quantity'] }] } } } }]);
+  const rows = await Sale.aggregate([{ $match: m }, { $unwind: '$items' }, { $group: { _id: '$items.productId', name: { $first: '$items.nameSnapshot' }, qty: { $sum: { $ifNull: ['$items.baseQuantity', '$items.quantity'] } }, revenue: { $sum: { $subtract: [{ $round: [{ $multiply: ['$items.unitPrice', '$items.quantity'] }, 0] }, { $ifNull: ['$items.discount', 0] }] } }, cost: { $sum: { $multiply: ['$items.costPriceSnapshot', { $ifNull: ['$items.baseQuantity', '$items.quantity'] }] } } } }]);
   const details = await LiquorDetails.find({ businessId, productId: { $in: rows.map((r) => r._id) } }).lean();
   const D = new Map(details.map((d) => [String(d.productId), d]));
   const g = new Map();

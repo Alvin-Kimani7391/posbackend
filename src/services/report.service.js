@@ -249,6 +249,11 @@ async function getExpensesDetail(businessId, { branchId, from, to, category, sta
   return { items, total, page, limit, pages: Math.ceil(total / limit) };
 }
 
+/**
+ * Profit = selling price - cost. VAT is already inside the cost price (input VAT paid to the supplier),
+ * so tax is NEVER deducted from revenue here. Revenue is the line's selling price after discount:
+ * unitPrice * quantity - discount (identical in tax-inclusive and tax-exclusive mode).
+ */
 async function getProfitReport(businessId, { branchId, from, to }) {
   const match = saleMatch({ businessId, branchId, from, to });
 
@@ -258,7 +263,7 @@ async function getProfitReport(businessId, { branchId, from, to }) {
     {
       $group: {
         _id: null,
-        grossRevenue: { $sum: { $subtract: ['$items.total', '$items.taxAmount'] } },
+        grossRevenue: { $sum: { $subtract: [{ $round: [{ $multiply: ['$items.unitPrice', '$items.quantity'] }, 0] }, { $ifNull: ['$items.discount', 0] }] } },
         costOfGoodsSold: { $sum: { $multiply: ['$items.costPriceSnapshot', '$items.quantity'] } },
       },
     },
@@ -502,7 +507,7 @@ async function getWholesaleReport(businessId, { branchId, from, to, warehouseId,
       channel: { $ifNull: ['$channel', 'RETAIL'] },
       productId: '$items.productId', variantId: '$items.variantId', name: '$items.nameSnapshot', unitName: '$items.unitName',
       day: { $dateToString: { format: '%Y-%m-%d', date: '$soldAt', timezone: tz } },
-      rev: { $multiply: [{ $subtract: ['$items.total', { $ifNull: ['$items.taxAmount', 0] }] }, '$_rf'] },
+      rev: { $multiply: [{ $subtract: [{ $round: [{ $multiply: ['$items.unitPrice', '$items.quantity'] }, 0] }, { $ifNull: ['$items.discount', 0] }] }, '$_rf'] },
       cogs: { $multiply: ['$items.costPriceSnapshot', '$_q'] },
       baseQty: { $multiply: [{ $ifNull: ['$items.baseQuantity', '$items.quantity'] }, '$_rf'] },
       wsv: { $multiply: [{ $ifNull: ['$items.wholesaleValueSnapshot', 0] }, '$_q'] },

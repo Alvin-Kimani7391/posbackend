@@ -80,7 +80,7 @@ async function margins(businessId, user, { from, to, branchId, groupBy = 'produc
   const m = { businessId: oid(businessId), saleStatus: 'COMPLETED', soldAt: { $gte: from, $lte: to } };
   if (branchId) m.branchId = oid(branchId);
   const rows = await Sale.aggregate([{ $match: m }, { $unwind: '$items' },
-    { $group: { _id: '$items.productId', name: { $first: '$items.nameSnapshot' }, qty: { $sum: '$items.quantity' }, revenue: { $sum: { $subtract: ['$items.total', '$items.taxAmount'] } }, cost: { $sum: { $multiply: ['$items.costPriceSnapshot', { $ifNull: ['$items.baseQuantity', '$items.quantity'] }] } } } }]);
+    { $group: { _id: '$items.productId', name: { $first: '$items.nameSnapshot' }, qty: { $sum: '$items.quantity' }, revenue: { $sum: { $subtract: [{ $round: [{ $multiply: ['$items.unitPrice', '$items.quantity'] }, 0] }, { $ifNull: ['$items.discount', 0] }] } }, cost: { $sum: { $multiply: ['$items.costPriceSnapshot', { $ifNull: ['$items.baseQuantity', '$items.quantity'] }] } } } }]);
   let out = rows.map((r) => ({ key: r._id, name: r.name, quantity: r.qty, revenue: r.revenue, cost: r.cost, profit: r.revenue - r.cost }));
   if (groupBy === 'category') {
     const ps = await Product.find({ _id: { $in: out.map((o) => o.key) }, businessId }).select('categoryId').lean();
