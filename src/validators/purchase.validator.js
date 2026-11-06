@@ -47,7 +47,7 @@ const purchaseItemSchema = z
     //                       this line's real unit cost, and the optional
     //                       sellingPrice / defaultDiscount below are saved too.
     // Omitted fields are left untouched. Values arrive in KES, stored as cents.
-    updatePrices: z.boolean().optional().default(false),
+    updatePrices: z.boolean().optional().default(true), // default ON: cost price must follow what you actually pay (stock value depends on it)
     sellingPrice: moneyInput.optional(),
     defaultDiscount: moneyInput.optional(),
   })

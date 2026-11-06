@@ -351,17 +351,19 @@ async function getSupplierBalanceReport(businessId) {
 }
 
 async function getInventoryReport(businessId, { branchId }) {
-  const match = { businessId };
-  if (branchId) match.branchId = branchId;
-
-  const rows = await BranchInventory.find(match).populate('productId', 'name sku costPrice');
-  const valuation = rows.reduce((sum, r) => sum + r.quantity * (r.productId?.costPrice || 0), 0);
+  // One shared valuation (batch/variant aware, includes warehouse, excludes expired + negative stock).
+  const sv = await require('./stockValue.service').computeStockValue(businessId, { branchId });
   const alerts = await getLowStockAlerts(businessId, branchId);
 
   return {
-    totalSkus: rows.length,
-    totalUnitsOnHand: rows.reduce((s, r) => s + r.quantity, 0),
-    inventoryValuation: fromCents(valuation),
+    totalSkus: sv.items.length,
+    totalUnitsOnHand: sv.totals.units,
+    inventoryValuation: fromCents(sv.totals.cost),
+    retailValuation: fromCents(sv.totals.retailCost),
+    warehouseValuation: fromCents(sv.totals.warehouseCost),
+    expiredValuation: fromCents(sv.totals.expiredCost),
+    zeroCostItems: sv.totals.zeroCostItems,
+    zeroCostList: sv.zeroCostList,
     lowStockCount: alerts.lowStockCount,
     outOfStockCount: alerts.outOfStockCount,
   };
@@ -393,7 +395,7 @@ async function getDashboard(businessId, { branchId, from, to }) {
       paymentBreakdown: sales.paymentBreakdown, topProducts: sales.topProducts.slice(0, 5),
     },
     profit,
-    inventory: { lowStockCount: inventory.lowStockCount, outOfStockCount: inventory.outOfStockCount, inventoryValuation: inventory.inventoryValuation, expiry: await expiryForDashboard(businessId, branchId) },
+    inventory: { lowStockCount: inventory.lowStockCount, outOfStockCount: inventory.outOfStockCount, inventoryValuation: inventory.inventoryValuation, warehouseValuation: inventory.warehouseValuation, expiredValuation: inventory.expiredValuation, zeroCostItems: inventory.zeroCostItems, expiry: await expiryForDashboard(businessId, branchId) },
     outstandingCustomerCredit: customerCredit.totalOutstanding,
     supplierPayables: supplierBalances.totalPayable,
     topCashiers: cashierReport.slice(0, 5),

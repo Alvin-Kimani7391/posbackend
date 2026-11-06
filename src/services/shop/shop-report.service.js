@@ -116,24 +116,24 @@ async function deadStock(businessId, user, { days = 60, branchId, limit = 100 })
   return { days, count: items.length, tiedUpCost: D(items.reduce((s, x) => s + x.costValue, 0)), items: items.slice(0, limit).map((x) => ({ ...x, costValue: D(x.costValue), retailValue: D(x.retailValue) })) };
 }
 
-/** What the stock on the shelf is worth, by category. */
+/** What the stock is worth, by category. Uses the shared valuation (same figure as the dashboard). */
 async function stockValuation(businessId, user, { branchId }) {
   if (branchId) assertBranchAccess(user, branchId);
-  const im = { businessId: oid(businessId), quantity: { $gt: 0 } }; if (branchId) im.branchId = oid(branchId);
-  const inv = await BranchInventory.aggregate([{ $match: im }, { $group: { _id: '$productId', qty: { $sum: '$quantity' } } }]);
-  const ps = await Product.find({ _id: { $in: inv.map((i) => i._id) }, businessId }).select('categoryId costPrice sellingPrice').lean();
-  const P = new Map(ps.map((p) => [String(p._id), p]));
+  const sv = await require('../stockValue.service').computeStockValue(businessId, { branchId });
   const names = new Map((await Category.find({ businessId }).select('name').lean()).map((c) => [String(c._id), c.name]));
-  const g = new Map(); let units = 0;
-  for (const i of inv) {
-    const p = P.get(String(i._id)); if (!p) continue;
-    const k = p.categoryId ? String(p.categoryId) : 'none';
-    const x = g.get(k) || { categoryId: k === 'none' ? null : k, name: k === 'none' ? 'Uncategorised' : names.get(k) || 'Unknown', products: 0, units: 0, cost: 0, retail: 0 };
-    x.products += 1; x.units += i.qty; x.cost += i.qty * p.costPrice; x.retail += i.qty * p.sellingPrice; g.set(k, x); units += i.qty;
+  const g = new Map();
+  for (const i of sv.items) {
+    const k = i.categoryId ? String(i.categoryId) : 'none';
+    const x = g.get(k) || { categoryId: k === 'none' ? null : k, name: k === 'none' ? 'Uncategorised' : names.get(k) || 'Unknown', products: 0, units: 0, cost: 0, retail: 0, expiredCost: 0 };
+    x.products += 1; x.units += i.units + i.warehouseUnits; x.cost += i.cost + i.warehouseCost; x.retail += i.retail; x.expiredCost += i.expiredCost; g.set(k, x);
   }
   const rows = [...g.values()].sort((a, b) => b.cost - a.cost);
-  const cost = rows.reduce((s, r) => s + r.cost, 0); const retail = rows.reduce((s, r) => s + r.retail, 0);
-  return { totals: { units, cost: D(cost), retail: D(retail), potentialProfit: D(retail - cost) }, byCategory: rows.map((r) => ({ ...r, cost: D(r.cost), retail: D(r.retail), potentialProfit: D(r.retail - r.cost) })) };
+  const t = sv.totals;
+  return {
+    totals: { units: t.units, cost: D(t.cost), retail: D(t.retail), potentialProfit: D(t.retail - t.retailCost), shopCost: D(t.retailCost), warehouseCost: D(t.warehouseCost), expiredCost: D(t.expiredCost), zeroCostItems: t.zeroCostItems },
+    zeroCostList: sv.zeroCostList,
+    byCategory: rows.map((r) => ({ ...r, cost: D(r.cost), retail: D(r.retail), expiredCost: D(r.expiredCost), potentialProfit: D(r.retail - r.cost) })),
+  };
 }
 
 /** Low or fast-selling items with a suggested order quantity (cover `coverDays` of sales, using the last `lookbackDays`). */
