@@ -18,7 +18,7 @@ async function autoEnableForShops(business, businessId, key) {
 }
 
 /** Units (bundle, carton...) need the unitConversions feature and a sane set-up (unique names, factor > 0). */
-async function assertUnitsAllowed(businessId, units, baseUnit) {
+async function assertUnitsAllowed(businessId, units, baseUnit, excludeProductId) {
   if (!units || !units.length) return;
   const business = await Business.findById(businessId).select('featureSettings businessType').lean();
   if (!business?.featureSettings?.unitConversions) await autoEnableForShops(business, businessId, 'unitConversions');
@@ -27,6 +27,19 @@ async function assertUnitsAllowed(businessId, units, baseUnit) {
   }
   const issues = unitConfigIssues(units, baseUnit);
   if (issues.length) throw ApiError.badRequest(issues[0].message, 'INVALID_UNITS', issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
+  await assertUnitBarcodesFree(businessId, units, excludeProductId);
+}
+
+/** A packet / carton barcode is scanned at the till like a product barcode, so it must not clash with any other barcode. */
+async function assertUnitBarcodesFree(businessId, units, excludeProductId) {
+  const codes = (units || []).map((u) => String(u.barcode || '').trim()).filter(Boolean);
+  if (!codes.length) return;
+  if (new Set(codes).size !== codes.length) throw ApiError.badRequest('Two units of this product have the same barcode', 'DUPLICATE_UNIT_BARCODE');
+  const notThis = excludeProductId ? { _id: { $ne: excludeProductId } } : {};
+  const clash = (await Product.findOne({ businessId, ...notThis, $or: [{ barcode: { $in: codes } }, { 'units.barcode': { $in: codes } }] }).select('name').lean())
+    || (await ProductVariant.findOne({ businessId, barcode: { $in: codes } }).select('barcode').lean());
+  if (clash) throw ApiError.conflict(`A packet barcode is already used by ${clash.name ? `"${clash.name}"` : 'another product'}. Use a different barcode.`, 'DUPLICATE_PRODUCT');
+  // the product's own barcode may not equal its packet barcode either (checked by the caller via the unit list)
 }
 
 /** Escapes user text so it is matched literally inside a RegExp (e.g. "TV (43") never throws). */
@@ -236,7 +249,7 @@ async function updateProduct(businessId, userId, id, updates) {
   if (!product) throw ApiError.notFound('Product not found');
 
   await assertCategoryBelongsToBusiness(businessId, updates.categoryId);
-  await assertUnitsAllowed(businessId, updates.units, updates.unit || product.unit);
+  await assertUnitsAllowed(businessId, updates.units, updates.unit || product.unit, product._id);
 
   const wasWholesale = !!product.wholesaleEnabled;
   const oldValue = {
@@ -418,6 +431,13 @@ async function archiveVariant(businessId, userId, productId, variantId) {
 async function lookupByBarcode(businessId, barcode) {
   const product = await Product.findOne({ businessId, barcode, status: 'active' }).populate('categoryId', 'name');
   if (product) return { type: 'product', product, variant: null };
+
+  // A packet / carton barcode: the till gets the product plus the unit that was scanned (unitId) so it can sell the packet or break it.
+  const byUnit = await Product.findOne({ businessId, status: 'active', units: { $elemMatch: { barcode, status: { $ne: 'inactive' } } } }).populate('categoryId', 'name');
+  if (byUnit) {
+    const u = byUnit.units.find((x) => x.barcode === barcode && x.status !== 'inactive');
+    return { type: 'product', product: byUnit, variant: null, unitId: String(u._id) };
+  }
 
   const variant = await ProductVariant.findOne({ businessId, barcode, status: 'active' });
   if (variant) {
