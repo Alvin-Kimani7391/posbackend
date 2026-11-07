@@ -345,6 +345,17 @@ async function archiveProduct(businessId, userId, id) {
   return product;
 }
 
+async function restoreProduct(businessId, userId, id) {
+  const product = await Product.findOne({ _id: id, businessId });
+  if (!product) throw ApiError.notFound('Product not found');
+  if (product.status !== 'archived') return product;
+  product.status = 'active';
+  await product.save();
+  await ProductVariant.updateMany({ businessId, productId: id, status: 'archived' }, { status: 'active' });
+  await AuditLog.create({ businessId, userId, action: 'product.restore', entityType: 'Product', entityId: product._id });
+  return product;
+}
+
 /* ----------------------------- Variants ----------------------------- */
 
 async function addVariant(businessId, userId, productId, data) {
@@ -430,7 +441,11 @@ async function archiveVariant(businessId, userId, productId, variantId) {
  */
 async function lookupByBarcode(businessId, barcode) {
   const product = await Product.findOne({ businessId, barcode, status: 'active' }).populate('categoryId', 'name');
-  if (product) return { type: 'product', product, variant: null };
+  if (product) {
+    // Saved before packets existed: the product's own barcode is the supplier PACKET's code -> the till sells / breaks the packet.
+    const pu = (product.units || []).find((u) => u.code === 'PKT' && u.status !== 'inactive' && u.factor > 1 && (!u.barcode || u.barcode === barcode));
+    return pu ? { type: 'product', product, variant: null, unitId: String(pu._id) } : { type: 'product', product, variant: null };
+  }
 
   // A packet / carton barcode: the till gets the product plus the unit that was scanned (unitId) so it can sell the packet or break it.
   const byUnit = await Product.findOne({ businessId, status: 'active', units: { $elemMatch: { barcode, status: { $ne: 'inactive' } } } }).populate('categoryId', 'name');
@@ -491,6 +506,7 @@ async function stockLevels(businessId, ids, branchId) {
 }
 
 module.exports = {
+  restoreProduct,
   stockLevels,
   listProducts,
   getProduct,

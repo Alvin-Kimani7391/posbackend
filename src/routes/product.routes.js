@@ -26,6 +26,7 @@ router.get('/', requirePermission('products.view'), validate({ query: listProduc
 router.post('/', requirePermission('products.create'), validate({ body: createProductSchema }), controller.create);
 router.get('/:id', requirePermission('products.view'), validate({ params: idParamSchema }), controller.getOne);
 router.put('/:id', requirePermission('products.update'), validate({ params: idParamSchema, body: updateProductSchema }), controller.update);
+router.post('/:id/restore', requirePermission('products.delete'), validate({ params: idParamSchema }), controller.restore);
 router.delete('/:id', requirePermission('products.delete'), validate({ params: idParamSchema }), controller.remove);
 
 router.post('/:id/variants', requirePermission('products.create'), validate({ params: idParamSchema, body: addVariantSchema }), controller.addVariant);

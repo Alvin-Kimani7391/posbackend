@@ -33,6 +33,11 @@ exports.remove = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Product archived', { product });
 });
 
+exports.restore = catchAsync(async (req, res) => {
+  const product = await productService.restoreProduct(req.businessId, req.user._id, req.params.id);
+  return sendSuccess(res, 200, 'Product restored', { product });
+});
+
 exports.lookupByBarcode = catchAsync(async (req, res) => {
   const result = await productService.lookupByBarcode(req.businessId, req.params.barcode);
   return sendSuccess(res, 200, 'Product found', result);
