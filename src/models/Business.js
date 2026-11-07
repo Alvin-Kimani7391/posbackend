@@ -217,6 +217,7 @@ const businessSchema = new Schema(
     alertPrefs: {
       lowStockNotify: { type: Boolean, default: true },
       outOfStockNotify: { type: Boolean, default: true },
+      weeklyReportEmail: { type: Boolean, default: true },   // the Saturday weekly performance email (owners + managers)
     },
 
     // Expiry watch: how many days ahead a batch turns "critical" (red) / "warning" (orange), and the daily in-app alert.

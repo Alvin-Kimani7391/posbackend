@@ -27,3 +27,10 @@ exports.receive = catchAsync(async (req, res) => {
   const result = await inventoryService.receiveStock(req.businessId, req.body.branchId, req.user._id, req.body);
   return sendSuccess(res, 200, 'Stock received', result);
 });
+
+/** Stock value (cents) for the Inventory page: same shared calculation as the dashboard. */
+exports.valuation = catchAsync(async (req, res) => {
+  const branchId = req.query.branchId || req.branchId;
+  const sv = await require('../services/stockValue.service').computeStockValue(req.businessId, { branchId });
+  return sendSuccess(res, 200, 'Stock value fetched', { totals: sv.totals, zeroCostList: sv.zeroCostList });
+});

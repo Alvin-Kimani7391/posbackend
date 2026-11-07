@@ -28,6 +28,8 @@ const purchaseItemSchema = new Schema(
     discount: { type: Number, default: 0 },
     total: { type: Number, required: true },
     receivedQuantity: { type: Number, default: 0 },
+    returnedQuantity: { type: Number, default: 0 },   // sent back to the supplier (purchase unit)
+    returnedValue: { type: Number, default: 0 },      // cents credited for those returns
     receivedLocation: { type: String, enum: ['RETAIL', 'WAREHOUSE'] }, // pool this line was received into
     receivedWarehouseId: { type: Schema.Types.ObjectId, ref: 'Warehouse' },
   },
@@ -64,7 +66,9 @@ const purchaseSchema = new Schema(
     tax: { type: Number, default: 0 },
     total: { type: Number, required: true },
     amountPaid: { type: Number, default: 0 },
-    balance: { type: Number, default: 0 },
+    balance: { type: Number, default: 0 },            // what is STILL owed = total - returnedAmount - amountPaid (never below 0)
+    returnedAmount: { type: Number, default: 0 },     // cents: value of goods returned to the supplier
+    returnStatus: { type: String, enum: ['NONE', 'PARTIAL', 'FULL'], default: 'NONE' },
 
     paymentStatus: { type: String, enum: ['UNPAID', 'PARTIAL', 'PAID'], default: 'UNPAID' },
     receivedStatus: { type: String, enum: ['PENDING', 'PARTIAL', 'RECEIVED'], default: 'PENDING' },
@@ -76,14 +80,22 @@ const purchaseSchema = new Schema(
   { timestamps: true }
 );
 
+// Returned goods reduce what is owed, so every save keeps balance = total - returns - payments.
+purchaseSchema.pre('save', function keepBalance(next) {
+  if (this.isNew || this.isModified('total') || this.isModified('amountPaid') || this.isModified('returnedAmount')) {
+    this.balance = Math.max(0, (this.total || 0) - (this.returnedAmount || 0) - (this.amountPaid || 0));
+  }
+  next();
+});
+
 purchaseSchema.index({ businessId: 1, purchaseNumber: 1 }, { unique: true });
 purchaseSchema.index({ businessId: 1, supplierId: 1 });
 purchaseSchema.index({ businessId: 1, branchId: 1, createdAt: -1 });
 
 moneyFields(
   purchaseSchema,
-  ['subtotal', 'discount', 'tax', 'total', 'amountPaid', 'balance', 'supplierInvoiceTotal', 'invoiceVariance'],
-  { items: ['unitCost', 'discount', 'total'] }
+  ['subtotal', 'discount', 'tax', 'total', 'amountPaid', 'balance', 'returnedAmount', 'supplierInvoiceTotal', 'invoiceVariance'],
+  { items: ['unitCost', 'discount', 'total', 'returnedValue'] }
 );
 
 module.exports = model('Purchase', purchaseSchema);

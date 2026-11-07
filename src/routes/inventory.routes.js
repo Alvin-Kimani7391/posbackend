@@ -15,6 +15,7 @@ router.use(authenticate);
 
 router.get('/', requirePermission('inventory.view'), requireBranchAccess, validate({ query: listInventoryQuery }), controller.list);
 router.get('/low-stock', requirePermission('inventory.view'), validate({ query: lowStockQuery }), controller.lowStock);
+router.get('/valuation', requirePermission('inventory.view'), requireBranchAccess, controller.valuation);
 router.get('/movements', requirePermission('inventory.view'), validate({ query: movementsQuery }), controller.movements);
 router.post('/adjust', requirePermission('inventory.adjust'), requireBranchAccess, validate({ body: adjustStockSchema }), controller.adjust);
 router.post('/receive', requirePermission('inventory.receive'), requireBranchAccess, validate({ body: receiveStockSchema }), controller.receive);

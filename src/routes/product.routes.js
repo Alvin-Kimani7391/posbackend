@@ -21,6 +21,7 @@ router.use(authenticate);
 router.get('/barcode/:barcode', requirePermission('products.view'), validate({ params: barcodeParamSchema }), controller.lookupByBarcode);
 router.get('/sku/:sku', requirePermission('products.view'), validate({ params: skuParamSchema }), controller.lookupBySku);
 
+router.get('/stock-levels', requirePermission('products.view'), controller.stockLevels);
 router.get('/', requirePermission('products.view'), validate({ query: listProductsQuery }), controller.list);
 router.post('/', requirePermission('products.create'), validate({ body: createProductSchema }), controller.create);
 router.get('/:id', requirePermission('products.view'), validate({ params: idParamSchema }), controller.getOne);

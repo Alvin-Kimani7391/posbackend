@@ -25,7 +25,7 @@ const GROUP_FEATURE = {
 const SENSITIVE = new Set([
   'sales.cancel', 'sales.price_override', 'refunds.approve', 'payments.refund', 'expenses.approve', 'inventory.adjust', 'stocktake.approve',
   'reports.profit', 'settings.update', 'employees.create', 'employees.update', 'employees.delete', 'employees.permissions', 'branches.delete',
-  'billing.pay', 'purchases.pay', 'audit.view', 'devices.revoke', 'offline.review', 'patients.view', 'patients.manage', 'pharmacy.restricted',
+  'billing.pay', 'purchases.pay', 'purchases.return', 'audit.view', 'devices.revoke', 'offline.review', 'patients.view', 'patients.manage', 'pharmacy.restricted',
   'pharmacy.reverse', 'pharmacy.settings', 'warranty.decide', 'jobcards.approve', 'repairs.approve', 'layaways.approve', 'tradeins.approve',
 ]);
 const DESCRIPTIONS = {
@@ -39,6 +39,7 @@ const DESCRIPTIONS = {
   'audit.view': 'Read the audit trail',
   'billing.pay': 'Pay the subscription / add-ons',
   'billing.view': 'See subscription amounts',
+  'purchases.return': 'Send received purchases back to the supplier and reduce what you owe',
 };
 
 const humanize = (s) => { const t = s.replace(/[_.]/g, ' ').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };

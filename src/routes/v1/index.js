@@ -39,6 +39,7 @@ router.use('/etims', require('../etims.routes'));
 
 router.use('/suppliers', require('../supplier.routes'));
 router.use('/purchases', require('../purchase.routes'));
+router.use('/purchase-returns', require('../purchase-return.routes'));
 router.use('/supplier-finance', require('../supplier-finance.routes'));
 router.use('/expenses', require('../expense.routes'));
 router.use('/refunds', require('../refund.routes'));

@@ -137,9 +137,6 @@ async function createPurchase(
   if (warehouseId) await resolveWarehouse(businessId, { warehouseId }); // must exist and be active
   const products = await Product.find({ businessId, _id: { $in: items.map((i) => i.productId) } });
   const productById = new Map(products.map((p) => [p._id.toString(), p]));
-  const lineVariantIds = items.filter((i) => i.variantId).map((i) => i.variantId);
-  const lineVariants = lineVariantIds.length ? await ProductVariant.find({ businessId, _id: { $in: lineVariantIds } }).select('costPrice') : [];
-  const variantById = new Map(lineVariants.map((v) => [v._id.toString(), v]));
   await require('./pharmacy-supplier.service').assertApprovedForPurchase({ business: biz, supplier, products }); // pharmacy: medicines only from approved, licensed suppliers
 
   let subtotal = 0;
@@ -159,18 +156,15 @@ async function createPurchase(
     discountTotal += raw.discount || 0;
     total += line.total;
 
-    // Always fill in a MISSING (zero) cost price from the purchase, even if the user did not ask to update prices;
-    // otherwise stock is valued at 0.
-    const currentCost = raw.variantId ? variantById.get(String(raw.variantId))?.costPrice : product.costPrice;
-    if (raw.updatePrices || !currentCost) {
+    if (raw.updatePrices) {
       // Real unit cost = what the line actually costs per unit incl. VAT.
       const realUnitCost = Math.round(line.total / (raw.quantity * unit.factor)); // cost per BASE unit
       priceUpdates.push({
         productId: raw.productId,
         variantId: raw.variantId,
         costPrice: realUnitCost,
-        sellingPrice: raw.updatePrices ? raw.sellingPrice : undefined,
-        defaultDiscount: raw.updatePrices ? raw.defaultDiscount : undefined,
+        sellingPrice: raw.sellingPrice,
+        defaultDiscount: raw.defaultDiscount,
       });
     }
 
@@ -370,7 +364,7 @@ async function recordPurchasePayment(businessId, userId, id, { amount }) {
       if (amount > purchase.balance) throw ApiError.badRequest('Payment exceeds the outstanding balance', 'OVERPAYMENT');
 
       purchase.amountPaid += amount;
-      purchase.balance = purchase.total - purchase.amountPaid;
+      purchase.balance = Math.max(0, purchase.total - (purchase.returnedAmount || 0) - purchase.amountPaid);
       purchase.paymentStatus = purchase.balance === 0 ? 'PAID' : purchase.amountPaid > 0 ? 'PARTIAL' : 'UNPAID';
       await purchase.save({ session });
 

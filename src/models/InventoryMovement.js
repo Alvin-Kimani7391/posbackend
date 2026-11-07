@@ -1,7 +1,7 @@
 const { Schema, model } = require('mongoose');
 
 const MOVEMENT_TYPES = [
-  'PURCHASE', 'SALE', 'RETURN', 'REFUND',
+  'PURCHASE', 'PURCHASE_RETURN', 'SALE', 'RETURN', 'REFUND',
   'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
   'TRANSFER_IN', 'TRANSFER_OUT',
   'DAMAGE', 'EXPIRED', 'LOST', 'OPENING_STOCK',

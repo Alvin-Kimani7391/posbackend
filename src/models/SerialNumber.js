@@ -29,7 +29,7 @@ const serialNumberSchema = new Schema(
     location: { type: String, enum: ['RETAIL', 'WAREHOUSE'], default: 'RETAIL' },
 
     serialNumber: { type: String, required: true, trim: true, uppercase: true },
-    status: { type: String, enum: ['in_stock', 'sold', 'damaged', 'returned', 'reserved', 'withdrawn'], default: 'in_stock' }, // reserved = held for a layaway; withdrawn = a trade-in handed back to the customer
+    status: { type: String, enum: ['in_stock', 'sold', 'damaged', 'returned', 'reserved', 'withdrawn', 'returned_to_supplier'], default: 'in_stock' }, // reserved = held for a layaway; withdrawn = a trade-in handed back to the customer
     condition: { type: String, enum: ['new', 'used', 'refurbished'], default: 'new' },
 
     purchaseId: { type: Schema.Types.ObjectId, ref: 'Purchase' },

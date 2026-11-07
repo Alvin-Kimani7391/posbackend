@@ -7,6 +7,12 @@ exports.list = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Products fetched', result);
 });
 
+exports.stockLevels = catchAsync(async (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const stock = await productService.stockLevels(req.businessId, ids, req.query.branchId || undefined);
+  return sendSuccess(res, 200, 'Stock fetched', { stock });
+});
+
 exports.getOne = catchAsync(async (req, res) => {
   const product = await productService.getProduct(req.businessId, req.params.id, { branchId: req.query.branchId || undefined });
   return sendSuccess(res, 200, 'Product fetched', { product });

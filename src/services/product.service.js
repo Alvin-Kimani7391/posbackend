@@ -463,7 +463,35 @@ async function lookupBySku(businessId, sku) {
   throw ApiError.notFound('No product found for this SKU', 'SKU_NOT_FOUND');
 }
 
+/** Current stock for a page of products in ONE round trip (shown beside each product in the catalog). Shop floor = branch stock; warehouse stock is added when the business uses warehouses. */
+async function stockLevels(businessId, ids, branchId) {
+  const mongoose = require('mongoose');
+  const oids = (ids || []).filter((x) => mongoose.isValidObjectId(x)).slice(0, 200).map((x) => new mongoose.Types.ObjectId(x));
+  const out = {};
+  if (!oids.length) return out;
+  const bid = new mongoose.Types.ObjectId(String(businessId));
+  const match = { businessId: bid, productId: { $in: oids } };
+  if (branchId && mongoose.isValidObjectId(branchId)) match.branchId = new mongoose.Types.ObjectId(branchId);
+  const [rows, whRows, prods] = await Promise.all([
+    BranchInventory.aggregate([{ $match: match }, { $group: { _id: '$productId', quantity: { $sum: { $subtract: ['$quantity', '$reservedQuantity'] } } } }]),
+    WarehouseInventory.aggregate([{ $match: { ...match, quantity: { $gt: 0 } } }, { $group: { _id: '$productId', quantity: { $sum: { $subtract: ['$quantity', { $ifNull: ['$reservedQuantity', 0] }] } } } }]).catch(() => []),
+    Product.find({ _id: { $in: oids }, businessId }).select('trackInventory lowStockThreshold').lean(),
+  ]);
+  const shop = new Map(rows.map((r) => [String(r._id), r.quantity]));
+  const wh = new Map(whRows.map((r) => [String(r._id), r.quantity]));
+  const round = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
+  prods.forEach((p) => {
+    const id = String(p._id);
+    const quantity = round(shop.get(id) || 0);
+    const warehouse = round(wh.get(id) || 0);
+    const threshold = p.lowStockThreshold == null ? 5 : p.lowStockThreshold;
+    out[id] = { tracked: p.trackInventory !== false, quantity, warehouse, threshold, low: p.trackInventory !== false && quantity + warehouse <= threshold, out: p.trackInventory !== false && quantity + warehouse <= 0 };
+  });
+  return out;
+}
+
 module.exports = {
+  stockLevels,
   listProducts,
   getProduct,
   createProduct,

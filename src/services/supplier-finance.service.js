@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Purchase = require('../models/Purchase');
 const Supplier = require('../models/Supplier');
 const SupplierPayment = require('../models/SupplierPayment');
+const PurchaseReturn = require('../models/PurchaseReturn');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
@@ -52,7 +53,7 @@ async function approveInvoiceVariance(businessId, userId, purchaseId, { note, ad
       if (adjustPayable) {
         if (purchase.total + variance < purchase.amountPaid) throw ApiError.badRequest('The adjusted total would be below what was already paid', 'INVALID_ADJUSTMENT');
         purchase.total += variance;
-        purchase.balance = purchase.total - purchase.amountPaid;
+        purchase.balance = Math.max(0, purchase.total - (purchase.returnedAmount || 0) - purchase.amountPaid);
         purchase.paymentStatus = statusFor(purchase);
         if (purchase.receivedStatus === 'RECEIVED') await Supplier.updateOne({ _id: purchase.supplierId }, { $inc: { currentBalance: variance } }, { session });
       }
@@ -109,7 +110,7 @@ async function recordSupplierPayment(businessId, userId, { supplierId, amount, m
         if (line.amount > purchase.balance) throw ApiError.badRequest(`${purchase.purchaseNumber}: payment exceeds the outstanding balance`, 'OVERPAYMENT');
         if (purchase.invoiceMatchStatus === 'VARIANCE') throw ApiError.conflict(`${purchase.purchaseNumber}: approve the supplier-invoice variance before paying`, 'VARIANCE_UNAPPROVED');
         purchase.amountPaid += line.amount;
-        purchase.balance = purchase.total - purchase.amountPaid;
+        purchase.balance = Math.max(0, purchase.total - (purchase.returnedAmount || 0) - purchase.amountPaid);
         purchase.paymentStatus = statusFor(purchase);
         await purchase.save({ session });
         done.push({ purchaseId: purchase._id, purchaseNumber: purchase.purchaseNumber, amount: line.amount });
@@ -135,7 +136,7 @@ async function voidSupplierPayment(businessId, userId, id, reason) {
         const purchase = await Purchase.findOne({ _id: a.purchaseId, businessId }).session(session);
         if (!purchase) continue;
         purchase.amountPaid = Math.max(0, purchase.amountPaid - a.amount);
-        purchase.balance = purchase.total - purchase.amountPaid;
+        purchase.balance = Math.max(0, purchase.total - (purchase.returnedAmount || 0) - purchase.amountPaid);
         purchase.paymentStatus = statusFor(purchase);
         await purchase.save({ session });
       }
@@ -166,11 +167,15 @@ async function listSupplierPayments(businessId, { supplierId, status, from, to, 
 async function supplierStatement(businessId, supplierId, { from, to } = {}) {
   const supplier = await Supplier.findOne({ _id: supplierId, businessId }).lean();
   if (!supplier) throw ApiError.notFound('Supplier not found');
-  const [purchases, payments] = await Promise.all([
+  const [purchases, payments, returns] = await Promise.all([
     Purchase.find({ businessId, supplierId }).select('purchaseNumber invoiceNumber invoiceDate purchaseDate createdAt dueDate total amountPaid balance invoiceMatchStatus invoiceVariance receivedStatus').lean(),
     SupplierPayment.find({ businessId, supplierId, status: 'COMPLETED' }).lean(),
+    PurchaseReturn.find({ businessId, supplierId }).select('number purchaseNumber returnDate createdAt totalCredit refunds').lean(),
   ]);
   const events = [
+    // goods sent back reduce what we owe; cash the supplier refunds brings the balance back up
+    ...returns.map((r) => ({ date: r.returnDate || r.createdAt, type: 'RETURN', ref: `${r.number} (return on ${r.purchaseNumber})`, debit: 0, credit: r.totalCredit })),
+    ...returns.flatMap((r) => (r.refunds || []).map((x) => ({ date: x.at, type: 'REFUND', ref: `Refund on ${r.number}`, method: x.method, debit: x.amount, credit: 0 }))),
     ...purchases.map((p) => ({ date: p.invoiceDate || p.purchaseDate || p.createdAt, type: 'INVOICE', ref: p.invoiceNumber || p.purchaseNumber, purchaseNumber: p.purchaseNumber, dueDate: p.dueDate, debit: p.total, credit: 0, matchStatus: p.invoiceMatchStatus })),
     // payments recorded the old way (directly on a purchase) have no SupplierPayment: show them as one line per purchase
     ...purchases.map((p) => ({ p, rest: p.amountPaid - payments.reduce((s, x) => s + x.allocations.filter((a) => String(a.purchaseId) === String(p._id)).reduce((t, a) => t + a.amount, 0), 0) }))
