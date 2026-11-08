@@ -323,7 +323,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
       // Resolve MPESA lines against verified MpesaTransactions before building
       // payment docs. CASH/CARD/BANK stay exactly as before (cashier-attested).
       for (const p of payments) {
-        if (p.method === 'MOBILE_MONEY' && !p.reference) throw ApiError.badRequest('A mobile-money transaction reference is required', 'MOBILE_MONEY_REFERENCE_REQUIRED');
+        // MOBILE_MONEY reference is optional: cashier may continue without a code (flagged for review).
         if (p.method === 'MPESA') {
           // Automatic M-PESA verification (PayHero) is Kenya-only. Elsewhere use MOBILE_MONEY with a reference.
           await assertCountry(businessId, 'KE');
