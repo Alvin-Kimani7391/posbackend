@@ -419,7 +419,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
           });
         }
       }
-      const createdPayments = paymentDocsInput.length ? await Payment.create(paymentDocsInput, { session }) : [];
+      const createdPayments = paymentDocsInput.length ? await Payment.create(paymentDocsInput, { session, ordered: true }) : [];
 
       // Customer credit ledger - never overwrite Customer.outstandingBalance
       // directly; every change is a ledger entry plus a matching $inc.

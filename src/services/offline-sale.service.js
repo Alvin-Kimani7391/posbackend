@@ -436,7 +436,7 @@ async function ingestOfflineSale(ctx) {
         }
         paymentDocs.push(doc);
       }
-      if (paymentDocs.length) await Payment.create(paymentDocs, { session });
+      if (paymentDocs.length) await Payment.create(paymentDocs, { session, ordered: true });
 
       // Customer credit ledger (never edit the balance directly).
       if (balance > 0 && customer) {
