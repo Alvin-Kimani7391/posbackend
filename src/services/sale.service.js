@@ -25,6 +25,7 @@ const pharmacyGuard = require('./pharmacy-guard.service');
 const liquorGuard = require('./liquor/liquor-guard.service');
 const tradeInService = require('./tradein.service');
 const AuditLog = require('../models/AuditLog');
+const InventoryMovement = require('../models/InventoryMovement');
 const ApiError = require('../utils/ApiError');
 const { nextSequence, pad } = require('../models/Counter');
 const { applyStockChange, getStockLevel } = require('./inventory.service');
@@ -67,7 +68,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
   // never a second one. ---
   // SPEED: every independent lookup below is sent to the database AT THE SAME TIME (one round trip instead of five).
   // The checks that follow run in the same order as before, so the same errors come back in the same situations.
-  const [existingSale, business, openShift, customerDoc, branchDoc] = await Promise.all([
+  const [existingSale, business, openShift, customerDoc, branchDoc, etimsActive] = await Promise.all([
     payload.clientTransactionId && payload.deviceId
       ? Sale.findOne({ businessId, branchId, deviceId: payload.deviceId, clientTransactionId: payload.clientTransactionId })
       : null,
@@ -75,6 +76,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
     CashShift.findOne({ businessId, branchId, cashierId: cashierUser._id, status: 'OPEN' }),
     payload.customerId ? Customer.findOne({ _id: payload.customerId, businessId, status: 'active' }) : null,
     Branch.findById(branchId), // used for the receipt number; read here, not inside the transaction
+    etimsService.isActive(businessId).catch(() => undefined), // eTIMS on/off, read here so the transaction does not have to (undefined = unknown, the old in-transaction check runs)
   ]);
   if (existingSale) return buildExistingSaleResult(existingSale);
   if (!business) throw ApiError.notFound('Business not found');
@@ -295,30 +297,18 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
   }
 
   // ============================== TRANSACTION ==============================
+  // SPEED: a transaction holds its locks until it commits, and the per-branch receipt/invoice counters are ONE shared row.
+  // Taking them first made every cashier on the branch wait for the previous sale's whole transaction. Now the slow part
+  // (stock, serials, batches, M-PESA) runs first and the counters are taken LAST, so that row is locked for a few
+  // milliseconds only. The sale id is created up front so everything can point at it; the stock movements are written in
+  // ONE insert instead of one round trip per cart line.
+  const saleObjectId = new mongoose.Types.ObjectId();
   const session = await mongoose.startSession();
   try {
     let result;
     await session.withTransaction(async () => {
       const branch = branchDoc; // read once before the transaction (saves a round trip while locks are held)
-      const seq = await nextSequence(businessId, `receipt:branch:${branchId}`, session);
-      const receiptNumber = `${business.receiptSettings?.receiptPrefix || 'RCT'}-${branch?.code || 'MAIN'}-${pad(seq)}`;
-            // Invoice numbers have their OWN per-branch counter so online and offline sales share one
-      // unique, gapless sequence per branch, and carry the branch code so branches can never collide at KRA.
-      const invoiceSeq = await nextSequence(businessId, `invoice:branch:${branchId}`, session);
-      const invoiceNumber = `${business.receiptSettings?.invoicePrefix || 'INV'}-${branch?.code || 'MAIN'}-${pad(invoiceSeq)}`;
-
-      const [sale] = await Sale.create(
-        [{
-          businessId, branchId, receiptNumber, invoiceNumber,
-          customerId: customer?._id, cashierId: cashierUser._id, shiftId: shift?._id,
-          items: builtItems.map(({ _meta, ...rest }) => rest),
-          subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
-          channel, warehouseId: warehouse?._id, dueDate: payload.dueDate || (channel === 'WHOLESALE' && balance > 0 && business.wholesaleSettings?.defaultPaymentTermsDays ? new Date(Date.now() + business.wholesaleSettings.defaultPaymentTermsDays * 86400000) : undefined),
-          amountPaid: paidAmount, balance, paymentStatus, saleStatus: 'COMPLETED', source: 'POS', tradeInIds: tradeIns.list.map((t) => t._id),
-          notes: payload.notes, clientTransactionId: payload.clientTransactionId, deviceId: payload.deviceId,
-        }],
-        { session }
-      );
+      const movementDocs = []; // reset on every attempt: withTransaction may run this callback again after a transient error
 
       // Resolve MPESA lines against verified MpesaTransactions before building
       // payment docs. CASH/CARD/BANK stay exactly as before (cashier-attested).
@@ -328,7 +318,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
           // Automatic M-PESA verification (PayHero) is Kenya-only. Elsewhere use MOBILE_MONEY with a reference.
           await assertCountry(businessId, 'KE');
           if (!p.reference) throw ApiError.badRequest('An M-PESA reference is required', 'MPESA_REFERENCE_REQUIRED');
-          const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, sale._id, session);
+          const confirmed = await mpesaService.consumeForSale(businessId, p.reference, p.amount, saleObjectId, session);
           p.provider = confirmed.channel === 'MANUAL' ? 'payhero-till' : 'payhero';
           p.externalTransactionId = confirmed.externalTransactionId;
           p.metadata = { checkoutRequestId: confirmed.checkoutRequestId, channel: confirmed.channel };
@@ -343,16 +333,16 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
         if (product.trackInventory) {
           await applyStockChange({
             businessId, branchId: stockBranchId, location: stockLocation, warehouseId: warehouse?._id || null, productId: item.productId, variantId: item.variantId || null,
-            quantityDelta: -quantity, type: 'SALE', referenceType: 'Sale', referenceId: sale._id,
-            reason: `Sale ${receiptNumber}`, performedBy: cashierUser._id, session,
-            allowNegative: business.settings.allowNegativeStock,
+            quantityDelta: -quantity, type: 'SALE', referenceType: 'Sale', referenceId: saleObjectId,
+            reason: 'Sale', performedBy: cashierUser._id, session, // the receipt number is added to the reason below, once it is known
+            allowNegative: business.settings.allowNegativeStock, movementSink: movementDocs,
           });
         }
 
         if (product.trackSerialNumber && item.serialNumbers?.length) {
           // Each serial must be in stock, at THIS branch and belong to THIS product; the shop warranty starts now.
           await serialService.markSold({
-            businessId, branchId, product, serials: item.serialNumbers, saleId: sale._id,
+            businessId, branchId, product, serials: item.serialNumbers, saleId: saleObjectId,
             customerId: customer?._id, soldAt: new Date(), userId: cashierUser._id, session,
           });
         }
@@ -367,23 +357,39 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
             requestedBatchId: item.batchId || null, allowUnbatchedRemainder: !strict,
             productName: item.nameSnapshot, session,
           });
-          allocByItem.set(item, allocations);
+          allocByItem.set(item, allocations); // saved with the sale itself below (no second write); the cart line is NOT changed, so a retried attempt allocates afresh
         }
       }
 
-      // Record which batch(es) each line came from (recall tracing, cancels, refunds).
-      if (allocByItem.size) {
-        const $set = {};
-        builtItems.forEach((bi, i) => {
-          const a = allocByItem.get(bi);
-          if (a?.length) {
-            $set[`items.${i}.batchAllocations`] = a;
-            $set[`items.${i}.batchId`] = a[0].batchId;
-            sale.items[i].batchAllocations = a;
-            sale.items[i].batchId = a[0].batchId;
-          }
-        });
-        if (Object.keys($set).length) await Sale.updateOne({ _id: sale._id }, { $set }, { session });
+      // Receipt + invoice numbers LAST (see note above). Invoice numbers have their OWN per-branch counter so online and offline
+      // sales share one unique, gapless sequence per branch, and carry the branch code so branches can never collide at KRA.
+      const seq = await nextSequence(businessId, `receipt:branch:${branchId}`, session);
+      const receiptNumber = `${business.receiptSettings?.receiptPrefix || 'RCT'}-${branch?.code || 'MAIN'}-${pad(seq)}`;
+      const invoiceSeq = await nextSequence(businessId, `invoice:branch:${branchId}`, session);
+      const invoiceNumber = `${business.receiptSettings?.invoicePrefix || 'INV'}-${branch?.code || 'MAIN'}-${pad(invoiceSeq)}`;
+
+      const [sale] = await Sale.create(
+        [{
+          _id: saleObjectId,
+          businessId, branchId, receiptNumber, invoiceNumber,
+          customerId: customer?._id, cashierId: cashierUser._id, shiftId: shift?._id,
+          items: builtItems.map((bi) => {
+            const { _meta, ...rest } = bi;
+            const a = allocByItem.get(bi);
+            return a?.length ? { ...rest, batchAllocations: a, batchId: a[0].batchId } : rest;
+          }),
+          subtotal: totals.subtotal, itemDiscount: totals.itemDiscount, cartDiscount, tax: totals.tax, total: totals.total,
+          channel, warehouseId: warehouse?._id, dueDate: payload.dueDate || (channel === 'WHOLESALE' && balance > 0 && business.wholesaleSettings?.defaultPaymentTermsDays ? new Date(Date.now() + business.wholesaleSettings.defaultPaymentTermsDays * 86400000) : undefined),
+          amountPaid: paidAmount, balance, paymentStatus, saleStatus: 'COMPLETED', source: 'POS', tradeInIds: tradeIns.list.map((t) => t._id),
+          notes: payload.notes, clientTransactionId: payload.clientTransactionId, deviceId: payload.deviceId,
+        }],
+        { session }
+      );
+
+      // All stock movements in ONE insert.
+      if (movementDocs.length) {
+        movementDocs.forEach((m) => { m.reason = `Sale ${receiptNumber}`; });
+        await InventoryMovement.create(movementDocs, { session, ordered: true });
       }
 
       // Pharmacy: dispensing record (prescription + patient + dispenser + sale + batches) in the same transaction.
@@ -492,14 +498,9 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
         { session }
       );
 
-      await AuditLog.create(
-        [{ businessId, branchId, userId: cashierUser._id, action: 'sale.create', entityType: 'Sale', entityId: sale._id, newValue: { receiptNumber, total: totals.total, paymentStatus } }],
-        { session }
-      );
-
       // eTIMS: enqueue only - never let a slow/down KRA endpoint block checkout.
-      // Does nothing if eTIMS isn't enabled for this business (checked inside).
-      await etimsService.enqueueForSale(businessId, branchId, sale._id, { session });
+      // Does nothing if eTIMS isn't enabled for this business (decided before the transaction started).
+      await etimsService.enqueueForSale(businessId, branchId, sale._id, { session, active: etimsActive, invoiceNumber });
 
       result = { sale, receipt, payments: createdPayments };
     });
@@ -515,8 +516,12 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
       console.error('[crm] capture hook failed', crmErr.message);
     }
 
-    // Start eTIMS processing only after the sale transaction commits.
-    etimsService.kickForSale(businessId, result.sale._id);
+    // SPEED: the audit row is written AFTER the commit, off the cashier's path (it was a round trip inside the transaction).
+    AuditLog.create([{ businessId, branchId, userId: cashierUser._id, action: 'sale.create', entityType: 'Sale', entityId: result.sale._id, newValue: { receiptNumber: result.sale.receiptNumber, total: totals.total, paymentStatus } }])
+      .catch((auditErr) => console.error('[audit] sale.create failed', auditErr.message));
+
+    // Start eTIMS processing only after the sale transaction commits (skipped entirely when eTIMS is off).
+    if (etimsActive !== false) etimsService.kickForSale(businessId, result.sale._id);
 
     return result;
 

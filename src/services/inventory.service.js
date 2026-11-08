@@ -56,6 +56,7 @@ async function applyStockChange({
   quantityDelta, type, referenceType, referenceId, reason, performedBy,
   session, allowNegative = false, occurredAt = undefined, location = 'RETAIL', warehouseId = null,
   fromReserved = false, // consuming units that were reserved (layaway): takes them out of quantity AND reservedQuantity (retail stock only)
+  movementSink = null, // SPEED: when an array is passed, the movement row is pushed here instead of written now, so the caller can write ALL of them in ONE insert
 }) {
   if (!session) throw new Error('applyStockChange requires an active mongoose session');
   if (!quantityDelta) throw new Error('applyStockChange requires a non-zero quantityDelta');
@@ -107,10 +108,10 @@ async function applyStockChange({
 
   const previousStock = updated.quantity - quantityDelta;
 
-    const [movement] = await InventoryMovement.create(
-    [{ businessId, branchId, productId, variantId, location, warehouseId: location === 'WAREHOUSE' ? warehouseId : undefined, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy, }],
-    { session }
-  );
+  const movementDoc = { businessId, branchId, productId, variantId, location, warehouseId: location === 'WAREHOUSE' ? warehouseId : undefined, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy };
+  let movement = null;
+  if (movementSink) movementSink.push(movementDoc);
+  else [movement] = await InventoryMovement.create([movementDoc], { session });
 
   // Low/out-of-stock alert - fires only the moment stock CROSSES the
   // threshold going down, not on every sale while it stays low. Fired

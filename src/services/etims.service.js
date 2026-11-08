@@ -31,13 +31,25 @@ async function loadEtimsConfig(businessId) {
  * other connection would not see the sale or the row yet). The submit is started by kickForSale()
  * AFTER commit, and retryAllDue() sweeps anything that was missed.
  */
-async function enqueueForSale(businessId, branchId, saleId, { session } = {}) {
-  const config = await loadEtimsConfig(businessId);
-  if (!config) return null;
+/** SPEED: cheap "is eTIMS on for this business?" check (no decrypt). sale.service runs it BEFORE the transaction, in parallel with the other reads. */
+async function isActive(businessId) {
+  const s = await IntegrationSettings.findOne({ businessId }).select('etims.enabled +etims.credentialsBlob').lean();
+  return !!(s && s.etims && s.etims.enabled && s.etims.credentialsBlob);
+}
 
-  const sale = await Sale.findById(saleId).session(session || null);
+async function enqueueForSale(businessId, branchId, saleId, { session, active, invoiceNumber } = {}) {
+  // `active` / `invoiceNumber` are passed by sale.service so nothing is read inside the transaction. Other callers keep the old behaviour.
+  if (active === false) return null;
+  if (active === undefined) {
+    const config = await loadEtimsConfig(businessId);
+    if (!config) return null;
+  }
+  if (!invoiceNumber) {
+    const sale = await Sale.findById(saleId).session(session || null);
+    invoiceNumber = sale.invoiceNumber || sale.receiptNumber;
+  }
   const [etx] = await EtimsTransaction.create(
-    [{ businessId, branchId, saleId, invoiceNumber: sale.invoiceNumber || sale.receiptNumber, status: 'PENDING' }],
+    [{ businessId, branchId, saleId, invoiceNumber, status: 'PENDING' }],
     session ? { session } : {}
   );
   return etx;
@@ -172,4 +184,4 @@ async function retryAllDue() {
   }
 }
 
-module.exports = { enqueueForSale, kickForSale, submit, retry, listForBusiness, retryAllDue };
+module.exports = { isActive, enqueueForSale, kickForSale, submit, retry, listForBusiness, retryAllDue };

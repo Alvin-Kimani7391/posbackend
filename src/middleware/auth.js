@@ -17,6 +17,9 @@ const { userHasPermission, cachePolicy } = require('../utils/permissionResolver'
  * tenant routes reject them through requirePermission (no default permissions).
  */
 const authenticate = catchAsync(async (req, res, next) => {
+  // SPEED: subscriptionGate already authenticated this very request (same token). Running it again cost 2 more DB reads
+  // (User + Business) on EVERY API call, including "Complete sale". Once is enough.
+  if (req.__authDone && req.user) return next();
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
 
@@ -43,6 +46,7 @@ const authenticate = catchAsync(async (req, res, next) => {
   if (user.role === ROLES.SUPER_ADMIN) {
     req.user = user;
     req.businessId = null;
+    req.__authDone = true;
     return next();
   }
 
@@ -68,6 +72,7 @@ const authenticate = catchAsync(async (req, res, next) => {
   req.countryCode = business.countryCode || 'KE';
   // The app's explicit choice wins; otherwise the user's own language, then the business default.
   if (!req.langExplicit) req.lang = user.language || business.language || req.lang || 'en';
+  req.__authDone = true;
   next();
 });
 
