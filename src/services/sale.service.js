@@ -65,30 +65,32 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
   // --- Offline-sync / double-submit idempotency: same device replaying the
   // same client-generated transaction id gets back the ORIGINAL sale,
   // never a second one. ---
-  if (payload.clientTransactionId && payload.deviceId) {
-    const existing = await Sale.findOne({ businessId, branchId, deviceId: payload.deviceId, clientTransactionId: payload.clientTransactionId });
-    if (existing) return buildExistingSaleResult(existing);
-  }
-
-  const business = await Business.findById(businessId);
+  // SPEED: every independent lookup below is sent to the database AT THE SAME TIME (one round trip instead of five).
+  // The checks that follow run in the same order as before, so the same errors come back in the same situations.
+  const [existingSale, business, openShift, customerDoc, branchDoc] = await Promise.all([
+    payload.clientTransactionId && payload.deviceId
+      ? Sale.findOne({ businessId, branchId, deviceId: payload.deviceId, clientTransactionId: payload.clientTransactionId })
+      : null,
+    Business.findById(businessId),
+    CashShift.findOne({ businessId, branchId, cashierId: cashierUser._id, status: 'OPEN' }),
+    payload.customerId ? Customer.findOne({ _id: payload.customerId, businessId, status: 'active' }) : null,
+    Branch.findById(branchId), // used for the receipt number; read here, not inside the transaction
+  ]);
+  if (existingSale) return buildExistingSaleResult(existingSale);
   if (!business) throw ApiError.notFound('Business not found');
 
   // --- Shift resolution ---
+  // An open shift is attached even when not strictly required (shift-level reporting); it is mandatory for cash when the business says so.
   const hasCashPayment = payload.payments.some((p) => p.method === 'CASH');
-  let shift = null;
-  if (business.settings.requireShift && hasCashPayment) {
-    shift = await CashShift.findOne({ businessId, branchId, cashierId: cashierUser._id, status: 'OPEN' });
-    if (!shift) throw ApiError.badRequest('Open a cash shift before taking cash payments', 'SHIFT_REQUIRED');
-  } else {
-    // Attach an open shift opportunistically (for shift-level reporting)
-    // even when not strictly required, e.g. a non-cash sale during a shift.
-    shift = await CashShift.findOne({ businessId, branchId, cashierId: cashierUser._id, status: 'OPEN' });
+  const shift = openShift || null;
+  if (business.settings.requireShift && hasCashPayment && !shift) {
+    throw ApiError.badRequest('Open a cash shift before taking cash payments', 'SHIFT_REQUIRED');
   }
 
   // --- Customer ---
   let customer = null;
   if (payload.customerId) {
-    customer = await Customer.findOne({ _id: payload.customerId, businessId, status: 'active' });
+    customer = customerDoc;
     if (!customer) throw ApiError.badRequest('Customer not found', 'INVALID_CUSTOMER');
   }
 
@@ -114,17 +116,27 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
   const qtyByProduct = sumQuantityByProduct(payload.items); // MOQ counted per product across the whole sale
 
   // Offers running now (general shop). A discount that matches an offer is the owner's own preset, not a cashier discount.
-  let activePromos = [];
-  if (business.featureSettings?.promotions) { try { activePromos = await promoSvc.activeNow(businessId, branchId); } catch (e) { activePromos = []; } }
+  // SPEED: the offers, ALL the products and ALL the variants of the cart are loaded together (3 queries in parallel),
+  // instead of one product query + one variant query per cart line one after another.
+  const productIds = [...new Set(payload.items.map((i) => String(i.productId)))];
+  const variantIds = [...new Set(payload.items.filter((i) => i.variantId).map((i) => String(i.variantId)))];
+  const [activePromos, productDocs, variantDocs] = await Promise.all([
+    business.featureSettings?.promotions ? promoSvc.activeNow(businessId, branchId).catch(() => []) : [],
+    Product.find({ _id: { $in: productIds }, businessId, status: 'active' }),
+    variantIds.length ? ProductVariant.find({ _id: { $in: variantIds }, businessId, status: 'active' }) : [],
+  ]);
+  const productById = new Map(productDocs.map((p) => [String(p._id), p]));
+  const variantById = new Map(variantDocs.map((v) => [String(v._id), v]));
 
   const builtItems = [];
   for (const rawItem of payload.items) {
-    const product = await Product.findOne({ _id: rawItem.productId, businessId, status: 'active' });
+    const product = productById.get(String(rawItem.productId));
     if (!product) throw ApiError.badRequest(`Product not found: ${rawItem.productId}`, 'PRODUCT_NOT_FOUND');
 
     let variant = null;
     if (rawItem.variantId) {
-      variant = await ProductVariant.findOne({ _id: rawItem.variantId, businessId, productId: product._id, status: 'active' });
+      variant = variantById.get(String(rawItem.variantId)) || null;
+      if (variant && String(variant.productId) !== String(product._id)) variant = null;
       if (!variant) throw ApiError.badRequest('Variant not found', 'VARIANT_NOT_FOUND');
     } else if (product.hasVariants) {
       throw ApiError.badRequest(`${product.name} requires a variant to be selected`, 'VARIANT_REQUIRED');
@@ -271,13 +283,15 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
   // --- Fast-fail stock pre-check (the REAL guarantee is the atomic
   // decrement inside the transaction below; this just avoids opening a
   // transaction for an obviously-doomed request). ---
-  for (const item of builtItems) {
-    if (item._meta.product.trackInventory && !business.settings.allowNegativeStock) {
-      const level = await getStockLevel(businessId, stockBranchId, item.productId, item.variantId || null, stockLocation, warehouse?._id || null);
-      if (level.availableQuantity < item._meta.baseQuantity) {
-        throw ApiError.badRequest(`Insufficient stock for ${item.nameSnapshot} (available: ${level.availableQuantity})`, 'INSUFFICIENT_STOCK');
+  if (!business.settings.allowNegativeStock) {
+    const toCheck = builtItems.filter((item) => item._meta.product.trackInventory);
+    // SPEED: all lines are checked together; the first short line (in cart order) still produces the error.
+    const levels = await Promise.all(toCheck.map((item) => getStockLevel(businessId, stockBranchId, item.productId, item.variantId || null, stockLocation, warehouse?._id || null)));
+    toCheck.forEach((item, i) => {
+      if (levels[i].availableQuantity < item._meta.baseQuantity) {
+        throw ApiError.badRequest(`Insufficient stock for ${item.nameSnapshot} (available: ${levels[i].availableQuantity})`, 'INSUFFICIENT_STOCK');
       }
-    }
+    });
   }
 
   // ============================== TRANSACTION ==============================
@@ -285,7 +299,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
   try {
     let result;
     await session.withTransaction(async () => {
-      const branch = await Branch.findById(branchId).session(session);
+      const branch = branchDoc; // read once before the transaction (saves a round trip while locks are held)
       const seq = await nextSequence(businessId, `receipt:branch:${branchId}`, session);
       const receiptNumber = `${business.receiptSettings?.receiptPrefix || 'RCT'}-${branch?.code || 'MAIN'}-${pad(seq)}`;
             // Invoice numbers have their OWN per-branch counter so online and offline sales share one

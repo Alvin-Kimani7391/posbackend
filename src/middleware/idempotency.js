@@ -10,26 +10,33 @@ function idempotent(routeName) {
     if (!key) return next();
 
     const scope = { businessId: req.businessId, route: routeName, key };
-    const existing = await IdempotencyKey.findOne(scope);
 
-    if (existing) {
-      if (existing.status === 'completed') {
-        return res.status(existing.responseStatus).json(existing.responseBody);
-      }
-      if (Date.now() - existing.createdAt.getTime() < PENDING_TTL_MS) {
-        throw ApiError.conflict('An identical request is already being processed', 'DUPLICATE_IN_FLIGHT');
-      }
-      // Abandoned (crash/timeout): release it so the retry can proceed.
-      await IdempotencyKey.deleteOne({ _id: existing._id, status: 'pending' });
-    }
-
+    // SPEED: claim the key straight away (1 round trip). Only when it already exists do we read it to decide what to do -
+    // the normal first-time request no longer pays for a separate lookup first.
+    const claim = () => IdempotencyKey.create({ ...scope, userId: req.user?._id, status: 'pending' });
     try {
-      await IdempotencyKey.create({ ...scope, userId: req.user?._id, status: 'pending' });
+      await claim();
     } catch (err) {
-      if (err.code === 11000) {
-        throw ApiError.conflict('An identical request is already being processed', 'DUPLICATE_IN_FLIGHT');
+      if (err.code !== 11000) throw err;
+      const existing = await IdempotencyKey.findOne(scope);
+      if (existing) {
+        if (existing.status === 'completed') {
+          return res.status(existing.responseStatus).json(existing.responseBody);
+        }
+        if (Date.now() - existing.createdAt.getTime() < PENDING_TTL_MS) {
+          throw ApiError.conflict('An identical request is already being processed', 'DUPLICATE_IN_FLIGHT');
+        }
+        // Abandoned (crash/timeout): release it so the retry can proceed.
+        await IdempotencyKey.deleteOne({ _id: existing._id, status: 'pending' });
       }
-      throw err;
+      try {
+        await claim();
+      } catch (err2) {
+        if (err2.code === 11000) {
+          throw ApiError.conflict('An identical request is already being processed', 'DUPLICATE_IN_FLIGHT');
+        }
+        throw err2;
+      }
     }
 
     const originalJson = res.json.bind(res);

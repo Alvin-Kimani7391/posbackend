@@ -7,6 +7,25 @@ exports.list = catchAsync(async (req, res) => {
   return sendSuccess(res, 200, 'Products fetched', result);
 });
 
+/**
+ * GET /products/catalog - the WHOLE active product list in ONE request (same item shape as GET /products).
+ * The till keeps it on the device so search and barcode scans are instant, instead of downloading 30 pages one by one.
+ * Catalogs bigger than the cap are not served here (the till then keeps using the paged list + server search).
+ */
+const CATALOG_CAP = 5000;
+exports.catalog = catchAsync(async (req, res) => {
+  const mongoose = require('mongoose');
+  const { branchId, channel, status } = req.query;
+  const result = await productService.listProducts(req.businessId, {
+    page: 1,
+    limit: CATALOG_CAP,
+    status: status === 'archived' ? 'archived' : 'active',
+    channel: channel === 'retail' ? 'retail' : undefined,
+    branchId: branchId && mongoose.isValidObjectId(branchId) ? branchId : undefined,
+  });
+  return sendSuccess(res, 200, 'Products fetched', result);
+});
+
 exports.stockLevels = catchAsync(async (req, res) => {
   const ids = String(req.query.ids || '').split(',').map((x) => x.trim()).filter(Boolean);
   const stock = await productService.stockLevels(req.businessId, ids, req.query.branchId || undefined);

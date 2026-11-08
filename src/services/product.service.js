@@ -440,7 +440,14 @@ async function archiveVariant(businessId, userId, productId, variantId) {
  * (The returned product carries defaultDiscount, which the POS auto-applies.)
  */
 async function lookupByBarcode(businessId, barcode) {
-  const product = await Product.findOne({ businessId, barcode, status: 'active' }).populate('categoryId', 'name');
+  // SPEED: the three possible matches (product barcode / packet barcode / variant barcode) are searched at the same time,
+  // then picked in the same priority order as before - a scan costs one round trip instead of up to four.
+  const [product, byUnit, variant] = await Promise.all([
+    Product.findOne({ businessId, barcode, status: 'active' }).populate('categoryId', 'name'),
+    Product.findOne({ businessId, status: 'active', units: { $elemMatch: { barcode, status: { $ne: 'inactive' } } } }).populate('categoryId', 'name'),
+    ProductVariant.findOne({ businessId, barcode, status: 'active' }),
+  ]);
+
   if (product) {
     // Saved before packets existed: the product's own barcode is the supplier PACKET's code -> the till sells / breaks the packet.
     const pu = (product.units || []).find((u) => u.code === 'PKT' && u.status !== 'inactive' && u.factor > 1 && (!u.barcode || u.barcode === barcode));
@@ -448,13 +455,11 @@ async function lookupByBarcode(businessId, barcode) {
   }
 
   // A packet / carton barcode: the till gets the product plus the unit that was scanned (unitId) so it can sell the packet or break it.
-  const byUnit = await Product.findOne({ businessId, status: 'active', units: { $elemMatch: { barcode, status: { $ne: 'inactive' } } } }).populate('categoryId', 'name');
   if (byUnit) {
     const u = byUnit.units.find((x) => x.barcode === barcode && x.status !== 'inactive');
     return { type: 'product', product: byUnit, variant: null, unitId: String(u._id) };
   }
 
-  const variant = await ProductVariant.findOne({ businessId, barcode, status: 'active' });
   if (variant) {
     const parent = await Product.findOne({ _id: variant.productId, businessId, status: 'active' });
     if (!parent) throw ApiError.notFound('Product not found for this barcode');
