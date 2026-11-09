@@ -1,89 +1,281 @@
+
 name: CI / Staging / Production
+
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
   pull_request: {}
 
-permissions: { contents: read }
+permissions:
+  contents: read
 
-concurrency:                     # never two deployments at once
+concurrency:
   group: sixstar-deploy
   cancel-in-progress: false
 
 jobs:
+  # ==========================================
+  # 1. CONTINUOUS INTEGRATION
+  # ==========================================
   test:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - run: npm test
-      - run: npm audit --omit=dev --audit-level=critical
-        continue-on-error: true
-      - name: Syntax check every JS file
-        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Security audit
+        run: npm audit --omit=dev --audit-level=critical
+        continue-on-error: true
+
+      - name: Syntax check every JS file
+        shell: bash
+        run: |
+          set -euo pipefail
+          find src -name '*.js' -print0 | xargs -0 -r -n1 node --check
+
+  # ==========================================
+  # 2. CREATE RELEASE PACKAGE
+  # ==========================================
   package:
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    outputs: { release: "${{ steps.id.outputs.release }}" }
-    steps:
-      - uses: actions/checkout@v4
-      - id: id
-        run: echo "release=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - name: Package COMMITTED files only (git archive honours .gitattributes)
-        run: |
-          git archive --format=tar.gz -o release.tar.gz HEAD
-          tar -tzf release.tar.gz | grep -qx 'ecosystem.config.js' || { echo "ecosystem.config.js not committed"; exit 1; }
-          tar -tzf release.tar.gz | grep -q '^src/worker.js$' || { echo "src/worker.js not committed"; exit 1; }
-          tar -tzf release.tar.gz | grep -E '(^|/)\.env($|\.)' && { echo "an .env file is in the release!"; exit 1; } || true
-          sha256sum release.tar.gz | tee release.sha256
-      - uses: actions/upload-artifact@v4
-        with: { name: release, path: "release.tar.gz\nrelease.sha256" }
 
+    outputs:
+      release: ${{ steps.id.outputs.release }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate release ID
+        id: id
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "release=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Package COMMITTED files only (git archive honours .gitattributes)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========== CREATE RELEASE ARCHIVE =========="
+          git archive --format=tar.gz -o release.tar.gz HEAD
+
+          test -s release.tar.gz
+
+          echo "========== READ ARCHIVE FILE LIST =========="
+          tar -tzf release.tar.gz > release-files.txt
+
+          echo "========== VERIFY REQUIRED FILES =========="
+
+          grep -Fqx 'ecosystem.config.js' release-files.txt || {
+            echo "ERROR: ecosystem.config.js missing"
+            exit 1
+          }
+
+          grep -Fqx 'src/worker.js' release-files.txt || {
+            echo "ERROR: src/worker.js missing"
+            exit 1
+          }
+
+          grep -Fqx 'package.json' release-files.txt || {
+            echo "ERROR: package.json missing"
+            exit 1
+          }
+
+          grep -Fqx 'package-lock.json' release-files.txt || {
+            echo "ERROR: package-lock.json missing"
+            exit 1
+          }
+
+          grep -Fqx 'deployment/deploy.sh' release-files.txt || {
+            echo "ERROR: deployment/deploy.sh missing"
+            exit 1
+          }
+
+          grep -Fqx 'deployment/deploy-staging.sh' release-files.txt || {
+            echo "ERROR: deployment/deploy-staging.sh missing"
+            exit 1
+          }
+
+          echo "========== CHECK ENVIRONMENT FILES =========="
+
+          if awk -F/ '
+            {
+              name = $NF
+
+              if (
+                name == ".env" ||
+                (name ~ /^\.env\./ && name !~ /^\.env\.example(\.|$)/)
+              ) {
+                print "ERROR: Forbidden environment file: " $0
+                found = 1
+              }
+            }
+
+            END {
+              exit found ? 0 : 1
+            }
+          ' release-files.txt; then
+            echo "ERROR: Environment secrets detected in release archive"
+            exit 1
+          fi
+
+          echo "Environment-file check passed."
+
+          echo "========== GENERATE SHA256 CHECKSUM =========="
+          sha256sum release.tar.gz | tee release.sha256
+
+          echo "========== PACKAGE VALIDATION COMPLETE =========="
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            release.tar.gz
+            release.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # ==========================================
+  # 3. STAGING DEPLOYMENT
+  # ==========================================
   staging:
     needs: package
     runs-on: ubuntu-latest
-    env:
-      VPS_HOST: ${{ secrets.VPS_HOST }}
-      VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
-      RELEASE: ${{ needs.package.outputs.release }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: release }
-      - name: SSH setup with PINNED host key
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id; chmod 600 ~/.ssh/id
-          ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
-          GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
-          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || { echo "HOST KEY MISMATCH - refusing to connect"; exit 1; }
-          mv ~/.ssh/scanned ~/.ssh/known_hosts
-      - name: Deploy staging (production untouched)
-        run: |
-          SSH="ssh -i $HOME/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
-          scp -i ~/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes release.tar.gz sixstar@$VPS_HOST:/var/www/sixstar-pos/incoming/$RELEASE.tar.gz
-          $SSH sixstar@$VPS_HOST "cd /var/www/sixstar-pos/incoming && echo '$(cut -d' ' -f1 release.sha256)  $RELEASE.tar.gz' | sha256sum -c - && bash /var/www/sixstar-pos/deployment/deploy-staging.sh '$RELEASE' '${{ github.sha }}'"
 
-  production:
-    needs: [package, staging]
-    runs-on: ubuntu-latest
-    environment: production        # Required reviewers on this environment = explicit approval
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
       RELEASE: ${{ needs.package.outputs.release }}
+
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: SSH setup with PINNED host key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d ~/.ssh
+
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+
+          ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
+
+          GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
+
+          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || {
+            echo "HOST KEY MISMATCH - refusing to connect"
+            exit 1
+          }
+
+          mv ~/.ssh/scanned ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          echo "SSH host verification successful."
+
+      - name: Deploy staging (production untouched)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH="ssh -i $HOME/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+          echo "========== VERIFY RELEASE CHECKSUM =========="
+
+          sha256sum -c release.sha256
+
+          echo "========== UPLOAD STAGING RELEASE =========="
+
+          scp \
+            -i ~/.ssh/id \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            release.tar.gz \
+            "sixstar@$VPS_HOST:/var/www/sixstar-pos/incoming/$RELEASE.tar.gz"
+
+          echo "========== EXECUTE STAGING DEPLOYMENT =========="
+
+          $SSH "sixstar@$VPS_HOST" \
+            "cd /var/www/sixstar-pos/incoming && echo '$(cut -d' ' -f1 release.sha256)  $RELEASE.tar.gz' | sha256sum -c - && bash /var/www/sixstar-pos/deployment/deploy-staging.sh '$RELEASE' '${{ github.sha }}'"
+
+          echo "STAGING DEPLOYMENT COMMAND COMPLETED."
+
+  # ==========================================
+  # 4. PRODUCTION BLUE/GREEN DEPLOYMENT
+  # ==========================================
+  production:
+    needs:
+      - package
+      - staging
+
+    runs-on: ubuntu-latest
+
+    environment: production
+
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+      RELEASE: ${{ needs.package.outputs.release }}
+
     steps:
       - name: SSH setup with PINNED host key
+        shell: bash
         run: |
+          set -euo pipefail
+
           install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id; chmod 600 ~/.ssh/id
+
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+
           ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
+
           GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
-          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || { echo "HOST KEY MISMATCH - refusing to connect"; exit 1; }
+
+          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || {
+            echo "HOST KEY MISMATCH - refusing to connect"
+            exit 1
+          }
+
           mv ~/.ssh/scanned ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          echo "SSH host verification successful."
+
       - name: Blue/Green deploy (same tested tarball that staging received)
+        shell: bash
         run: |
-          ssh -i ~/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes sixstar@$VPS_HOST \
+          set -euo pipefail
+
+          echo "========== PRODUCTION BLUE/GREEN DEPLOYMENT =========="
+
+          ssh \
+            -i ~/.ssh/id \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "sixstar@$VPS_HOST" \
             "bash /var/www/sixstar-pos/deployment/deploy.sh '$RELEASE' '${{ github.sha }}' '${{ github.actor }}'"
+
+          echo "PRODUCTION DEPLOYMENT COMMAND COMPLETED."
