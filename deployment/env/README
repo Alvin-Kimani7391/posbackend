@@ -1,0 +1,6 @@
+Create these files ON THE SERVER ONLY (never in git), chmod 600, in /var/www/sixstar-pos/shared/env/:
+  blue.env, green.env   -> same PRODUCTION values (MONGODB_URI prod, JWT secrets, PayHero live, ...)
+  worker.env            -> same production values
+  staging.env           -> DIFFERENT Mongo database (sixstar_staging), DIFFERENT JWT secrets,
+                           PayHero/M-Pesa SANDBOX keys, no real SMS key.
+See staging.env.example for the safe shape.

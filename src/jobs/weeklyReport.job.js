@@ -7,6 +7,9 @@ const cron = require('node-cron');
 const weekly = require('../services/weeklyReport');
 
 let running = false;
+let task = null;
+let kick = null;
+
 async function tick() {
   if (running) return;
   running = true;
@@ -16,8 +19,16 @@ async function tick() {
 }
 
 function start() {
-  cron.schedule('*/5 * * * *', () => tick(), { timezone: 'Africa/Nairobi' });
-  setTimeout(tick, 4 * 60 * 1000).unref();
+  if (task) return; // never schedule twice in one process
+  task = cron.schedule('*/5 * * * *', () => tick(), { timezone: 'Africa/Nairobi' });
+  kick = setTimeout(tick, 4 * 60 * 1000);
+  kick.unref();
 }
 
-module.exports = { start, tick };
+// Lets the worker shut down cleanly (SIGTERM during a deploy): no new ticks start after this.
+function stop() {
+  if (task) { task.stop(); task = null; }
+  if (kick) { clearTimeout(kick); kick = null; }
+}
+
+module.exports = { start, stop, tick };

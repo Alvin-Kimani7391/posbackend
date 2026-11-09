@@ -22,6 +22,8 @@ router.use('/sms', require('./sms.admin.routes'));
 
 router.use('/weekly-report', require('./weeklyReport.admin.routes'));
 
+router.use('/infra', require('./admin.infra.routes'));
+
 router.get('/overview', validate({ query: v.overviewQuery }), controller.overview);
 
 

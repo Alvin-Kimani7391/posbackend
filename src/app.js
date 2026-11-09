@@ -42,6 +42,7 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 app.use('/health', healthRoutes);
+app.use(require('./middleware/maintenance'));
 app.use('/api/v1', publicApiLimiter, v1Routes);
 
 app.use(notFoundHandler);

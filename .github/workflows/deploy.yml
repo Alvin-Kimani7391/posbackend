@@ -1,0 +1,89 @@
+name: CI / Staging / Production
+on:
+  push: { branches: [main] }
+  pull_request: {}
+
+permissions: { contents: read }
+
+concurrency:                     # never two deployments at once
+  group: sixstar-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=critical
+        continue-on-error: true
+      - name: Syntax check every JS file
+        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check
+
+  package:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs: { release: "${{ steps.id.outputs.release }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - id: id
+        run: echo "release=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Package COMMITTED files only (git archive honours .gitattributes)
+        run: |
+          git archive --format=tar.gz -o release.tar.gz HEAD
+          tar -tzf release.tar.gz | grep -qx 'ecosystem.config.js' || { echo "ecosystem.config.js not committed"; exit 1; }
+          tar -tzf release.tar.gz | grep -q '^src/worker.js$' || { echo "src/worker.js not committed"; exit 1; }
+          tar -tzf release.tar.gz | grep -E '(^|/)\.env($|\.)' && { echo "an .env file is in the release!"; exit 1; } || true
+          sha256sum release.tar.gz | tee release.sha256
+      - uses: actions/upload-artifact@v4
+        with: { name: release, path: "release.tar.gz\nrelease.sha256" }
+
+  staging:
+    needs: package
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+      RELEASE: ${{ needs.package.outputs.release }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: release }
+      - name: SSH setup with PINNED host key
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id; chmod 600 ~/.ssh/id
+          ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
+          GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
+          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || { echo "HOST KEY MISMATCH - refusing to connect"; exit 1; }
+          mv ~/.ssh/scanned ~/.ssh/known_hosts
+      - name: Deploy staging (production untouched)
+        run: |
+          SSH="ssh -i $HOME/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          scp -i ~/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes release.tar.gz sixstar@$VPS_HOST:/var/www/sixstar-pos/incoming/$RELEASE.tar.gz
+          $SSH sixstar@$VPS_HOST "cd /var/www/sixstar-pos/incoming && echo '$(cut -d' ' -f1 release.sha256)  $RELEASE.tar.gz' | sha256sum -c - && bash /var/www/sixstar-pos/deployment/deploy-staging.sh '$RELEASE' '${{ github.sha }}'"
+
+  production:
+    needs: [package, staging]
+    runs-on: ubuntu-latest
+    environment: production        # Required reviewers on this environment = explicit approval
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+      RELEASE: ${{ needs.package.outputs.release }}
+    steps:
+      - name: SSH setup with PINNED host key
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id; chmod 600 ~/.ssh/id
+          ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
+          GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
+          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || { echo "HOST KEY MISMATCH - refusing to connect"; exit 1; }
+          mv ~/.ssh/scanned ~/.ssh/known_hosts
+      - name: Blue/Green deploy (same tested tarball that staging received)
+        run: |
+          ssh -i ~/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes sixstar@$VPS_HOST \
+            "bash /var/www/sixstar-pos/deployment/deploy.sh '$RELEASE' '${{ github.sha }}' '${{ github.actor }}'"

@@ -22,25 +22,29 @@ async function start() {
     logger.info(`POS backend listening on port ${port}`);
   });
 
-  // Background jobs - only after a DB connection exists, and only in the
-  // real server process (never when app.js is imported by tests).
-  require('./jobs/etimsRetry.job').start();
-  require('./jobs/mpesaReconcile.job').start();
-  require('./jobs/billing.job').start();
-  require('./jobs/crmSync.job').start();
+  // Jobs run here ONLY when RUN_JOBS is not 'false'. Default = unchanged behaviour.
+  // Blue/Green/staging API slots set RUN_JOBS=false; src/worker.js runs the jobs.
+  if (process.env.RUN_JOBS !== 'false') {
+    // real server process (never when app.js is imported by tests).
+    require('./jobs/etimsRetry.job').start();
+    require('./jobs/mpesaReconcile.job').start();
+    require('./jobs/billing.job').start();
+    require('./jobs/crmSync.job').start();
     require('./jobs/smsQueue.job').start();
-  require('./jobs/smsAlerts.job').start();
-      require('./jobs/offlineWatch.job').start();
-  require('./jobs/expiryAlerts.job').start();
-  require('./jobs/lowStockAlerts.job').start();
-  require('./jobs/weeklyReport.job').start();
-  require('./jobs/restaurant.job').start();
-  require('./jobs/rider.job').start();
-  require('./jobs/tv.job').start();
+    require('./jobs/smsAlerts.job').start();
+    require('./jobs/offlineWatch.job').start();
+    require('./jobs/expiryAlerts.job').start();
+    require('./jobs/lowStockAlerts.job').start();
+    require('./jobs/restaurant.job').start();
+    require('./jobs/rider.job').start();
+    require('./jobs/tv.job').start();
+    require('./jobs/weeklyReport.job').start();
+  }
 }
 
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully`);
+  app.set('shuttingDown', true); // /health/ready now answers 503 so nothing new is routed here
   try { require('./services/delivery/realtime.hub').closeAll(); } catch (e) { /* open live streams must not hold the server open */ }
   if (server) {
     server.close(async () => {
