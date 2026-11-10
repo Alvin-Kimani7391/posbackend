@@ -1,5 +1,6 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
+const { normalizeBarcode, releaseArchivedBarcodes } = require('../utils/barcode');
 
 const productVariantSchema = new Schema(
   {
@@ -7,7 +8,8 @@ const productVariantSchema = new Schema(
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
 
     sku: { type: String, required: true, trim: true, uppercase: true },
-    barcode: { type: String, trim: true },
+    barcode: { type: String, trim: true, set: normalizeBarcode },
+    archivedBarcode: { type: String, trim: true },
 
     // e.g. { size: 'M', color: 'Black' } - free-form so any attribute combination works.
     attributes: { type: Map, of: String, default: {} },
@@ -27,6 +29,13 @@ const productVariantSchema = new Schema(
 productVariantSchema.index({ businessId: 1, sku: 1 }, { unique: true });
 productVariantSchema.index({ businessId: 1, barcode: 1 }, { unique: true, partialFilterExpression: { barcode: { $type: 'string' } } });
 productVariantSchema.index({ businessId: 1, productId: 1 });
+
+// Archived products / variants must never block a barcode.
+productVariantSchema.pre('save', async function releaseBarcodesFromArchived() {
+  if (this.barcode && this.status !== 'archived' && (this.isNew || this.isModified('barcode'))) {
+    await releaseArchivedBarcodes(this.businessId, [this.barcode], this.$session && this.$session());
+  }
+});
 
 moneyFields(productVariantSchema, ['costPrice', 'sellingPrice', 'wholesalePrice']);
 

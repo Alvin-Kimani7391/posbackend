@@ -23,7 +23,7 @@ function dueNow(item, event, settings) {
 async function deplete(order, item, { ctx, userId, session, movementType, reason }) {
   const ref = { referenceType: 'RestaurantOrder', referenceId: order._id };
   if (item.stockMode === 'PRODUCT') {
-    await applyStockChange({ businessId: order.businessId, branchId: order.branchId, productId: item.productId, variantId: null, quantityDelta: -item.quantity, type: movementType === 'WASTE' ? 'DAMAGE' : 'SALE', ...ref, reason: reason || `Order ${order.orderNumber}`, performedBy: userId, session, allowNegative: !!ctx.business.settings?.allowNegativeStock || ctx.settings.allowNegativeIngredients !== false });
+    await applyStockChange({ businessId: order.businessId, branchId: order.branchId, productId: item.productId, variantId: null, quantityDelta: -item.quantity, type: movementType === 'WASTE' ? 'DAMAGE' : 'SALE', ...ref, reason: reason || `Order ${order.orderNumber}`, performedBy: userId, session, allowNegative: !!ctx.business.settings?.allowNegativeStock, clampAtZero: true }); // a customer is still served when the books are short, but stock never goes below 0
     item.stockState = 'DEDUCTED'; item.stockLines = []; return;
   }
   if (!ctx.features.recipes || !item.recipeId) { item.stockState = 'NONE'; return; }   // recipes switched off or no recipe yet: nothing to deduct

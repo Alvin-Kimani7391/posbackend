@@ -93,8 +93,115 @@ function unitConfigIssues(units = [], baseUnit = 'piece') {
     if (seen.has(n)) issues.push({ path: ['units', i, 'name'], message: `Unit name "${u.name}" is used twice (or equals the base unit)` });
     seen.add(n);
   });
+  units.forEach((u, i) => { if (pos(u.factor) && u.factor > 10000000) issues.push({ path: ['units', i, 'factor'], message: 'Factor is too large' }); });
   if (units.filter((u) => u.isWholesaleDefault).length > 1) issues.push({ path: ['units'], message: 'Only one unit can be the wholesale default' });
   return issues;
 }
 
-module.exports = { round3, resolveUnit, toBase, wholesaleUnitPrice, retailUnitPrice, wholesaleFloorPerBase, evaluateRetailPrice, unitConfigIssues, suggestedRetailPerBase, unitBreakdown };
+
+/* ------------------------------------------------------------------ *
+ * DYNAMIC UNIT CONVERSION helpers (price breakdown, profit, break-down plans, presets)
+ * All money is integer cents. Stock/quantities are BASE units. Pure functions.
+ * ------------------------------------------------------------------ */
+
+/** Cost (cents, fractional) of ONE base unit for a product / variant. */
+const costPerBase = (product, variant) => Number((variant ? variant.costPrice : product.costPrice) || 0);
+
+/**
+ * Cost / price / profit of the base unit and of every active unit. This is the "price breakdown" table.
+ * profit = price - cost for ONE sold unit, margin = profit / price. `belowCost` flags a loss-making unit.
+ */
+function unitEconomics(product, variant = null) {
+  const cost = costPerBase(product, variant);
+  const retailBase = Number((variant ? variant.sellingPrice : product.sellingPrice) || 0);
+  const wsBase = (variant && pos(variant.wholesalePrice)) ? variant.wholesalePrice : (pos(product.wholesalePrice) ? product.wholesalePrice : null);
+  const row = (o) => {
+    const costCents = Math.round(cost * o.factor);
+    const profitCents = o.retailCents - costCents;
+    const wholesaleProfitCents = o.wholesaleCents != null ? o.wholesaleCents - costCents : null;
+    return {
+      ...o, costCents, profitCents,
+      marginPct: o.retailCents > 0 ? Math.round((profitCents / o.retailCents) * 1000) / 10 : null,
+      markupPct: costCents > 0 ? Math.round((profitCents / costCents) * 1000) / 10 : null,
+      wholesaleProfitCents,
+      perBaseRetailCents: o.factor > 0 ? Math.round((o.retailCents / o.factor) * 100) / 100 : null,
+      belowCost: costCents > 0 && o.retailCents < costCents,
+    };
+  };
+  const rows = [row({
+    unitId: null, name: product.unit || 'piece', kind: 'base', factor: 1, isBase: true,
+    retailCents: retailBase, wholesaleCents: wsBase,
+  })];
+  const units = (product.units || []).filter((u) => u.status !== 'inactive' && pos(u.factor))
+    .slice().sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || b.factor - a.factor);
+  for (const u of units) {
+    const unit = { unit: u, factor: u.factor };
+    rows.push(row({
+      unitId: u._id, name: u.name, kind: u.kind || 'custom', code: u.code || null, factor: u.factor, isBase: false,
+      retailCents: retailUnitPrice(product, variant, unit),
+      wholesaleCents: (wsBase !== null || pos(u.wholesalePrice)) ? wholesaleUnitPrice(product, variant, unit) : null,
+      customRetail: pos(u.retailPrice), customWholesale: pos(u.wholesalePrice),
+    }));
+  }
+  return { baseUnit: product.unit || 'piece', costPerBaseCents: cost, rows };
+}
+
+/** Weighted-average cost per base unit after adding stock: (old x onHand + new x qty) / (onHand + qty). */
+function weightedCost({ onHand = 0, oldCost = 0, addQty = 0, addCost = 0 }) {
+  const have = Math.max(Number(onHand) || 0, 0);
+  const total = have + addQty;
+  if (!(total > 0)) return Math.round(addCost);
+  if (!(have > 0) || !(oldCost > 0)) return Math.round(addCost);
+  return Math.round(((oldCost * have) + (addCost * addQty)) / total);
+}
+
+/**
+ * Plan for breaking stock into sellable sizes. outputs = [{ unit (resolved), count }].
+ * Returns the base quantity used, what is left loose, and what each output piece costs once packaging cost
+ * and (optionally) wastage are shared over the pieces.
+ */
+function planBreakdown({ sourceBase, outputs = [], wastageBase = 0, extraCostCents = 0, costPerBaseCents = 0, absorbWastage = false }) {
+  const src = round3(sourceBase);
+  const waste = round3(wastageBase || 0);
+  const lines = outputs.map((o) => ({ ...o, base: round3(o.count * o.unit.factor) }));
+  const used = round3(lines.reduce((a, l) => a + l.base, 0));
+  const leftover = round3(src - used - waste);
+  const totalPieces = lines.reduce((a, l) => a + l.count, 0);
+  const sourceValue = costPerBaseCents * src;                       // what the stock being broken cost
+  const goodBase = src - waste;                                     // base units that can still be sold
+  // new cost per base unit of the broken stock: wastage is either a separate loss or shared over what is left
+  const newCostPerBase = goodBase > 0
+    ? ((absorbWastage ? sourceValue : costPerBaseCents * goodBase) + (extraCostCents || 0)) / goodBase
+    : costPerBaseCents;
+  const wastageLossCents = absorbWastage ? 0 : Math.round(costPerBaseCents * waste);
+  return {
+    sourceBase: src, usedBase: used, wastageBase: waste, leftoverBase: leftover, totalPieces,
+    newCostPerBaseCents: Math.round(newCostPerBase * 100) / 100, wastageLossCents,
+    lines: lines.map((l) => ({ ...l, costEachCents: Math.round(newCostPerBase * l.unit.factor) })),
+    ok: leftover >= -0.0005 && src > 0,
+  };
+}
+
+/** Handy size sets for a base unit: 'kg' -> 250g, 500g, 1kg, 2kg ... Values are in the BASE unit. */
+function sizePresets(baseUnit) {
+  const b = String(baseUnit || '').toLowerCase();
+  const mk = (arr) => arr.map(([name, factor]) => ({ name, factor, kind: 'size' }));
+  if (b === 'kg') return mk([['250g', 0.25], ['500g', 0.5], ['1kg', 1], ['2kg', 2], ['5kg', 5], ['10kg', 10]]);
+  if (b === 'g') return mk([['100g', 100], ['250g', 250], ['500g', 500], ['1kg', 1000], ['2kg', 2000]]);
+  if (b === 'litre') return mk([['250ml', 0.25], ['500ml', 0.5], ['1 litre', 1], ['2 litre', 2], ['5 litre', 5], ['20 litre', 20]]);
+  if (b === 'ml') return mk([['100ml', 100], ['250ml', 250], ['500ml', 500], ['1 litre', 1000]]);
+  if (b === 'metre') return mk([['Half metre', 0.5], ['2 metre', 2], ['5 metre', 5], ['10 metre', 10]]);
+  return mk([['Pair', 2], ['Half dozen', 6], ['Dozen', 12]]);
+}
+
+/** Fractions of a bulk pack: 1/4, 1/2, 3/4 of a 25kg bag -> factors 6.25, 12.5, 18.75. */
+function fractionPresets(packName, packSize) {
+  const n = packName || 'pack';
+  return [['1/4', 0.25], ['1/2', 0.5], ['3/4', 0.75]].map(([f, k]) => ({ name: `${f} ${n}`, factor: round3(packSize * k), kind: 'fraction' }));
+}
+
+/** Round to the 3 decimals stock is kept in; used for display of per-unit price when the price is fractional cents. */
+const perBasePrice = (priceCents, factor) => (factor > 0 ? Math.round((priceCents / factor) * 100) / 100 : 0);
+
+module.exports = {
+  costPerBase, unitEconomics, weightedCost, planBreakdown, sizePresets, fractionPresets, perBasePrice, round3, resolveUnit, toBase, wholesaleUnitPrice, retailUnitPrice, wholesaleFloorPerBase, evaluateRetailPrice, unitConfigIssues, suggestedRetailPerBase, unitBreakdown };

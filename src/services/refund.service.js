@@ -115,7 +115,7 @@ function userCanApprove(user) {
   // kept here as a plain role check since this runs before the request
   // has been approved by anyone, i.e. it's evaluating the REQUESTER's own
   // standing, not a separate approver.
-  return ['OWNER', 'ADMIN', 'MANAGER'].includes(user.role);
+  return require('../utils/permissionResolver').userHasPermission(user, 'refunds.approve'); // owner-controlled; default OWNER/ADMIN/MANAGER
 }
 
 async function approveRefund(businessId, userId, id) {

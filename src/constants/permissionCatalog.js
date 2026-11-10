@@ -5,6 +5,7 @@
  */
 const { PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } = require('./permissions');
 const { ROLES } = require('./roles');
+const { IMPLIES } = require('./permissionImplications');
 
 const GROUP_LABELS = {
   categories: 'Categories', products: 'Products', inventory: 'Inventory & stock', warehouses: 'Warehouses', batches: 'Batches & expiry',
@@ -39,6 +40,9 @@ const DESCRIPTIONS = {
   'audit.view': 'Read the audit trail',
   'billing.pay': 'Pay the subscription / add-ons',
   'billing.view': 'See subscription amounts',
+  'sales.price_override': 'Change the selling price of an item on the sales screen',
+  'inventory.receive': 'Receive stock into the shop',
+  'purchases.receive': 'Accept a supplier delivery against a purchase',
   'purchases.return': 'Send received purchases back to the supplier and reduce what you owe',
 };
 
@@ -51,7 +55,7 @@ function describe(key) {
   const action = parts.slice(section ? 2 : 1).join(' ');
   return {
     key, group, section: section ? humanize(section) : null, label: humanize(action || group),
-    description: DESCRIPTIONS[key] || null, sensitive: SENSITIVE.has(key),
+    description: DESCRIPTIONS[key] || null, sensitive: SENSITIVE.has(key), requires: IMPLIES[key] || [],
   };
 }
 

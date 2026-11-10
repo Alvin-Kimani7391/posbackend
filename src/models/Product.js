@@ -1,5 +1,6 @@
 const { Schema, model } = require('mongoose');
 const moneyFields = require('../utils/moneySchemaPlugin');
+const { normalizeBarcode, releaseArchivedBarcodes } = require('../utils/barcode');
 
 const PRODUCT_TYPES = ['physical', 'service', 'weighted', 'digital'];
 // RETAIL_FIRST  = classic shop: sellingPrice is the main price, wholesale is an optional MOQ discount.
@@ -17,10 +18,13 @@ const productUnitSchema = new Schema({
   name: { type: String, required: true, trim: true, maxlength: 30 }, // bundle, carton, dozen, 2kg bag...
   code: { type: String, trim: true, maxlength: 12 },
   factor: { type: Number, required: true, min: 0.001 },
-  barcode: { type: String, trim: true },
+  barcode: { type: String, trim: true, set: normalizeBarcode },
   wholesalePrice: { type: Number, min: 0 }, // price of one such unit in the WHOLESALE sale mode
   retailPrice: { type: Number, min: 0 },    // price of one such unit in the RETAIL sale mode
   isWholesaleDefault: { type: Boolean, default: false },
+  // pack = how it is bought (bag, carton); fraction = part of a pack (1/4 bag); size = a fixed selling size (500g, 1kg).
+  kind: { type: String, enum: ['pack', 'fraction', 'size', 'custom'], default: 'custom' },
+  sortOrder: { type: Number, default: 0 },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
 });
 
@@ -31,7 +35,8 @@ const productSchema = new Schema(
 
     name: { type: String, required: true, trim: true },
     sku: { type: String, required: true, trim: true, uppercase: true },
-    barcode: { type: String, trim: true },
+    barcode: { type: String, trim: true, set: normalizeBarcode }, // empty -> not stored ("" used to clash between products)
+    archivedBarcode: { type: String, trim: true },              // barcode an ARCHIVED product gave up (restored on restore if still free)
     description: { type: String, trim: true },
     brand: { type: String, trim: true },
 
@@ -113,6 +118,14 @@ productSchema.pre('validate', function enforceWholesaleConfig(next) {
 productSchema.pre('validate', function expiryImpliesBatch(next) {
   if (this.trackExpiry && !this.trackBatch) this.trackBatch = true;
   return next();
+});
+
+// Archived products must never block a barcode: before saving, archived holders of this barcode (and of any pack barcode) give it up.
+productSchema.pre('save', async function releaseBarcodesFromArchived() {
+  const codes = [];
+  if (this.barcode && (this.isNew || this.isModified('barcode'))) codes.push(this.barcode);
+  if (this.isNew || this.isModified('units')) (this.units || []).forEach((u) => { if (u.barcode) codes.push(u.barcode); });
+  if (codes.length && this.status !== 'archived') await releaseArchivedBarcodes(this.businessId, codes, this.$session && this.$session());
 });
 
 moneyFields(productSchema, ['costPrice', 'sellingPrice', 'wholesalePrice', 'defaultDiscount'], { units: ['wholesalePrice', 'retailPrice'] });

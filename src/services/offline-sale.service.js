@@ -375,10 +375,11 @@ async function ingestOfflineSale(ctx) {
           const r = await applyStockChange({
             businessId, branchId: stockBranchId, location: stockLocation, warehouseId: warehouse ? warehouse._id : null, productId: item.productId, variantId: item.variantId || null,
             quantityDelta: -quantity, type: 'SALE', referenceType: 'Sale', referenceId: saleId,
-            reason: `Offline sale ${receiptNumber}`, performedBy: cashier._id, session, allowNegative: true,
+            reason: `Offline sale ${receiptNumber}`, performedBy: cashier._id, session, clampAtZero: true,
             occurredAt: soldAt,
           });
-          if (r.branchInventory.quantity < 0) txFlags.push(flag('NEGATIVE_STOCK', 'WARN', `${item.nameSnapshot} is now at ${r.branchInventory.quantity}`));
+          // The goods are gone so the sale is accepted, but stock never goes below 0: if the books had less than was sold, the gap is flagged for review.
+          if (r.shortBy > 0) txFlags.push(flag('NEGATIVE_STOCK', 'WARN', `${item.nameSnapshot}: ${quantity} sold but only ${quantity - r.shortBy} on the books. Stock is now 0. Check for stock that was never received.`));
         }
         if (product.trackSerialNumber && item.serialNumbers && item.serialNumbers.length) {
           for (const sn of item.serialNumbers) {
@@ -391,9 +392,14 @@ async function ingestOfflineSale(ctx) {
           }
         }
         if (item.batchId) {
-          const b = await Batch.findOneAndUpdate({ _id: item.batchId, businessId }, { $inc: { quantity: -quantity } }, { session, new: true });
+          // Batch quantity also never goes below 0 (one atomic update that floors at zero); a shortfall is flagged.
+          const before = await Batch.findOneAndUpdate({ _id: item.batchId, businessId }, [{ $set: { quantity: { $max: [0, { $subtract: ['$quantity', quantity] }] } } }], { session, new: false });
+          const b = before ? { ...before.toObject(), quantity: Math.max(0, before.quantity - quantity) } : null;
           if (!b) txFlags.push(flag('BATCH_NOT_FOUND', 'WARN', `Batch for ${item.nameSnapshot} was not found`));
-          else if (b.quantity < 0) txFlags.push(flag('BATCH_SHORT', 'WARN', `Batch for ${item.nameSnapshot} is now negative`));
+          else {
+            if (before.quantity < quantity) txFlags.push(flag('BATCH_SHORT', 'WARN', `Batch for ${item.nameSnapshot} had only ${before.quantity} left, ${quantity} sold`));
+            if (b.quantity <= 0 && before.status === 'active') await Batch.updateOne({ _id: item.batchId, businessId }, { $set: { status: 'depleted' } }, { session });
+          }
           // The goods are gone, so the sale is accepted, but a sale from an expired / held batch must be reviewed.
           if (b && (b.status === 'quarantined' || b.status === 'recalled')) txFlags.push(flag('BATCH_HELD', 'HIGH', `${item.nameSnapshot}: batch ${b.batchNumber} is ${b.status}`));
           else if (b && b.expiryDate && new Date(b.expiryDate) < new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()))) txFlags.push(flag('BATCH_EXPIRED', 'HIGH', `${item.nameSnapshot}: batch ${b.batchNumber} had expired`));

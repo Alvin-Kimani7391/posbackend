@@ -51,9 +51,11 @@ function maxDiscountPercentForRole(role, business) {
 
 /** Whether this user may override a product's price on a sale line. */
 function canOverridePrice(user, business) {
-  if (user.role === ROLES.OWNER || user.role === ROLES.ADMIN || user.role === ROLES.MANAGER) return true;
-  if (user.role === ROLES.CASHIER) return !!business?.settings?.cashierPriceOverride;
-  return false;
+  // The owner's Access control decides (permission 'sales.price_override'); default for OWNER/ADMIN/MANAGER is allowed.
+  if (require('../utils/permissionResolver').userHasPermission(user, 'sales.price_override')) return true;
+  // Older switch in Settings that let cashiers change prices - still honoured unless the owner explicitly denied it.
+  const denied = (user.revokedPermissions || []).includes('sales.price_override');
+  return user.role === ROLES.CASHIER && !denied && !!business?.settings?.cashierPriceOverride;
 }
 
 module.exports = { computeLineItem, computeSaleTotals, maxDiscountPercentForRole, canOverridePrice };

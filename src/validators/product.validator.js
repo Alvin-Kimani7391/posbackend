@@ -33,6 +33,8 @@ const unitInput = z.object({
   wholesalePrice: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.coerce.number().nonnegative().transform(toCents).optional()),
   retailPrice: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.coerce.number().nonnegative().transform(toCents).optional()),
   isWholesaleDefault: z.coerce.boolean().optional(),
+  kind: z.enum(['pack', 'fraction', 'size', 'custom']).optional(),
+  sortOrder: z.coerce.number().int().min(0).max(1000).optional(),
   status: z.enum(['active', 'inactive']).optional(),
 });
 
@@ -73,7 +75,7 @@ const productBase = z.object({
   taxCategory: z.string().trim().optional(),
   unit: z.enum(Product.UNITS).optional(), // BASE unit
   unitValue: z.coerce.number().min(0).max(1000000).optional(), // size of one item in `unit`, e.g. 200 (g)
-  units: z.array(unitInput).max(10).optional(),
+  units: z.array(unitInput).max(24).optional(),
   trackInventory: z.coerce.boolean().optional(),
   trackSerialNumber: z.coerce.boolean().optional(),
   serialKind: z.enum(['serial', 'imei']).optional(),

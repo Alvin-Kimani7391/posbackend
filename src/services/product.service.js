@@ -8,6 +8,7 @@ const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const { wholesaleConfigIssues, wholesaleFirstIssues } = require('../utils/wholesale');
 const { unitConfigIssues } = require('../utils/units');
+const { normalizeBarcode, releaseArchivedBarcodes, findBarcodeOwner } = require('../utils/barcode');
 
 /** Shops and supermarkets can always sell wholesale / use pack units: switch the feature on the first time it is used. */
 const SHOP_TYPES = ['supermarket', 'general_shop'];
@@ -32,13 +33,14 @@ async function assertUnitsAllowed(businessId, units, baseUnit, excludeProductId)
 
 /** A packet / carton barcode is scanned at the till like a product barcode, so it must not clash with any other barcode. */
 async function assertUnitBarcodesFree(businessId, units, excludeProductId) {
-  const codes = (units || []).map((u) => String(u.barcode || '').trim()).filter(Boolean);
+  const codes = (units || []).map((u) => normalizeBarcode(u.barcode)).filter(Boolean);
   if (!codes.length) return;
   if (new Set(codes).size !== codes.length) throw ApiError.badRequest('Two units of this product have the same barcode', 'DUPLICATE_UNIT_BARCODE');
-  const notThis = excludeProductId ? { _id: { $ne: excludeProductId } } : {};
-  const clash = (await Product.findOne({ businessId, ...notThis, $or: [{ barcode: { $in: codes } }, { 'units.barcode': { $in: codes } }] }).select('name').lean())
-    || (await ProductVariant.findOne({ businessId, barcode: { $in: codes } }).select('barcode').lean());
-  if (clash) throw ApiError.conflict(`A packet barcode is already used by ${clash.name ? `"${clash.name}"` : 'another product'}. Use a different barcode.`, 'DUPLICATE_PRODUCT');
+  await releaseArchivedBarcodes(businessId, codes); // archived (deleted) products never block a barcode
+  for (const code of codes) {
+    const owner = await findBarcodeOwner(businessId, code, { excludeProductId });
+    if (owner) throw ApiError.conflict(`A packet barcode is already used by ${owner.name ? `"${owner.name}"` : 'another product'}. Use a different barcode.`, 'DUPLICATE_PRODUCT');
+  }
   // the product's own barcode may not equal its packet barcode either (checked by the caller via the unit list)
 }
 
@@ -156,6 +158,23 @@ async function getProduct(businessId, id, { branchId } = {}) {
   return withVariants;
 }
 
+/**
+ * A MongoDB duplicate-key error happened. Say WHICH field clashed and, for a barcode, WHO owns it - and only claim
+ * "barcode exists" when a live (non-archived) product really holds it. Archived holders were already released.
+ */
+async function throwDuplicate(err, businessId, barcode, excludeProductId, code = 'DUPLICATE_PRODUCT') {
+  const field = Object.keys(err.keyPattern || {}).find((k) => k !== 'businessId') || 'sku/barcode';
+  if (field === 'barcode') {
+    barcode = (err.keyValue && err.keyValue.barcode) || barcode; // the exact value MongoDB rejected (works for variant batches too)
+    const owner = await findBarcodeOwner(businessId, barcode, { excludeProductId }).catch(() => null);
+    if (owner) throw ApiError.conflict(`Barcode ${normalizeBarcode(barcode)} is already used by "${owner.name}". Use a different barcode.`, code);
+    // The holder is archived or a race happened: free it and let the caller simply try again.
+    await releaseArchivedBarcodes(businessId, [barcode]).catch(() => {});
+    throw ApiError.conflict('That barcode was just taken or released - please press Save again.', 'BARCODE_RETRY');
+  }
+  throw ApiError.conflict(`A product with this ${field === 'sku' ? 'SKU' : field} already exists`, code);
+}
+
 async function createProduct(businessId, userId, data) {
   await assertCategoryBelongsToBusiness(businessId, data.categoryId);
   await assertUnitsAllowed(businessId, data.units, data.unit);
@@ -195,16 +214,14 @@ async function createProduct(businessId, userId, data) {
       createdBy: userId,
     });
   } catch (err) {
-    if (err.code === 11000) {
-      const field = Object.keys(err.keyPattern || {}).find((k) => k !== 'businessId') || 'sku/barcode';
-      throw ApiError.conflict(`A product with this ${field} already exists`, 'DUPLICATE_PRODUCT');
-    }
+    if (err.code === 11000) await throwDuplicate(err, businessId, productData.barcode);
     throw err;
   }
 
   let createdVariants = [];
   if (variants && variants.length) {
     try {
+      await releaseArchivedBarcodes(businessId, variants.map((v) => v.barcode));
       createdVariants = await ProductVariant.insertMany(
         variants.map((v) => ({ ...v, businessId, productId: product._id })),
         { ordered: true }
@@ -213,9 +230,7 @@ async function createProduct(businessId, userId, data) {
       // Roll back the just-created product so we don't leave an orphaned
       // "has variants" product with zero actual variants.
       await Product.deleteOne({ _id: product._id });
-      if (err.code === 11000) {
-        throw ApiError.conflict('A variant with this SKU or barcode already exists', 'DUPLICATE_VARIANT');
-      }
+      if (err.code === 11000) await throwDuplicate(err, businessId, null, null, 'DUPLICATE_VARIANT');
       throw err;
     }
   }
@@ -305,9 +320,7 @@ async function updateProduct(businessId, userId, id, updates) {
   try {
     await product.save();
   } catch (err) {
-    if (err.code === 11000) {
-      throw ApiError.conflict('A product with this SKU or barcode already exists', 'DUPLICATE_PRODUCT');
-    }
+    if (err.code === 11000) await throwDuplicate(err, businessId, product.barcode, product._id);
     throw err;
   }
 
@@ -337,9 +350,16 @@ async function archiveProduct(businessId, userId, id) {
   const product = await Product.findOne({ _id: id, businessId });
   if (!product) throw ApiError.notFound('Product not found');
 
+  // An archived ("deleted") product must NOT keep its barcode: it moves to archivedBarcode so the barcode is free at once.
+  if (product.barcode) { product.archivedBarcode = product.barcode; product.barcode = undefined; }
   product.status = 'archived';
   await product.save();
-  await ProductVariant.updateMany({ businessId, productId: id }, { status: 'archived' });
+  const vs = await ProductVariant.find({ businessId, productId: id }).select('_id barcode').lean();
+  for (const v of vs) {
+    await ProductVariant.updateOne({ _id: v._id }, v.barcode
+      ? { $set: { status: 'archived', archivedBarcode: v.barcode }, $unset: { barcode: 1 } }
+      : { $set: { status: 'archived' } });
+  }
 
   await AuditLog.create({ businessId, userId, action: 'product.archive', entityType: 'Product', entityId: product._id });
   return product;
@@ -349,9 +369,23 @@ async function restoreProduct(businessId, userId, id) {
   const product = await Product.findOne({ _id: id, businessId });
   if (!product) throw ApiError.notFound('Product not found');
   if (product.status !== 'archived') return product;
+  if (product.archivedBarcode && !product.barcode) {
+    const owner = await findBarcodeOwner(businessId, product.archivedBarcode, { excludeProductId: product._id });
+    if (!owner) product.barcode = product.archivedBarcode; // still free -> gets it back; otherwise comes back without a barcode
+    product.archivedBarcode = undefined;
+  }
   product.status = 'active';
   await product.save();
-  await ProductVariant.updateMany({ businessId, productId: id, status: 'archived' }, { status: 'active' });
+  const vs = await ProductVariant.find({ businessId, productId: id, status: 'archived' }).select('_id barcode archivedBarcode').lean();
+  for (const v of vs) {
+    const set = { status: 'active' }; const unset = {};
+    if (v.archivedBarcode && !v.barcode) {
+      const owner = await findBarcodeOwner(businessId, v.archivedBarcode, { excludeProductId: undefined, excludeVariantId: v._id });
+      if (!owner) set.barcode = v.archivedBarcode;
+      unset.archivedBarcode = 1;
+    }
+    await ProductVariant.updateOne({ _id: v._id }, Object.keys(unset).length ? { $set: set, $unset: unset } : { $set: set });
+  }
   await AuditLog.create({ businessId, userId, action: 'product.restore', entityType: 'Product', entityId: product._id });
   return product;
 }
@@ -377,7 +411,7 @@ async function addVariant(businessId, userId, productId, data) {
   try {
     variant = await ProductVariant.create({ ...variantData, businessId, productId });
   } catch (err) {
-    if (err.code === 11000) throw ApiError.conflict('A variant with this SKU or barcode already exists', 'DUPLICATE_VARIANT');
+    if (err.code === 11000) await throwDuplicate(err, businessId, variantData.barcode, null, 'DUPLICATE_VARIANT');
     throw err;
   }
 
@@ -412,7 +446,7 @@ async function updateVariant(businessId, userId, productId, variantId, updates) 
   try {
     await variant.save();
   } catch (err) {
-    if (err.code === 11000) throw ApiError.conflict('A variant with this SKU or barcode already exists', 'DUPLICATE_VARIANT');
+    if (err.code === 11000) await throwDuplicate(err, businessId, variant.barcode, null, 'DUPLICATE_VARIANT');
     throw err;
   }
 
@@ -424,6 +458,7 @@ async function archiveVariant(businessId, userId, productId, variantId) {
   const variant = await ProductVariant.findOne({ _id: variantId, businessId, productId });
   if (!variant) throw ApiError.notFound('Variant not found');
 
+  if (variant.barcode) { variant.archivedBarcode = variant.barcode; variant.barcode = undefined; } // free the barcode at once
   variant.status = 'archived';
   await variant.save();
 
@@ -467,6 +502,19 @@ async function lookupByBarcode(businessId, barcode) {
   }
 
   throw ApiError.notFound('No product found for this barcode', 'BARCODE_NOT_FOUND');
+}
+
+/**
+ * AUTHORITATIVE barcode check used by every "Add product" window (Products page, Sales page, Quick add, inventory).
+ * Always answers 200 with { exists, ... } - never a 404 - and only counts LIVE products, pack units and variants.
+ * excludeProductId / excludeVariantId = the record being edited (a barcode is never a duplicate of itself).
+ */
+async function checkBarcode(businessId, barcode, { excludeProductId, excludeVariantId } = {}) {
+  const code = normalizeBarcode(barcode);
+  if (!code) return { exists: false, barcode: '' };
+  await releaseArchivedBarcodes(businessId, [code]); // self-heal: a deleted product can never keep a barcode blocked
+  const owner = await findBarcodeOwner(businessId, code, { excludeProductId, excludeVariantId });
+  return owner ? { exists: true, barcode: code, ...owner } : { exists: false, barcode: code };
 }
 
 async function lookupBySku(businessId, sku) {
@@ -522,5 +570,6 @@ module.exports = {
   updateVariant,
   archiveVariant,
   lookupByBarcode,
+  checkBarcode,
   lookupBySku,
 };

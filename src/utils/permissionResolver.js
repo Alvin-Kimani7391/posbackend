@@ -17,6 +17,7 @@
  */
 const { PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } = require('../constants/permissions');
 const { ROLES } = require('../constants/roles');
+const { IMPLIES } = require('../constants/permissionImplications');
 
 const ALL = new Set(PERMISSIONS);
 
@@ -67,10 +68,25 @@ function computeEffective(user, policy) {
   if (user.role === ROLES.OWNER) return new Set(ALL);
   if (user.role === ROLES.SUPER_ADMIN) return new Set();
   const set = new Set();
-  for (const layer of layersFor(user, policy)) {
+  const layers = layersFor(user, policy);
+  for (const layer of layers) {
     // remove first, then add: within one layer an explicit grant beats an explicit revoke (validators keep them disjoint anyway)
     for (const p of layer.remove) set.delete(p);
     for (const p of layer.add) set.add(p);
+  }
+  return withImplied(set, layers);
+}
+
+/** Adds prerequisites of everything allowed (to a fixpoint) unless that prerequisite was explicitly denied by the owner. */
+function withImplied(set, layers) {
+  const denied = new Set();
+  layers.forEach((l) => { if (l.type !== 'system') l.remove.forEach((p) => denied.add(p)); });
+  const queue = [...set];
+  while (queue.length) {
+    const p = queue.pop();
+    for (const need of IMPLIES[p] || []) {
+      if (!set.has(need) && !denied.has(need)) { set.add(need); queue.push(need); }
+    }
   }
   return set;
 }
@@ -82,6 +98,7 @@ function computeEffective(user, policy) {
 function explain(user, policy, keys = PERMISSIONS) {
   const owner = user.role === ROLES.OWNER;
   const layers = owner ? [] : layersFor(user, policy);
+  const full = owner ? new Set() : computeEffective(user, policy);
   return keys.map((permission) => {
     if (owner) return { permission, allowed: true, byDefault: true, source: { type: 'owner', label: 'Owner has full access' } };
     let allowed = false; let source = null; const byDefault = layers[0].add.includes(permission);
@@ -90,6 +107,11 @@ function explain(user, policy, keys = PERMISSIONS) {
       if (l.add.includes(permission)) { allowed = true; source = { type: l.type, label: l.label, effect: 'allow' }; }
     }
     return { permission, allowed, byDefault, source };
+  }).map((row) => {
+    if (row.allowed || owner) return row;
+    if (!full.has(row.permission)) return row; // not allowed at all
+    const needer = [...full].find((o) => (IMPLIES[o] || []).includes(row.permission));
+    return { ...row, allowed: true, source: { type: 'implied', label: needer ? `Needed for “${needer}”` : 'Needed by another permission', effect: 'allow' } };
   });
 }
 
@@ -116,4 +138,4 @@ function hasNonDefaultGrant(user, permission) {
   return !(DEFAULT_ROLE_PERMISSIONS[user.role] || []).includes(permission);
 }
 
-module.exports = { computeEffective, explain, effectiveFor, userHasPermission, hasNonDefaultGrant, layersFor, modeOf, cachePolicy, cachedPolicy, ALL };
+module.exports = { IMPLIES, computeEffective, explain, effectiveFor, userHasPermission, hasNonDefaultGrant, layersFor, modeOf, cachePolicy, cachedPolicy, ALL };

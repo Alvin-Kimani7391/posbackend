@@ -103,7 +103,8 @@ async function listWarehouseInventory(businessId, branchId, { page = 1, limit = 
   let rows = await WarehouseInventory.find(filter).populate('productId', 'name sku barcode image unit units costPrice').populate('warehouseId', 'name code').sort({ updatedAt: -1 });
   if (search) {
     const re = new RegExp(escapeRe(search), 'i');
-    rows = rows.filter((r) => re.test(r.productId?.name || '') || re.test(r.productId?.sku || ''));
+    rows = rows.filter((r) => re.test(r.productId?.name || '') || re.test(r.productId?.sku || '') || re.test(r.productId?.barcode || '')
+      || (r.productId?.units || []).some((u) => u.barcode && re.test(u.barcode)));
   }
   if (lowStockOnly) rows = rows.filter((r) => r.quantity - r.reservedQuantity <= (r.lowStockThreshold ?? 5));
   const total = rows.length;
@@ -401,13 +402,13 @@ async function stockOverview(businessId, branchId, { page = 1, limit = 20, searc
   retail.forEach((r) => { slot(r).retailQuantity = r.quantity; });
   warehouse.forEach((r) => { const s = slot(r); s.warehouseQuantity = round3(s.warehouseQuantity + r.quantity); s.warehouses.push({ warehouseId: r.warehouseId || null, quantity: r.quantity }); });
   let rows = [...map.values()];
-  const products = await Product.find({ businessId, _id: { $in: [...new Set(rows.map((r) => String(r.productId)))] } }).select('name sku costPrice unit units').lean();
+  const products = await Product.find({ businessId, _id: { $in: [...new Set(rows.map((r) => String(r.productId)))] } }).select('name sku barcode costPrice unit units').lean();
   const byId = new Map(products.map((p) => [String(p._id), p]));
   rows = rows.map((r) => {
     const p = byId.get(String(r.productId));
-    return { ...r, name: p?.name, sku: p?.sku, baseUnit: p?.unit, totalQuantity: round3(r.retailQuantity + r.warehouseQuantity), costPrice: p?.costPrice || 0 };
+    return { ...r, name: p?.name, sku: p?.sku, barcode: p?.barcode, packBarcodes: (p?.units || []).map((u) => u.barcode).filter(Boolean), baseUnit: p?.unit, totalQuantity: round3(r.retailQuantity + r.warehouseQuantity), costPrice: p?.costPrice || 0 };
   });
-  if (search) { const re = new RegExp(escapeRe(search), 'i'); rows = rows.filter((r) => re.test(r.name || '') || re.test(r.sku || '')); }
+  if (search) { const re = new RegExp(escapeRe(search), 'i'); rows = rows.filter((r) => re.test(r.name || '') || re.test(r.sku || '') || re.test(r.barcode || '') || (r.packBarcodes || []).some((b) => re.test(b))); }
   rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
   const totals = rows.reduce((t, r) => ({
     retailUnits: t.retailUnits + r.retailQuantity, warehouseUnits: t.warehouseUnits + r.warehouseQuantity,

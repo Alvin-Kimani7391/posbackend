@@ -9,7 +9,12 @@ const Business = require('../models/Business');
 const AuditLog = require('../models/AuditLog');
 const ApiError = require('../utils/ApiError');
 const notificationService = require('./notification.service');
-const { resolveUnit, round3, unitBreakdown } = require('../utils/units');
+const Category = require('../models/Category');
+const { resolveUnit, round3, unitBreakdown, weightedCost } = require('../utils/units');
+
+const escapeRegex = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const oid = (v) => new mongoose.Types.ObjectId(String(v));
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** Quantity entered in any unit of the product (2 bundles) -> BASE units (48 packets). Stock is always base units. */
 async function toBaseQuantity(businessId, product, quantity, unitId) {
@@ -55,8 +60,8 @@ async function applyStockChange({
   businessId, branchId, productId, variantId = null,
   quantityDelta, type, referenceType, referenceId, reason, performedBy,
   session, allowNegative = false, occurredAt = undefined, location = 'RETAIL', warehouseId = null,
+  clampAtZero = false, // NEVER-NEGATIVE: take only what is really on hand (never below 0). The shortfall is reported in the result (shortBy) and written on the ledger row. For flows that must not be blocked (goods already left the shop) but must not produce negative stock.
   fromReserved = false, // consuming units that were reserved (layaway): takes them out of quantity AND reservedQuantity (retail stock only)
-  movementSink = null, // SPEED: when an array is passed, the movement row is pushed here instead of written now, so the caller can write ALL of them in ONE insert
 }) {
   if (!session) throw new Error('applyStockChange requires an active mongoose session');
   if (!quantityDelta) throw new Error('applyStockChange requires a non-zero quantityDelta');
@@ -72,6 +77,21 @@ async function applyStockChange({
     insertOnly = { branchId };
   }
   let updated;
+  let shortBy = 0;
+
+  // NEVER-NEGATIVE floor: work out how much can really be taken; the atomic conditional decrement below then applies it.
+  if (clampAtZero && !allowNegative && !fromReserved && quantityDelta < 0) {
+    const current = await Inventory.findOne(filter).session(session);
+    const onHand = Math.max(0, num(current?.quantity) - num(current?.reservedQuantity));
+    const take = Math.min(-quantityDelta, onHand);
+    shortBy = round3(-quantityDelta - take);
+    if (take <= 0) {
+      // Nothing on hand: stock stays at its level, no movement can be written for a zero change.
+      return { branchInventory: current || { _id: null, quantity: 0, reservedQuantity: 0 }, movement: null, shortBy, appliedDelta: 0 };
+    }
+    quantityDelta = -take;
+    if (shortBy > 0) reason = `${reason ? `${reason} ` : ''}(stock record was short by ${shortBy}; only ${take} could be deducted)`;
+  }
 
   if (fromReserved) {
     if (quantityDelta >= 0 || location !== 'RETAIL') throw new Error('fromReserved only applies to a retail decrement');
@@ -98,7 +118,7 @@ async function applyStockChange({
 
     if (!updated) {
       const existing = await Inventory.findOne(filter).session(session);
-      const available = existing ? existing.quantity - existing.reservedQuantity : 0;
+      const available = existing ? existing.quantity - num(existing.reservedQuantity) : 0;
       throw ApiError.badRequest(
         `Insufficient ${location === 'WAREHOUSE' ? 'warehouse' : 'retail'} stock (available: ${available}, requested: ${-quantityDelta})`,
         'INSUFFICIENT_STOCK'
@@ -108,10 +128,10 @@ async function applyStockChange({
 
   const previousStock = updated.quantity - quantityDelta;
 
-  const movementDoc = { businessId, branchId, productId, variantId, location, warehouseId: location === 'WAREHOUSE' ? warehouseId : undefined, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy };
-  let movement = null;
-  if (movementSink) movementSink.push(movementDoc);
-  else [movement] = await InventoryMovement.create([movementDoc], { session });
+  const [movement] = await InventoryMovement.create(
+    [{ businessId, branchId, productId, variantId, location, warehouseId: location === 'WAREHOUSE' ? warehouseId : undefined, type, quantity: quantityDelta, previousStock, newStock: updated.quantity, referenceType, referenceId, reason, createdAt: occurredAt, performedBy }],
+    { session }
+  );
 
   // Low/out-of-stock alert - fires only the moment stock CROSSES the
   // threshold going down, not on every sale while it stays low. Fired
@@ -137,7 +157,7 @@ async function applyStockChange({
     }
   }
 
-  return { branchInventory: updated, movement };
+  return { branchInventory: updated, movement, shortBy, appliedDelta: quantityDelta };
 }
 
 /**
@@ -182,33 +202,57 @@ async function getStockLevel(businessId, branchId, productId, variantId = null, 
     const filter = warehouseId ? { businessId, warehouseId, productId, variantId } : { businessId, branchId, productId, variantId };
     const rows = await WarehouseInventory.find(filter);
     const quantity = rows.reduce((s, r) => s + r.quantity, 0);
-    const reservedQuantity = rows.reduce((s, r) => s + r.reservedQuantity, 0);
+    const reservedQuantity = rows.reduce((s, r) => s + num(r.reservedQuantity), 0);
     return { quantity, reservedQuantity, availableQuantity: quantity - reservedQuantity };
   }
   const row = await BranchInventory.findOne({ businessId, branchId, productId, variantId });
   return { quantity: row?.quantity || 0, reservedQuantity: row?.reservedQuantity || 0, availableQuantity: (row?.quantity || 0) - (row?.reservedQuantity || 0) };
 }
 
-async function listBranchInventory(businessId, branchId, { page, limit, search, lowStockOnly, outOfStockOnly }) {
-  const filter = { businessId, branchId };
-  if (outOfStockOnly) filter.quantity = { $lte: 0 };
+async function listBranchInventory(businessId, branchId, { page = 1, limit = 20, search, categoryId, lowStockOnly, outOfStockOnly } = {}) {
+  page = Math.max(1, Number(page) || 1); limit = Math.min(200, Math.max(1, Number(limit) || 20));
+  const match = { businessId: oid(businessId), branchId: oid(branchId) };
 
-  let rows = await BranchInventory.find(filter).populate('productId', 'name sku barcode image unit units').sort({ updatedAt: -1 });
-
+  // Everything (search, category, low / out of stock) is done in the database and the order is STABLE (product name, then id).
+  // The old list was sorted by "last changed", so every sale re-shuffled the rows between pages and products seemed to
+  // vanish from one page and appear twice on another. Now a row only moves when its product is renamed.
+  const after = [];
+  if (categoryId) after.push({ 'product.categoryId': oid(categoryId) });
   if (search) {
-    const re = new RegExp(search, 'i');
-    rows = rows.filter((r) => re.test(r.productId?.name || '') || re.test(r.productId?.sku || ''));
+    const rx = new RegExp(escapeRegex(search), 'i');
+    after.push({ $or: [{ 'product.name': rx }, { 'product.sku': rx }, { 'product.barcode': rx }] });
   }
+  if (outOfStockOnly) after.push({ quantity: { $lte: 0 } });
+  if (lowStockOnly) after.push({ $expr: { $lte: ['$available', '$threshold'] } });
 
-  // Low stock is evaluated per-row against either the row's own threshold or
-  // the product's default, so it's applied after the DB query.
-  if (lowStockOnly) {
-    rows = rows.filter((r) => r.quantity - r.reservedQuantity <= (r.lowStockThreshold ?? 5));
-  }
-
-  const total = rows.length;
-  const paged = rows.slice((page - 1) * limit, (page - 1) * limit + limit);
-  const items = paged.map((r) => { const o = r.toObject(); o.inUnits = unitBreakdown(r.productId, r.quantity); return o; }); // same stock also shown per bundle/carton
+  const pipeline = [
+    { $match: match },
+    { $lookup: { from: Product.collection.name, localField: 'productId', foreignField: '_id', as: 'product' } },
+    { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+    { $addFields: {
+      reservedQuantity: { $ifNull: ['$reservedQuantity', 0] },
+      available: { $subtract: [{ $ifNull: ['$quantity', 0] }, { $ifNull: ['$reservedQuantity', 0] }] },
+      threshold: { $ifNull: ['$lowStockThreshold', 5] },
+      nameKey: { $toLower: { $ifNull: ['$product.name', '~'] } },
+    } },
+    ...(after.length ? [{ $match: { $and: after } }] : []),
+    { $facet: {
+      items: [{ $sort: { nameKey: 1, _id: 1 } }, { $skip: (page - 1) * limit }, { $limit: limit }],
+      total: [{ $count: 'n' }],
+    } },
+  ];
+  const [res] = await BranchInventory.aggregate(pipeline);
+  const total = res?.total?.[0]?.n || 0;
+  const items = (res?.items || []).map((r) => {
+    const p = r.product;
+    return {
+      _id: r._id, businessId: r.businessId, branchId: r.branchId, variantId: r.variantId || null,
+      quantity: num(r.quantity), reservedQuantity: num(r.reservedQuantity), availableQuantity: r.available, lowStockThreshold: r.threshold,
+      createdAt: r.createdAt, updatedAt: r.updatedAt,
+      productId: p ? { _id: p._id, name: p.name, sku: p.sku, barcode: p.barcode, image: p.image, unit: p.unit, units: p.units, categoryId: p.categoryId } : r.productId,
+      inUnits: unitBreakdown(p, num(r.quantity)), // same stock also shown per bundle/carton
+    };
+  });
   return { items, total, page, limit, pages: Math.ceil(total / limit) || 1 };
 }
 
@@ -217,32 +261,76 @@ async function getLowStockAlerts(businessId, branchId) {
   if (branchId) filter.branchId = branchId;
 
   const rows = await BranchInventory.find(filter).populate('productId', 'name sku').populate('branchId', 'name');
-  const low = rows.filter((r) => r.quantity - r.reservedQuantity <= (r.lowStockThreshold ?? 5) && r.quantity > 0);
+  const avail = (r) => num(r.quantity) - num(r.reservedQuantity); // a row without reservedQuantity must not turn into NaN (it would silently drop out of the alerts)
+  const low = rows.filter((r) => avail(r) <= (r.lowStockThreshold ?? 5) && r.quantity > 0);
   const out = rows.filter((r) => r.quantity <= 0);
   return { lowStock: low, outOfStock: out, lowStockCount: low.length, outOfStockCount: out.length };
 }
 
-async function getMovements(businessId, { branchId, productId, variantId, type, location, page, limit }) {
-  const filter = { businessId };
-  if (branchId) filter.branchId = branchId;
-  if (productId) filter.productId = productId;
-  if (variantId) filter.variantId = variantId;
+/** A category and all the categories below it (so "Drinks" also shows its sub-categories). */
+async function categoryTreeIds(businessId, categoryId) {
+  const ids = new Set([String(categoryId)]);
+  let frontier = [String(categoryId)];
+  for (let depth = 0; depth < 6 && frontier.length; depth += 1) {
+    const kids = await Category.find({ businessId, parentCategoryId: { $in: frontier.map(oid) } }).select('_id').lean();
+    frontier = kids.map((k) => String(k._id)).filter((id) => !ids.has(id));
+    frontier.forEach((id) => ids.add(id));
+  }
+  return [...ids].map(oid);
+}
+
+/**
+ * Stock movement history with filters: branch, one product (or variant), a category (with its sub-categories), a text search on
+ * product name / SKU / barcode, movement type, stock location and a date range (from / to). Newest first with a stable order.
+ * Also returns totals for the WHOLE filtered result (not just the page): units in, units out, net and the number of movements.
+ */
+async function getMovements(businessId, { branchId, productId, variantId, categoryId, search, type, location, from, to, page = 1, limit = 20 } = {}) {
+  page = Math.max(1, Number(page) || 1); limit = Math.min(200, Math.max(1, Number(limit) || 20));
+  const filter = { businessId: oid(businessId) };
+  if (branchId) filter.branchId = oid(branchId);
+  if (variantId) filter.variantId = oid(variantId);
   if (type) filter.type = type;
   // Old rows have no location = RETAIL.
   if (location === 'RETAIL') filter.location = { $ne: 'WAREHOUSE' };
   else if (location === 'WAREHOUSE') filter.location = 'WAREHOUSE';
 
-  const [items, total] = await Promise.all([
+  const fromD = from ? new Date(from) : null;
+  const toD = to ? new Date(to) : null;
+  if ((fromD && !Number.isNaN(fromD.getTime())) || (toD && !Number.isNaN(toD.getTime()))) {
+    filter.createdAt = {};
+    if (fromD && !Number.isNaN(fromD.getTime())) filter.createdAt.$gte = fromD;
+    if (toD && !Number.isNaN(toD.getTime())) filter.createdAt.$lte = toD;
+  }
+
+  // product / category / search all narrow down to a list of product ids
+  let productIds = productId ? [oid(productId)] : null;
+  if (categoryId || search) {
+    const pf = { businessId: oid(businessId) };
+    if (categoryId) pf.categoryId = { $in: await categoryTreeIds(businessId, categoryId) };
+    if (search) { const rx = new RegExp(escapeRegex(search), 'i'); pf.$or = [{ name: rx }, { sku: rx }, { barcode: rx }]; }
+    const found = (await Product.find(pf).select('_id').limit(5000).lean()).map((x) => x._id);
+    if (productIds) { const keep = new Set(found.map(String)); productIds = productIds.filter((id) => keep.has(String(id))); } else productIds = found;
+  }
+  if (productIds) filter.productId = { $in: productIds };
+
+  const [items, total, sums] = await Promise.all([
     InventoryMovement.find(filter)
-      .populate('productId', 'name sku')
+      .populate('productId', 'name sku categoryId')
       .populate('performedBy', 'name')
-      .sort({ createdAt: -1 })
+      .populate('warehouseId', 'name')
+      .sort({ createdAt: -1, _id: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
     InventoryMovement.countDocuments(filter),
+    InventoryMovement.aggregate([
+      { $match: filter },
+      { $group: { _id: null, unitsIn: { $sum: { $cond: [{ $gt: ['$quantity', 0] }, '$quantity', 0] } }, unitsOut: { $sum: { $cond: [{ $lt: ['$quantity', 0] }, '$quantity', 0] } } } },
+    ]),
   ]);
 
-  return { items, total, page, limit, pages: Math.ceil(total / limit) };
+  const unitsIn = round3(sums[0]?.unitsIn || 0);
+  const unitsOut = round3(Math.abs(sums[0]?.unitsOut || 0));
+  return { items, total, page, limit, pages: Math.ceil(total / limit) || 1, summary: { count: total, unitsIn, unitsOut, net: round3(unitsIn - unitsOut) } };
 }
 
 /** Manual stock adjustment (storekeeper correcting a count, marking damage/loss, etc). Runs its own transaction. */
@@ -286,7 +374,7 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
  * purchase.service and calls applyStockChange directly within its own
  * transaction so it can also update the supplier balance atomically.
  */
-async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, unitId, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL' }) {
+async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, unitId, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL', updateCost = true }) {
   const product = await assertItemExists(businessId, productId, variantId);
   { // unit conversion: 10 bundles @ 1,200 -> 240 packets @ 50
     const c = await toBaseQuantity(businessId, product, quantity, unitId);
@@ -335,8 +423,24 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
         }
       }
 
+      // Cost follows the stock: 1 bag (25 kg) received at 3,000 makes the kg cost 120. The product's cost per BASE unit
+      // becomes the weighted average of what was on hand and what just arrived, so unit / fraction profit stays exact.
+      if (updateCost && costPrice != null && costPrice > 0) {
+        const holder = variantId ? await ProductVariant.findOne({ _id: variantId, businessId }).session(session) : product;
+        if (holder) {
+          const other = await getStockLevel(businessId, branchId, productId, variantId || null, location === 'WAREHOUSE' ? 'RETAIL' : 'WAREHOUSE').catch(() => ({ quantity: 0 }));
+          const prevOnHand = (result.branchInventory.quantity - Math.abs(quantity)) + (other.quantity || 0);
+          const next = weightedCost({ onHand: prevOnHand, oldCost: holder.costPrice || 0, addQty: Math.abs(quantity), addCost: costPrice });
+          if (next !== holder.costPrice) {
+            result.costUpdate = { from: holder.costPrice || 0, to: next };
+            holder.costPrice = next;
+            await holder.save({ session });
+          }
+        }
+      }
+
       await AuditLog.create(
-        [{ businessId, branchId, userId, action: 'inventory.receive', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { quantity, location } }],
+        [{ businessId, branchId, userId, action: 'inventory.receive', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { quantity, location, ...(result.costUpdate ? { costPerBase: result.costUpdate } : {}) } }],
         { session }
       );
     });

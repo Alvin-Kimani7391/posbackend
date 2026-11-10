@@ -178,7 +178,7 @@ async function approveStocktake(businessId, user, id, { rejectLineIds = [], note
       await applyStockChange({
         businessId, branchId: doc.branchId, productId: line.productId, variantId: line.variantId || null,
         quantityDelta: delta, type: delta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT', referenceType: 'Stocktake', referenceId: doc._id,
-        reason, performedBy: user._id, session, allowNegative: true,
+        reason, performedBy: user._id, session, clampAtZero: true, // a count can never leave stock below 0
       });
       line.decision = 'APPROVED';
       net += line.varianceValue;

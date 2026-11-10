@@ -29,7 +29,9 @@ exports.catalog = catchAsync(async (req, res) => {
 exports.stockLevels = catchAsync(async (req, res) => {
   const ids = String(req.query.ids || '').split(',').map((x) => x.trim()).filter(Boolean);
   const stock = await productService.stockLevels(req.businessId, ids, req.query.branchId || undefined);
-  return sendSuccess(res, 200, 'Stock fetched', { stock });
+  // The till uses this to warn at add-to-cart time. A business that allows negative stock is never warned.
+  const biz = await require('../models/Business').findById(req.businessId).select('settings.allowNegativeStock').lean();
+  return sendSuccess(res, 200, 'Stock fetched', { stock, allowNegativeStock: !!biz?.settings?.allowNegativeStock });
 });
 
 exports.getOne = catchAsync(async (req, res) => {
@@ -60,6 +62,14 @@ exports.restore = catchAsync(async (req, res) => {
 exports.lookupByBarcode = catchAsync(async (req, res) => {
   const result = await productService.lookupByBarcode(req.businessId, req.params.barcode);
   return sendSuccess(res, 200, 'Product found', result);
+});
+
+exports.checkBarcode = catchAsync(async (req, res) => {
+  const result = await productService.checkBarcode(req.businessId, req.params.barcode, {
+    excludeProductId: req.query.excludeProductId || undefined,
+    excludeVariantId: req.query.excludeVariantId || undefined,
+  });
+  return sendSuccess(res, 200, result.exists ? 'Barcode is in use' : 'Barcode is free', result);
 });
 
 exports.lookupBySku = catchAsync(async (req, res) => {

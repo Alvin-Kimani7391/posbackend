@@ -18,6 +18,7 @@ router.use(authenticate);
 
 // Static lookup routes MUST come before the /:id routes so "barcode"/"sku"
 // aren't parsed as a product id.
+router.get('/barcode-check/:barcode', requirePermission('products.view'), validate({ params: barcodeParamSchema }), controller.checkBarcode);
 router.get('/barcode/:barcode', requirePermission('products.view'), validate({ params: barcodeParamSchema }), controller.lookupByBarcode);
 router.get('/sku/:sku', requirePermission('products.view'), validate({ params: skuParamSchema }), controller.lookupBySku);
 
