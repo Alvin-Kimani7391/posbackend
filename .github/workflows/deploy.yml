@@ -276,6 +276,6 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "sixstar@$VPS_HOST" \
-            "bash /var/www/sixstar-pos/deployment/deploy.sh '$RELEASE' '${{ github.sha }}' '${{ github.actor }}'"
+            "bash /var/www/sixstar-pos/deployment/deploy.sh '$RELEASE' '${{ github.sha }}' '${{ github.actor }}' --no-switch"
 
           echo "PRODUCTION DEPLOYMENT COMMAND COMPLETED."
