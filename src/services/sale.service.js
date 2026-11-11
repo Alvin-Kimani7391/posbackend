@@ -168,6 +168,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
     const wsFloor = wholesaleFloorPerBase(product, variant);
     const wholesaleValueSnapshot = wsFloor ? Math.round(wsFloor * unit.factor) : undefined; // what one sold unit is worth at wholesale
 
+    const catalogUnitPrice = unitPrice; // what the system would have charged, kept so the owner can be told about any change
     if (rawItem.overridePrice !== undefined && rawItem.overridePrice !== null) {
       if (!opts.trustedPrices && !canOverridePrice(cashierUser, business)) {
         throw ApiError.forbidden('You are not allowed to override prices', 'PRICE_OVERRIDE_DENIED');
@@ -228,7 +229,7 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
       refundedQuantity: 0,
       batchId: rawItem.batchId || undefined,
       serialNumbers: (rawItem.serialNumbers || []).map(normalizeSerial),
-      _meta: { product, variant, quantity: rawItem.quantity, baseQuantity, grossLineTotal: computed.grossLineTotal, discountApplied: discount },
+      _meta: { product, variant, quantity: rawItem.quantity, baseQuantity, grossLineTotal: computed.grossLineTotal, discountApplied: discount, catalogUnitPrice },
     });
   }
 
@@ -519,6 +520,17 @@ async function createSale(businessId, branchId, cashierUser, payload, opts = {})
     // SPEED: the audit row is written AFTER the commit, off the cashier's path (it was a round trip inside the transaction).
     AuditLog.create([{ businessId, branchId, userId: cashierUser._id, action: 'sale.create', entityType: 'Sale', entityId: result.sale._id, newValue: { receiptNumber: result.sale.receiptNumber, total: totals.total, paymentStatus } }])
       .catch((auditErr) => console.error('[audit] sale.create failed', auditErr.message));
+
+    // Tell the owner when someone other than the owner changed a selling price on this sale (never blocks the sale).
+    if (!opts.trustedPrices && cashierUser.role !== 'OWNER' && !result.replayed) {
+      const changed = builtItems
+        .filter((i) => i.priceType === PRICE_TYPES.OVERRIDE && i._meta.catalogUnitPrice !== i.unitPrice)
+        .map((i) => ({ name: i.nameSnapshot, quantity: i.quantity, unitName: i.unitName, originalUnitPrice: i._meta.catalogUnitPrice, newUnitPrice: i.unitPrice, costPrice: i.costPriceSnapshot }));
+      if (changed.length) {
+        notificationService.notifyPriceOverride(businessId, branchId, result.sale, cashierUser, changed)
+          .catch((err) => console.error('notifyPriceOverride failed', err));
+      }
+    }
 
     // Start eTIMS processing only after the sale transaction commits (skipped entirely when eTIMS is off).
     if (etimsActive !== false) etimsService.kickForSale(businessId, result.sale._id);

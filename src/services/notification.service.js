@@ -269,6 +269,35 @@ async function notifySaleCancelled(businessId, branchId, sale, cashier) {
   });
 }
 
+/**
+ * A cashier (or any non-owner) changed the selling price of one or more items on a sale.
+ * Tells the owner / admins / managers (never the person who did it): who, which receipt, each item's catalogue price
+ * vs the price charged, and how much the change cost or earned. Escalates to CRITICAL if anything was sold below cost.
+ * lines: [{ name, quantity, unitName, originalUnitPrice, newUnitPrice, costPrice }]  (all money in cents, per sold unit)
+ */
+async function notifyPriceOverride(businessId, branchId, sale, cashier, lines) {
+  if (!lines || !lines.length) return [];
+  const nctx = await notifCtx(businessId);
+  const who = cashier?.name || 'A cashier';
+  const diff = lines.reduce((s, l) => s + Math.round((l.newUnitPrice - l.originalUnitPrice) * l.quantity), 0);
+  const belowCost = lines.some((l) => l.costPrice != null && l.newUnitPrice < l.costPrice);
+  const shown = lines.slice(0, 3).map((l) => `${l.name}: ${nctx.fmt(l.originalUnitPrice)} → ${nctx.fmt(l.newUnitPrice)}`).join('; ');
+  const more = lines.length > 3 ? ` (+${lines.length - 3} more)` : '';
+  const effect = diff < 0 ? `${nctx.fmt(-diff)} less than list price` : diff > 0 ? `${nctx.fmt(diff)} more than list price` : 'no change in total';
+  const recipients = await User.find({
+    businessId, status: 'active', role: { $in: MANAGEMENT_ROLES }, ...(cashier?._id ? { _id: { $ne: cashier._id } } : {}),
+  }).select('_id');
+  if (!recipients.length) return [];
+  const base = {
+    businessId, branchId, type: 'PRICE_OVERRIDE', severity: belowCost ? 'critical' : 'warning',
+    title: `Price changed on receipt ${sale.receiptNumber}`,
+    message: `${who} changed the price of ${lines.length === 1 ? 'an item' : `${lines.length} items`} — ${shown}${more}. Sale total ${effect}.${belowCost ? ' Sold BELOW COST.' : ''}`,
+    sourceUserId: cashier?._id, entityType: 'Sale', entityId: sale._id,
+    data: { receiptNumber: sale.receiptNumber, total: sale.total, difference: diff, belowCost, cashierName: who, lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, unitName: l.unitName, originalUnitPrice: l.originalUnitPrice, newUnitPrice: l.newUnitPrice })) },
+  };
+  return Notification.insertMany(recipients.map((u) => ({ ...base, userId: u._id })));
+}
+
 /** A receipt QR code that matches no sale was scanned: tell owner / admin / manager (the theft signal). */
 async function notifyFakeReceipt(businessId, scanner, { inputHint, branchId } = {}) {
   const nctx = await notifCtx(businessId);
@@ -547,6 +576,7 @@ module.exports = {
   notifyShiftClosed,
   notifyShortagePayment,
   notifySaleCancelled,
+  notifyPriceOverride,
   notifyFakeReceipt,
   notifyTransferRequested,
   notifyStockLevel,
