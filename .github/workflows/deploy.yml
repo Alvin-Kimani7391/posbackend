@@ -1,10 +1,17 @@
-
 name: CI / Staging / Production
 
 on:
   push:
     branches: [main, staging]
   pull_request: {}
+  workflow_dispatch:   # NEW: the "Push to production" button in the staging dashboard starts this
+    inputs:
+      release:
+        description: "Tested staging release id to push to production"
+        required: true
+      requested_by:
+        description: "Who pressed the button"
+        required: false
 
 permissions:
   contents: read
@@ -18,6 +25,7 @@ jobs:
   # 1. CONTINUOUS INTEGRATION
   # ==========================================
   test:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
@@ -215,6 +223,17 @@ jobs:
             release.tar.gz \
             "sixstar@$VPS_HOST:/var/www/sixstar-pos/incoming/$RELEASE.tar.gz"
 
+          echo "========== SAVE CHECKSUM (lets production prove it deploys this exact tested file) =========="
+
+          echo "$(cut -d' ' -f1 release.sha256)  $RELEASE.tar.gz" > "$RELEASE.sha256"
+
+          scp \
+            -i ~/.ssh/id \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$RELEASE.sha256" \
+            "sixstar@$VPS_HOST:/var/www/sixstar-pos/incoming/$RELEASE.sha256"
+
           echo "========== EXECUTE STAGING DEPLOYMENT =========="
 
           $SSH "sixstar@$VPS_HOST" \
@@ -278,3 +297,134 @@ jobs:
             "bash /var/www/sixstar-pos/deployment/deploy.sh '$RELEASE' '${{ github.sha }}' '${{ github.actor }}' --no-switch"
 
           echo "PRODUCTION DEPLOYMENT COMMAND COMPLETED."
+
+  # ==========================================
+  # 5. NEW: PUSH A TESTED STAGING RELEASE TO PRODUCTION (button in staging dashboard)
+  # ==========================================
+  promote:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+      RELEASE: ${{ inputs.release }}
+      REQUESTED_BY: ${{ inputs.requested_by }}
+
+    steps:
+      - name: Validate release id
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ && "$RELEASE" != *..* ]] || {
+            echo "invalid release id"
+            exit 1
+          }
+
+      - name: SSH setup with PINNED host key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d ~/.ssh
+
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+
+          ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
+
+          GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
+
+          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || {
+            echo "HOST KEY MISMATCH - refusing to connect"
+            exit 1
+          }
+
+          mv ~/.ssh/scanned ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          echo "SSH host verification successful."
+
+      - name: Blue/Green deploy of the exact tarball staging tested
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WHO=$(printf '%s' "${REQUESTED_BY:-${{ github.actor }}}" | tr -cd 'A-Za-z0-9@._-' | cut -c1-60)
+
+          ssh \
+            -i ~/.ssh/id \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "sixstar@$VPS_HOST" \
+            "bash /var/www/sixstar-pos/deployment/deploy-promoted.sh '$RELEASE' '$WHO'"
+
+  # ==========================================
+  # 6. NEW: EMAIL ALL SUPER ADMINS WHEN ANYTHING ABOVE FAILED
+  # ==========================================
+  notify-failure:
+    needs: [test, package, staging, production, promote]
+    if: always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+
+    steps:
+      - name: Checkout notifier script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: deployment/notify-failure.js
+          sparse-checkout-cone-mode: false
+
+      - name: Work out what failed
+        id: what
+        shell: bash
+        env:
+          REL_IN: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          if   [ "${{ needs.promote.result }}" = failure ]; then S=production; E=production
+          elif [ "${{ needs.production.result }}" = failure ]; then S=production; E=production
+          elif [ "${{ needs.staging.result }}" = failure ]; then S=staging; E=staging
+          elif [ "${{ needs.package.result }}" = failure ]; then S=package; E=staging
+          else S=test; E=staging; fi
+          REL="${{ needs.package.outputs.release }}"
+          [ -n "$REL" ] || REL="$REL_IN"
+          REL=$(printf '%s' "$REL" | tr -cd 'A-Za-z0-9._-' | cut -c1-64)
+          echo "stage=$S" >> "$GITHUB_OUTPUT"
+          echo "env=$E" >> "$GITHUB_OUTPUT"
+          echo "rel=$REL" >> "$GITHUB_OUTPUT"
+
+      - name: SSH setup with PINNED host key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d ~/.ssh
+
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+
+          ssh-keyscan -t ed25519 "$VPS_HOST" > ~/.ssh/scanned 2>/dev/null
+
+          GOT=$(ssh-keygen -lf ~/.ssh/scanned | awk '{print $2}')
+
+          [ -n "$GOT" ] && [ "$GOT" = "$VPS_HOST_FINGERPRINT" ] || {
+            echo "HOST KEY MISMATCH - refusing to connect"
+            exit 1
+          }
+
+          mv ~/.ssh/scanned ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Email the super admins
+        shell: bash
+        run: |
+          set -euo pipefail
+          O="-i $HOME/.ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          scp $O deployment/notify-failure.js "sixstar@$VPS_HOST:/var/www/sixstar-pos/incoming/notify-failure.js"
+          WHO=$(printf '%s' "${{ github.actor }}" | tr -cd 'A-Za-z0-9@._-' | cut -c1-60)
+          ssh $O "sixstar@$VPS_HOST" "NF_ENV='${{ steps.what.outputs.env }}' NF_STAGE='${{ steps.what.outputs.stage }}' NF_RELEASE='${{ steps.what.outputs.rel }}' NF_SHA='${{ github.sha }}' NF_ACTOR='$WHO' NF_RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' node /var/www/sixstar-pos/incoming/notify-failure.js"

@@ -20,9 +20,9 @@ VERIFY_GAP=${SIXSTAR_VERIFY_GAP:-3}       # seconds between the 5 post-switch ch
 log()  { echo "[$(date -u +%FT%TZ)] $*"; }
 die()  { log "ERROR: $*"; exit 1; }
 clean() { printf '%s' "${1:-}" | tr -d '"\\\r\n\t' | cut -c1-200; }            # safe to embed in a JSON string
-record() { # record <release> <sha> <initiator> <previous> <status> <reason>
-  printf '{"ts":"%s","release":"%s","sha":"%s","by":"%s","previous":"%s","status":"%s","reason":"%s"}\n' \
-    "$(date -u +%FT%TZ)" "$(clean "$1")" "$(clean "$2")" "$(clean "$3")" "$(clean "$4")" "$(clean "$5")" "$(clean "$6")" >> "$HIST"; }
+record() { # record <release> <sha> <initiator> <previous> <status> <reason> [env: production|staging]
+  printf '{"ts":"%s","release":"%s","sha":"%s","by":"%s","previous":"%s","status":"%s","reason":"%s","env":"%s"}\n' \
+    "$(date -u +%FT%TZ)" "$(clean "$1")" "$(clean "$2")" "$(clean "$3")" "$(clean "$4")" "$(clean "$5")" "$(clean "$6")" "$(clean "${7:-production}")" >> "$HIST"; }
 write_state() { printf '%s\n' "$2" > "$1.tmp" && mv -f "$1.tmp" "$1"; }         # atomic
 
 valid_slot() { case "${1:-}" in legacy|blue|green) return 0 ;; *) return 1 ;; esac; }

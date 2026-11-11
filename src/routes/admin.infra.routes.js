@@ -11,7 +11,7 @@ const needOperator = (req, res, next) => (infra.canOperate(req.user) ? next() : 
 
 router.get('/overview', catchAsync(async (req, res) => {
   const data = await infra.overview(req.user);
-  sendSuccess(res, 200, 'Overview fetched', { ...data, permissions: { canOperate: infra.canOperate(req.user) } });
+  sendSuccess(res, 200, 'Overview fetched', { ...data, permissions: { canOperate: infra.canOperate(req.user), canPromote: infra.canOperate(req.user) && infra.promoteInfo().available }, promote: infra.promoteInfo() });
 }));
 router.get('/deployments', catchAsync(async (req, res) => sendSuccess(res, 200, 'Deployments fetched', await infra.deployments())));
 router.get('/logs', catchAsync(async (req, res) => {
@@ -21,6 +21,7 @@ router.get('/logs', catchAsync(async (req, res) => {
 
 router.post('/rollback', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, 'rollback', {}, req.ip))));
 router.post('/restart', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, 'restart', { service: String(req.body.service || '') }, req.ip))));
+router.post('/promote', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.promote(req.user, String(req.body.release || ''), req.ip))));
 router.post('/backup', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, 'backup', {}, req.ip))));
 router.post('/maintenance', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, 'maintenance', { enabled: req.body.enabled === true }, req.ip))));
 

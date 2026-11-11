@@ -10,6 +10,7 @@ const http = require('http');
 const path = require('path');
 const { execFile } = require('child_process');
 const mongoose = require('mongoose');
+const axios = require('axios');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 
@@ -153,9 +154,42 @@ async function overview(user) {
 }
 
 /* ---------- deployments ---------- */
+const FAILED_STATUSES = new Set(['failed_before_switch', 'aborted_before_start', 'staging_failed', 'rolled_back_verified', 'ROLLBACK_FAILED_MANUAL_ACTION', 'ROLLBACK_UNVERIFIED', 'WORKER_DOWN_MANUAL_ACTION']);
+const outcomeOf = (st) => (st === 'success' ? 'success' : FAILED_STATUSES.has(st) || /fail|abort/i.test(st) ? 'failed' : 'info'); // info = manual rollback, verified-not-switched ...
 async function deployments() {
-  const items = (await history(50)).map((h) => ({ release: h.release, sha: h.sha, by: h.by, previous: h.previous, status: h.status, reason: h.reason || '', ts: h.ts, tests: h.tests || '-', health: h.health || '-' }));
-  return { items };
+  const all = await history(50);
+  const promoted = new Set(all.filter((h) => (h.env || 'production') === 'production').map((h) => h.release)); // any production attempt uses the release up (a failed one needs a fresh push)
+  const inFlight = Date.now() - promoteState.at < 15 * 60 * 1000 ? promoteState.release : null;
+  const items = all.map((h) => {
+    const env = h.env === 'staging' ? 'staging' : 'production';
+    return { release: h.release, sha: h.sha, by: h.by, previous: h.previous, status: h.status, reason: h.reason || '', ts: h.ts, tests: h.tests || '-', health: h.health || '-', env, outcome: outcomeOf(h.status),
+      promotable: env === 'staging' && h.status === 'success' && !promoted.has(h.release) && !(inFlight && inFlight === h.release) };
+  });
+  // only the NEWEST staging success may be promoted (never an old build over a newer one)
+  const newest = items.find((i) => i.env === 'staging' && i.status === 'success');
+  items.forEach((i) => { if (i.promotable && i !== newest) i.promotable = false; });
+  return { items, promote: promoteInfo() };
+}
+
+/* ---------- promote tested staging release to production (staging server only) ---------- */
+const promoteState = { release: null, at: 0 };
+const promoteInfo = () => ({ available: process.env.NODE_ENV === 'staging' && !!process.env.INFRA_GITHUB_TOKEN && !!process.env.INFRA_GITHUB_REPO,
+  reason: process.env.NODE_ENV !== 'staging' ? 'Promote is only available from the staging dashboard.' : !process.env.INFRA_GITHUB_TOKEN || !process.env.INFRA_GITHUB_REPO ? 'Not set up yet: add INFRA_GITHUB_TOKEN and INFRA_GITHUB_REPO to the staging env.' : '' });
+async function promote(user, release, ip) {
+  const info = promoteInfo(); if (!info.available) throw ApiError.badRequest(info.reason, 'PROMOTE_UNAVAILABLE');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(release)) || String(release).includes('..')) throw ApiError.badRequest('Invalid release', 'BAD_RELEASE');
+  const { items } = await deployments(); const row = items.find((i) => i.release === release && i.env === 'staging' && i.status === 'success');
+  if (!row || !row.promotable) throw ApiError.badRequest('Only the newest successful staging release that is not yet live can be pushed to production.', 'NOT_PROMOTABLE');
+  const audit = (status, detail) => fsp.appendFile(path.join(LOG_DIR, 'infra-audit.jsonl'), JSON.stringify({ ts: new Date().toISOString(), user: user.email || String(user._id), ip, action: 'promote', detail, status }) + '\n').catch(() => {});
+  await audit('started', release);
+  const repo = String(process.env.INFRA_GITHUB_REPO); if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw ApiError.badRequest('INFRA_GITHUB_REPO must look like owner/repo', 'BAD_REPO');
+  const actor = String(user.email || user.name || user._id).replace(/[^A-Za-z0-9@._-]/g, '').slice(0, 60) || 'admin';
+  const r = await axios.post(`https://api.github.com/repos/${repo}/actions/workflows/deploy.yml/dispatches`, { ref: process.env.INFRA_GITHUB_REF || 'main', inputs: { release, requested_by: actor } },
+    { headers: { Authorization: `Bearer ${process.env.INFRA_GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'sixstar-pos' }, timeout: 15000, validateStatus: () => true });
+  if (r.status !== 204) { await audit('failed', `github ${r.status}`); throw ApiError.badRequest(`GitHub refused the request (${r.status}). Check the token has Actions: read & write on the repo.`, 'GITHUB_REFUSED'); }
+  promoteState.release = release; promoteState.at = Date.now(); await audit('ok', release); cache.clear();
+  logger.warn('promote requested', { release, by: user.email || String(user._id) });
+  return { ok: true, message: `Production deploy of ${release} started. Watch it appear below - a green tick means it is live, a red cross sends an email to all super admins.` };
 }
 
 /* ---------- logs (tail the PM2 files; parsed lines cached per file version) ---------- */
@@ -240,4 +274,4 @@ async function act(user, action, body, ip) {
 const canOperate = (user) => (process.env.INFRA_OPERATORS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   .some((x) => x === String(user.email || '').toLowerCase() || x === String(user._id));
 
-module.exports = { overview, deployments, logs, act, canOperate, parseLines, SERVICES };
+module.exports = { overview, deployments, logs, act, promote, promoteInfo, canOperate, parseLines, SERVICES };
