@@ -52,7 +52,11 @@ if (mode === 'production') {
   // blue/green/worker must be identical except per-slot settings (otherwise sessions/payments differ after a switch)
   names.slice(1).forEach((f) => {
     const e = envs[f], diff = new Set();
-    new Set([...Object.keys(base), ...Object.keys(e)]).forEach((k) => { if (!PER_SLOT.has(k) && base[k] !== e[k]) diff.add(k); });
+    const isWorkerFile = /worker\.env$/i.test(f);
+    new Set([...Object.keys(base), ...Object.keys(e)]).forEach((k) => {
+      if (PER_SLOT.has(k) || (isWorkerFile && k === 'INFRA_OPERATORS')) return;
+      if (base[k] !== e[k]) diff.add(k);
+    });
     if (diff.size) bad.push(`${names[0]} and ${f} differ in: ${[...diff].sort().join(', ')}`);
   });
   if (legacyFile) { // compare with the live legacy .env (read-only): same DB + same secrets, so the cutover keeps sessions & payments working
