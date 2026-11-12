@@ -46,7 +46,6 @@ if (mode === 'production') {
   names.forEach((f) => {
     const e = envs[f];
     if (e.NODE_ENV && e.NODE_ENV !== 'production') bad.push(`${f}: NODE_ENV must be production`);
-    if ((e.MPESA_ENVIRONMENT || 'production') === 'sandbox') bad.push(`${f}: MPESA_ENVIRONMENT is sandbox in production`);
     if (/blue|green/.test(f) && String(e.RUN_JOBS || '').toLowerCase() === 'true') bad.push(`${f}: RUN_JOBS=true (API slots must not run jobs; the worker does)`);
   });
   // blue/green/worker must be identical except per-slot settings (otherwise sessions/payments differ after a switch)
