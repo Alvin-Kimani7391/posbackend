@@ -22,7 +22,8 @@ app.use(helmet());
 try { app.use(require('compression')()); } catch (e) { console.warn('compression not installed - run npm install'); } // gzip: the menu / floor JSON shrinks ~5-10x
 app.use(
   cors({
-    origin: frontendUrl === '*' ? true : frontendUrl.split(','),
+    // trim spaces and trailing "/" so "https://a.com, https://b.com/" still matches the browser's Origin header
+    origin: frontendUrl === '*' ? true : frontendUrl.split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean),
     credentials: true,
   })
 );
@@ -41,6 +42,15 @@ if (process.env.NODE_ENV !== 'test') {
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 }
 
+// /health is public and holds no secrets: let ANY site (www, vercel preview, new domain) read it, so the app's
+// "am I online?" check can never be blocked by a CORS / helmet setting and wrongly show "You are offline".
+app.use('/health', (req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.set('Cache-Control', 'no-store');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use('/health', healthRoutes);
 app.use(require('./middleware/maintenance'));
 app.use('/api/v1', publicApiLimiter, v1Routes);
