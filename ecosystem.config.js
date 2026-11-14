@@ -1,7 +1,18 @@
-// NOTE: the legacy process "sixstar-pos" (:5000) is deliberately NOT defined here, so no pm2 command using this file can ever touch it.
+﻿// NOTE: the legacy process "sixstar-pos" (:5000) is deliberately NOT defined here, so no pm2 command using this file can ever touch it.
 // PM2 config. Each process reads its own env file via the .env symlink inside its release dir.
 // Usage (done by deployment/deploy.sh): RELEASE_DIR=... RELEASE_ID=... GIT_SHA=... pm2 startOrReload ecosystem.config.js --only sixstar-green
+
 const dir = process.env.RELEASE_DIR || __dirname;
+
+// Adaptive limit written by `sixstar-mongoctl resources` (shared/resources.env).
+// It can only RAISE the existing 350M restart limit after a VPS upgrade; it never lowers it.
+let restartMb = 350;
+try {
+  const t = require('fs').readFileSync('/var/www/sixstar-pos/shared/resources.env', 'utf8');
+  const m = t.match(/^PM2_MAX_MEMORY_RESTART_MB=(\d+)/m);
+  if (m) restartMb = Math.max(350, Math.min(1024, parseInt(m[1], 10)));
+} catch (e) { /* file not present yet: keep 350M */ }
+
 const common = {
   cwd: dir,
   exec_mode: 'fork',
@@ -14,19 +25,12 @@ const common = {
   merge_logs: true,
   time: true,
 };
+
 // only defined values: PM2 would otherwise pass the literal string "undefined"
 const meta = {};
 if (process.env.RELEASE_ID) meta.RELEASE_ID = process.env.RELEASE_ID;
 if (process.env.GIT_SHA) meta.GIT_SHA = process.env.GIT_SHA;
 const root = '/var/www/sixstar-pos/shared/logs';
-
-// Adaptive limit written by `sixstar-mongoctl resources` (shared/resources.env). It can only RAISE the existing 350M restart limit after a VPS upgrade; it never lowers it.
-let restartMb = 350;
-try {
-  const t = require('fs').readFileSync('/var/www/sixstar-pos/shared/resources.env', 'utf8');
-  const m = t.match(/^PM2_MAX_MEMORY_RESTART_MB=(\d+)/m);
-  if (m) restartMb = Math.max(350, Math.min(1024, parseInt(m[1], 10)));
-} catch (e) { /* file not present yet: keep 350M */ }
 
 module.exports = {
   apps: [
