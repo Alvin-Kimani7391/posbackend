@@ -1,0 +1,19 @@
+# /etc/cron.d/sixstar-mongo - Six Star database infrastructure. All jobs are lock-protected (no overlap) and independent of Node, PM2 and the dashboard.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=Africa/Nairobi
+LOG=/var/log/sixstar-mongo
+
+# monitoring + alerting + adaptive resource check (every minute)
+* * * * *   root  nice -n 10 ionice -c3 sixstar-mongoctl guardian >> $LOG/guardian.log 2>&1
+# re-detect resources shortly after every reboot (RAM/CPU upgrades are picked up here and by the guardian)
+@reboot     root  sleep 90 && sixstar-mongoctl resources >> $LOG/resources.log 2>&1
+# oplog archiving (the interval itself is set by oplogIntervalMin in /etc/sixstar/backup.json; default 15 minutes)
+*/5 * * * * root  sixstar-mongoctl backup oplog >> $LOG/oplog.log 2>&1
+# nightly encrypted full backup to Cloudflare R2 + verification (waits while the shop is busy)
+30 2 * * *  root  sixstar-mongoctl backup full >> $LOG/backup.log 2>&1
+# retention (daily 30 / weekly 8 / monthly 12 - configurable) and R2 usage
+0 5 * * *   root  sixstar-mongoctl retention >> $LOG/retention.log 2>&1
+# proof that backups restore: full restore test (Wed) and point-in-time recovery test (Sat), into a throwaway mongod
+30 3 * * 3  root  sixstar-mongoctl restore-test >> $LOG/restore-test.log 2>&1
+30 3 * * 6  root  sixstar-mongoctl pitr-test >> $LOG/restore-test.log 2>&1

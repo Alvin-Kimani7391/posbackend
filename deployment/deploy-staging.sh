@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # deploy-staging.sh <release_id> <git_sha> [initiator]  Touches ONLY sixstar-staging (:5200). Never nginx, never production, never sixstar-pos.
 set -Eeuo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); source "$HERE/lib.sh"

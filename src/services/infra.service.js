@@ -13,10 +13,12 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
+const { describeUri } = require('../config/dbInfo');
 
 const BASE = process.env.INFRA_BASE || '/var/www/sixstar-pos';
 const OPS = process.env.INFRA_OPS_BIN || '/usr/local/bin/sixstar-ops';
 const LOG_DIR = path.join(BASE, 'shared/logs');
+const DB_DIR = path.join(BASE, 'shared/db');   // written by the root guardian (sixstar-mongoctl); read-only here
 const SLOT_PORT = { blue: 5100, green: 5101, legacy: 5000 };   // legacy = original process 'sixstar-pos' on :5000
 const SERVICES = ['sixstar-blue', 'sixstar-green', 'sixstar-worker', 'sixstar-staging'];
 const RANK = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -101,9 +103,24 @@ async function pm2Status() {
   });
 }
 
+/* ---------- database (MongoDB) ---------- */
+async function tailJsonl(file, n) {
+  let txt = ''; try { txt = await fsp.readFile(file, 'utf8'); } catch { return []; }
+  return txt.split('\n').filter(Boolean).slice(-n * 2).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-n).reverse();
+}
+async function guardianStatus() { // status.json is refreshed every minute by cron; older than 5 min = the monitoring itself is down
+  const g = await readJson(path.join(DB_DIR, 'status.json'), null);
+  if (!g) return null;
+  const age = Date.now() - Date.parse(g.generatedAt);
+  return { ...g, ageSec: Number.isFinite(age) ? Math.round(age / 1000) : null, stale: !(age < 5 * 60 * 1000) };
+}
+
 async function dbInfo() {
   return cached('db', 30000, async () => {
-    const out = { engine: 'MongoDB', status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', sizeGb: 0, connections: 0, maxConnections: 0, pgReady: false };
+    const kind = describeUri(process.env.MONGODB_URI).kind;
+    const g = await guardianStatus();
+    const out = { engine: kind === 'local' ? 'MongoDB Community' : kind === 'atlas' ? 'MongoDB Atlas' : 'MongoDB', hosting: kind, status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      sizeGb: 0, connections: 0, maxConnections: 0, communityReady: !!(g && g.mongo && g.mongo.running), replicaSet: (g && g.mongo && g.mongo.replSet && g.mongo.replSet.name) || null };
     try {
       const db = mongoose.connection.db;
       const st = await db.stats(); out.sizeGb = Math.round(((st.dataSize + st.indexSize) / 1073741824) * 100) / 100;
@@ -114,6 +131,28 @@ async function dbInfo() {
   });
 }
 
+// Everything the "Database" tab shows. Pure file reads: it keeps working (and says so) even when MongoDB is down.
+async function dbStatus() {
+  return cached('dbstatus', 5000, async () => {
+    const [g, events, resLog, migration] = await Promise.all([
+      guardianStatus(), tailJsonl(path.join(DB_DIR, 'history.jsonl'), 40), tailJsonl(path.join(DB_DIR, 'resources-log.jsonl'), 8), readJson(path.join(DB_DIR, 'migration.json'), null),
+    ]);
+    return { installed: !!g, guardian: g, events, resourceLog: resLog, migration, usingCommunity: describeUri(process.env.MONGODB_URI).local, hosting: describeUri(process.env.MONGODB_URI).kind };
+  });
+}
+
+// Map the guardian's backup view onto the fields the existing "Database & backups" tab already renders.
+function backupSummary(g) {
+  const b = g && g.backup; if (!b || (!b.lastFull && !b.lastError && b.configProblem)) return null;
+  const rt = b.restoreTest;
+  return {
+    lastSuccess: b.lastFull ? b.lastFull.ts : null, lastStatus: b.lastError ? 'failed' : b.lastFull ? 'success' : 'not_configured',
+    r2Objects: (b.r2 && b.r2.objects) || 0, r2SizeGb: (b.r2 && b.r2.sizeGb) || 0, retentionDays: (b.retention && b.retention.daily) || 0,
+    lastRestoreTest: rt ? rt.ts : null, restoreTestStatus: rt && rt.status === 'passed' ? 'passed' : rt && rt.status === 'failed' ? 'failed' : 'not run', encrypted: b.encrypted !== false,
+    walStatus: b.recovery && b.recovery.chainOk ? `archiving - recoverable to ${b.recovery.pitrUntil}` : b.chain && b.chain.broken ? 'chain broken - next full backup restarts it' : 'not archiving yet',
+  };
+}
+
 async function history(limit = 50) {
   let txt = ''; try { txt = await fsp.readFile(path.join(BASE, 'deployment/history.jsonl'), 'utf8'); } catch { return []; }
   return txt.split('\n').filter(Boolean).slice(-limit * 2).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-limit).reverse();
@@ -121,8 +160,8 @@ async function history(limit = 50) {
 
 async function overview(user) {
   return cached('overview', 3000, async () => {
-    const [server, pm, db, active, hist, backup] = await Promise.all([
-      serverStats(), pm2Status(), dbInfo(), activeSlot(), history(30), readJson(path.join(BASE, 'backups/status.json'), null),
+    const [server, pm, db, active, hist, backup, g] = await Promise.all([
+      serverStats(), pm2Status(), dbInfo(), activeSlot(), history(30), readJson(path.join(BASE, 'backups/status.json'), null), guardianStatus(),
     ]);
     const standby = await standbySlot(active);
     const [pa, ps] = await Promise.all([probe(SLOT_PORT[active]), probe(SLOT_PORT[standby])]);
@@ -146,8 +185,9 @@ async function overview(user) {
       services, database: db,
       backup: {
         lastSuccess: null, lastStatus: 'not_configured', r2Objects: 0, r2SizeGb: 0, retentionDays: 0, lastRestoreTest: null,
-        restoreTestStatus: 'not run', encrypted: false, walStatus: 'not configured', ...(backup || {}),
+        restoreTestStatus: 'not run', encrypted: false, walStatus: 'not configured', ...(backup || {}), ...(backupSummary(g) || {}),
       },
+      dbHealth: g ? { health: g.health, stale: g.stale, alerts: (g.alerts || []).length } : null,
       jobs: { lockedBy: 'sixstar-worker', running: worker && worker.status === 'online' ? 12 : 0, lastFailure: null },
     };
   });
@@ -242,6 +282,13 @@ async function logs({ service, level, q, after, limit }) {
 }
 
 /* ---------- actions ---------- */
+const DB_ACTIONS = {
+  'db-verify': 'Verification of the latest backup started (checksum + decrypt + decompress).',
+  'db-check': 'Health check started. The Database tab refreshes within a minute.',
+  'db-restore-test': 'Restore test started: the latest backup is restored into a throwaway database and validated. Production is not touched.',
+  'db-recover': 'Recovery copy is being built on a separate MongoDB instance. Production is NOT modified. Promoting it requires an SSH session.',
+  'db-recover-discard': 'Recovery copy discarded.',
+};
 let busy = false;
 async function act(user, action, body, ip) {
   if (busy) throw ApiError.badRequest('Another infrastructure action is running. Wait for it to finish.', 'INFRA_BUSY');
@@ -260,7 +307,8 @@ async function act(user, action, body, ip) {
       if (!SERVICES.includes(svc)) throw ApiError.badRequest('Unknown service', 'BAD_SERVICE');
       if (svc === `sixstar-${active}`) throw ApiError.badRequest('That is the LIVE API slot. Switch/rollback traffic first, then restart the idle slot.', 'LIVE_SLOT');
       args = ['restart', svc]; message = `${svc} restarted.`;
-    } else if (action === 'backup') { args = ['backup']; message = 'Backup started. Check the Database & backups tab for the result.'; }
+    } else if (action === 'backup' || action === 'db-backup') { args = ['db-backup']; message = 'Backup started. It is encrypted, uploaded to Cloudflare R2 and verified; check the Database tab for the result.'; }
+    else if (DB_ACTIONS[action]) { args = [action]; message = DB_ACTIONS[action]; }
     else if (action === 'maintenance') { args = ['maintenance', body.enabled ? 'on' : 'off']; message = `Maintenance mode ${body.enabled ? 'ON' : 'OFF'}.`; }
     else throw ApiError.badRequest('Unknown action', 'BAD_ACTION');
     logger.warn('infra action', { action, args, by: user.email || String(user._id) });
@@ -274,4 +322,4 @@ async function act(user, action, body, ip) {
 const canOperate = (user) => (process.env.INFRA_OPERATORS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   .some((x) => x === String(user.email || '').toLowerCase() || x === String(user._id));
 
-module.exports = { overview, deployments, logs, act, promote, promoteInfo, canOperate, parseLines, SERVICES };
+module.exports = { overview, deployments, logs, act, promote, promoteInfo, canOperate, parseLines, dbStatus, SERVICES };

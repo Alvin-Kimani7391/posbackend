@@ -14,6 +14,7 @@ const notify = require('../services/billing.notify');
 
 const INTERVAL_MS = 5 * 60 * 1000;
 let running = false;
+let timer;
 
 const safe = async (label, fn) => { try { return await fn(); } catch (err) { console.error(`[billing job] ${label} failed:`, err.message); return null; } };
 
@@ -113,9 +114,15 @@ async function runCycle({ now = new Date(), force = false } = {}) {
 
 /** Call once from server.js after Mongo connects. Use your existing scheduler instead if you prefer (mpesaReconcile style). */
 function start() {
-  safe('seed default plan', () => engine.ensureDefaultPlan());
-  setInterval(() => { runCycle().catch((e) => console.error('[billing job]', e.message)); }, INTERVAL_MS);
+  const seed = safe('seed default plan', () => engine.ensureDefaultPlan());
+  timer = setInterval(() => runCycle().catch((e) => console.error('[billing job]', e.message)), INTERVAL_MS);
   console.log('[billing job] started (every 5 min)');
+  return seed;
 }
 
-module.exports = { start, runCycle };
+function stop() {
+  if (timer) clearInterval(timer);
+  timer = null;
+}
+
+module.exports = { start, stop, runCycle };

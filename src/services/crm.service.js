@@ -110,7 +110,7 @@ async function findCustomerByPhone(businessId, phoneNorm) {
     .sort({ createdAt: 1 }).select('_id').lean();
   if (!legacy) return null;
   try {
-    await Customer.updateOne({ _id: legacy._id }, { $set: { phoneNormalized: phoneNorm } }, { timestamps: false });
+    await Customer.updateOne({ _id: legacy._id }, { $set: { phoneNormalized: phoneNorm } }, { timestamps: true });
   } catch (e) {
     if (!isDup(e)) console.error('[crm] could not stamp phoneNormalized', e.message);
   }
@@ -157,7 +157,7 @@ async function fillMissingPhone(businessId, customerId, phoneNorm) {
     await Customer.updateOne(
       { _id: customerId, businessId, $or: [{ phone: { $exists: false } }, { phone: '' }, { phone: null }] },
       { $set: { phone: toLocalPhone(phoneNorm), phoneNormalized: phoneNorm } },
-      { timestamps: false }
+      { timestamps: true }
     );
   } catch (e) {
     console.error('[crm] could not add phone to customer', e.message);
@@ -534,7 +534,7 @@ async function recomputeGroup(businessId, ids, settings, now) {
     });
   });
 
-  if (ops.length) await Customer.bulkWrite(ops, { ordered: false, timestamps: false });
+  if (ops.length) await Customer.bulkWrite(ops, { ordered: false, timestamps: true });
 }
 
 /** Time passes => labels drift (active -> inactive). Cheap full recompute for one business. */
@@ -559,10 +559,10 @@ async function backfillPhones(businessId, status) {
     if (!n) { status.invalidPhones += 1; continue; }
     const owner = await Customer.findOne({ businessId, phoneNormalized: n }).select('_id').lean();
     if (owner) {
-      await Customer.updateOne({ _id: c._id }, { $set: { duplicateOf: owner._id } }, { timestamps: false });
+      await Customer.updateOne({ _id: c._id }, { $set: { duplicateOf: owner._id } }, { timestamps: true });
       status.duplicates += 1;
     } else {
-      await Customer.updateOne({ _id: c._id }, { $set: { phoneNormalized: n } }, { timestamps: false });
+      await Customer.updateOne({ _id: c._id }, { $set: { phoneNormalized: n } }, { timestamps: true });
       status.phonesFixed += 1;
     }
   }

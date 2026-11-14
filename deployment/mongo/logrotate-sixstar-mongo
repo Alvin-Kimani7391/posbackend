@@ -1,0 +1,21 @@
+/var/log/mongodb/mongod.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        /bin/kill -SIGUSR1 "$(pidof mongod 2>/dev/null | awk '{print $1}')" >/dev/null 2>&1 || true
+    endscript
+}
+/var/log/sixstar-mongo/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

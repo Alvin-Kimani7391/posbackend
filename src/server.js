@@ -5,6 +5,7 @@ const { connectDB, disconnectDB } = require('./config/db');
 const { port } = require('./config/env');
 
 let server;
+let shutdownStarted = false;
 
 async function start() {
   await connectDB();
@@ -43,17 +44,38 @@ async function start() {
 }
 
 async function shutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+
   logger.info(`Received ${signal}, shutting down gracefully`);
   app.set('shuttingDown', true); // /health/ready now answers 503 so nothing new is routed here
   try { require('./services/delivery/realtime.hub').closeAll(); } catch (e) { /* open live streams must not hold the server open */ }
+
   if (server) {
-    server.close(async () => {
-      await disconnectDB();
-      logger.info('Shutdown complete');
-      process.exit(0);
+    const forceExit = setTimeout(() => {
+      logger.error('API graceful shutdown exceeded 60 seconds');
+      process.exit(1);
+    }, 60000);
+    forceExit.unref();
+
+    server.close(async (err) => {
+      clearTimeout(forceExit);
+
+      if (err) {
+        logger.error('HTTP server close failed during shutdown', { error: err.message });
+        process.exit(1);
+        return;
+      }
+
+      try {
+        await disconnectDB();
+        logger.info('Shutdown complete');
+        process.exit(0);
+      } catch (error) {
+        logger.error('Database disconnect failed during shutdown', { error: error.message });
+        process.exit(1);
+      }
     });
-    // Force-exit if graceful shutdown hangs
-    setTimeout(() => process.exit(1), 10000).unref();
   } else {
     process.exit(0);
   }

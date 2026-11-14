@@ -9,8 +9,8 @@ const common = {
   autorestart: true,
   max_restarts: 10,
   min_uptime: '20s',
-  kill_timeout: 15000, // lets graceful shutdown finish
-  max_memory_restart: '350M',
+  kill_timeout: 65000, // worker drain: 60s plus 5s PM2 margin
+  max_memory_restart: `${restartMb}M`,
   merge_logs: true,
   time: true,
 };
@@ -19,6 +19,14 @@ const meta = {};
 if (process.env.RELEASE_ID) meta.RELEASE_ID = process.env.RELEASE_ID;
 if (process.env.GIT_SHA) meta.GIT_SHA = process.env.GIT_SHA;
 const root = '/var/www/sixstar-pos/shared/logs';
+
+// Adaptive limit written by `sixstar-mongoctl resources` (shared/resources.env). It can only RAISE the existing 350M restart limit after a VPS upgrade; it never lowers it.
+let restartMb = 350;
+try {
+  const t = require('fs').readFileSync('/var/www/sixstar-pos/shared/resources.env', 'utf8');
+  const m = t.match(/^PM2_MAX_MEMORY_RESTART_MB=(\d+)/m);
+  if (m) restartMb = Math.max(350, Math.min(1024, parseInt(m[1], 10)));
+} catch (e) { /* file not present yet: keep 350M */ }
 
 module.exports = {
   apps: [

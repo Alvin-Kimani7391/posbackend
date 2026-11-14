@@ -7,6 +7,7 @@ const cron = require('node-cron');
 const lowStock = require('../services/lowStockAlerts.service');
 
 let running = false;
+let startupTimer;
 async function tick() {
   if (running) return;
   running = true;
@@ -15,7 +16,13 @@ async function tick() {
 
 function start() {
   cron.schedule('30 6 * * *', () => tick(), { timezone: 'Africa/Nairobi' });
-  setTimeout(tick, 3 * 60 * 1000).unref();
+  startupTimer = setTimeout(tick, 3 * 60 * 1000);
+  startupTimer.unref();
 }
 
-module.exports = { start, tick };
+function stop() {
+  if (startupTimer) clearTimeout(startupTimer);
+  startupTimer = null;
+}
+
+module.exports = { start, stop, tick };

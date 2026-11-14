@@ -11,4 +11,9 @@ function start() {
   }, 5000);
   if (timer.unref) timer.unref();
 }
-module.exports = { start };
+function stop() {
+  if (timer) clearInterval(timer);
+  timer = null;
+}
+
+module.exports = { start, stop };

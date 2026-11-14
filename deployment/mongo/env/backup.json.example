@@ -1,0 +1,8 @@
+{
+  "retention": { "daily": 30, "weekly": 8, "monthly": 12, "keepMinFull": 3, "oplogDays": 7 },
+  "oplogIntervalMin": 15,
+  "fullBackupMaxAgeHours": 36,
+  "verifyDeepAfterBackup": true,
+  "restoreTestMaxAgeDays": 10,
+  "bucket": "sixstar-pos-backups"
+}

@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+# Install: sudo install -m 755 sixstar-mongoctl /usr/local/sbin/sixstar-mongoctl   (install-mongodb.sh does this)
+import os, sys
+sys.path.insert(0, os.environ.get("SIXSTAR_MONGO_LIB", "/usr/local/lib/sixstar-mongo"))
+from sixstar_mongo.cli import main
+sys.exit(main(sys.argv[1:]))

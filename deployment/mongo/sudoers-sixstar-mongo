@@ -1,0 +1,10 @@
+# /etc/sudoers.d/sixstar-mongo (installed by install-mongodb.sh; __APP_USER__ is replaced by the PM2/app user)
+# The POS API never runs these directly: it calls /usr/local/bin/sixstar-ops, which allow-lists the verbs. Exact argument lists only.
+Cmnd_Alias SIXSTAR_DB = \
+  /usr/local/sbin/sixstar-mongoctl backup full --manual, \
+  /usr/local/sbin/sixstar-mongoctl verify latest, \
+  /usr/local/sbin/sixstar-mongoctl guardian, \
+  /usr/local/sbin/sixstar-mongoctl restore-test, \
+  /usr/local/sbin/sixstar-mongoctl restore recover latest, \
+  /usr/local/sbin/sixstar-mongoctl restore discard
+__APP_USER__ ALL=(root) NOPASSWD: SIXSTAR_DB

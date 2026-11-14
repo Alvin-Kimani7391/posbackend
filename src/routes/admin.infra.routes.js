@@ -19,6 +19,9 @@ router.get('/logs', catchAsync(async (req, res) => {
   sendSuccess(res, 200, 'Logs fetched', await infra.logs({ service, level, q: q && String(q).slice(0, 100), after, limit }));
 }));
 
+router.get('/database', catchAsync(async (req, res) => sendSuccess(res, 200, 'Database status fetched', await infra.dbStatus())));
+router.post('/db-action', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, `db-${String(req.body.action || '').replace(/[^a-z-]/g, '')}`, {}, req.ip))));
+
 router.post('/rollback', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, 'rollback', {}, req.ip))));
 router.post('/restart', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.act(req.user, 'restart', { service: String(req.body.service || '') }, req.ip))));
 router.post('/promote', actionLimiter, needOperator, catchAsync(async (req, res) => sendSuccess(res, 200, 'Done', await infra.promote(req.user, String(req.body.release || ''), req.ip))));
