@@ -212,7 +212,7 @@ async function buildLowStockPdf(data) {
   const { lowStock: L, fmt } = data;
   const r = await Report.create({
     brand: BRAND(), kicker: 'WEEKLY INVENTORY REPORT', title: 'Low Stock Alert Report', tagline: 'Everything that is out of stock or running low, with what to reorder.',
-    business: data.business.name, period: `Week ending ${dateText(`${data.sales.period.end}T12:00:00Z`, 'UTC')}`, generated: genText(data),
+    business: data.business.name, period: data.periodLabel || `Week ending ${dateText(`${data.sales.period.end}T12:00:00Z`, 'UTC')}`, generated: genText(data),
   });
   r.kpis([
     { label: 'Out of stock', value: nf(L.outCount), sub: 'Customers cannot buy these now', tone: L.outCount ? 'danger' : 'success' },
@@ -264,7 +264,7 @@ async function buildExpiryPdf(data) {
   const { expiry: E, fmt, tz } = data;
   const r = await Report.create({
     brand: BRAND(), kicker: 'WEEKLY INVENTORY REPORT', title: 'Expiry & Batch Loss Report', tagline: 'Expired stock, what expires this coming week, and the stock value at stake.',
-    business: data.business.name, period: `Week ending ${dateText(`${data.sales.period.end}T12:00:00Z`, 'UTC')}`, generated: genText(data),
+    business: data.business.name, period: data.periodLabel || `Week ending ${dateText(`${data.sales.period.end}T12:00:00Z`, 'UTC')}`, generated: genText(data),
   });
   const T = E.totals;
   r.kpis([

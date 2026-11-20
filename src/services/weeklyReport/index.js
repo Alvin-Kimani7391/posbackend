@@ -10,15 +10,22 @@ const User = require('../../models/User');
 const Settings = require('../../models/WeeklyReportSettings');
 const { ROLES } = require('../../constants/roles');
 const { sendEmail } = require('../email.service');
-const { collect, localDate, zonedMidnight } = require('./data');
+const { collect, localDate, zonedMidnight, addDays } = require('./data');
 const { buildLowStockPdf, buildExpiryPdf } = require('./pdf');
 const { build: buildEmail } = require('./email');
+const { collectInterim, buildInterimEmail } = require('./interim');
+
+const SATURDAY = 6; // the weekly report day: always scheduled, always the full 7-day report
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const slug = (s) => String(s || 'shop').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'shop';
 
 async function getSettings() {
-  return Settings.findOneAndUpdate({ key: 'weekly' }, { $setOnInsert: { key: 'weekly' } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+  const s = await Settings.findOneAndUpdate({ key: 'weekly' }, { $setOnInsert: { key: 'weekly' } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+  if (!s.slots.some((x) => x.day === SATURDAY)) { // Saturday is a must: it can be added to, never removed
+    return Settings.findOneAndUpdate({ key: 'weekly' }, { $push: { slots: { day: SATURDAY, time: '10:00' } } }, { new: true });
+  }
+  return s;
 }
 
 async function recipientsFor(businessId) {
@@ -33,7 +40,16 @@ async function recipientsFor(businessId) {
 }
 
 /** Build the email + 2 PDFs for a business (no sending). */
-async function buildFor(businessId, { demo = false, now } = {}) {
+async function buildFor(businessId, { demo = false, now, interim } = {}) {
+  if (interim) { // non-Saturday slot: from where the last report stopped until now
+    const data = await collectInterim(businessId, interim);
+    const [lowPdf, expPdf] = await Promise.all([buildLowStockPdf(data), buildExpiryPdf(data)]);
+    const stamp = data.today;
+    return { data, ...buildInterimEmail(data, { demo }), attachments: [
+      { name: `Low-Stock-Report-${slug(data.business.name)}-${stamp}.pdf`, content: lowPdf },
+      { name: `Expiry-Report-${slug(data.business.name)}-${stamp}.pdf`, content: expPdf },
+    ] };
+  }
   const data = await collect(businessId, { now });
   const [lowPdf, expPdf] = await Promise.all([buildLowStockPdf(data), buildExpiryPdf(data)]);
   const mail = buildEmail(data, { demo });
@@ -47,31 +63,35 @@ async function buildFor(businessId, { demo = false, now } = {}) {
   };
 }
 
-async function sendForBusiness(businessId, { to, demo = false, force = false } = {}) {
+async function sendForBusiness(businessId, { to, demo = false, force = false, interim } = {}) {
   const biz = await Business.findById(businessId).select('name alertPrefs').lean();
   if (!biz) return { ok: false, skipped: 'not_found' };
   if (!demo && !force && biz.alertPrefs && biz.alertPrefs.weeklyReportEmail === false) return { ok: false, skipped: 'opted_out' };
   const recipients = to && to.length ? to : await recipientsFor(businessId);
   if (!recipients.length) return { ok: false, skipped: 'no_recipients' };
-  const built = await buildFor(businessId, { demo });
+  const built = await buildFor(businessId, { demo, interim });
   const d = built.data;
-  if (!demo && !d.sales.hasSales && !d.lowStock.total && !d.expiry.totals.atRisk.batches && !d.expiry.totals.later.batches) return { ok: false, skipped: 'no_activity' };
-  const res = await sendEmail({ to: recipients, subject: built.subject, html: built.html, text: built.text, attachments: built.attachments, tags: ['weekly-report', demo ? 'demo' : 'scheduled'] });
+  if (!demo && interim && !d.sales.hasSales && !d.lowStock.total && !d.expiry.totals.atRisk.batches) return { ok: false, skipped: 'no_activity' };
+  if (!demo && !interim && !d.sales.hasSales && !d.lowStock.total && !d.expiry.totals.atRisk.batches && !d.expiry.totals.later.batches) return { ok: false, skipped: 'no_activity' };
+  const res = await sendEmail({ to: recipients, subject: built.subject, html: built.html, text: built.text, attachments: built.attachments, tags: [interim ? 'interim-report' : 'weekly-report', demo ? 'demo' : 'scheduled'] });
   return { ...res, recipients: recipients.length, business: biz.name };
 }
 
 /** Every live business. Returns { businesses, sent, skipped, failed }. */
-async function runAll({ trigger = 'schedule' } = {}) {
+async function runAll({ trigger = 'schedule', interim } = {}) {
   const cursor = Business.find({ status: 'active', subscriptionStatus: { $nin: ['suspended', 'cancelled'] } }).select('_id').lean().cursor();
   const out = { businesses: 0, sent: 0, skipped: 0, failed: 0 };
   for await (const b of cursor) {
     out.businesses += 1;
     try {
-      const r = await sendForBusiness(b._id);
+      const r = await sendForBusiness(b._id, { interim });
       if (r.ok) out.sent += 1; else if (r.skipped) out.skipped += 1; else out.failed += 1;
     } catch (e) { out.failed += 1; console.error('[weekly report] business failed', String(b._id), e.message); }
   }
-  await Settings.updateOne({ key: 'weekly' }, { $set: { lastRun: { at: new Date(), trigger, ...out } } });
+  // remember where this report stopped: the next interim report starts exactly there
+  const tz = (await Settings.findOne({ key: 'weekly' }).select('timezone').lean() || {}).timezone || 'Africa/Nairobi';
+  const covered = interim ? interim.toMs : zonedMidnight(localDate(Date.now(), tz), tz); // weekly report = full days up to yesterday
+  await Settings.updateOne({ key: 'weekly' }, { $set: { coveredUntil: new Date(covered), lastRun: { at: new Date(), trigger, kind: interim ? 'interim' : 'weekly', ...out } } });
   return out;
 }
 
@@ -109,7 +129,16 @@ async function tick({ now = Date.now() } = {}) {
     const key = slotKey(today, slot.time);
     const claimed = await Settings.findOneAndUpdate({ key: 'weekly', ranKeys: { $ne: key } }, { $push: { ranKeys: { $each: [key], $slice: -60 } } }, { new: true });
     if (!claimed) continue;                       // already ran (or another instance took it)
-    const result = await runAll({ trigger: 'schedule' });
+    let interim;
+    if (slot.day !== SATURDAY) {
+      let from = s.coveredUntil ? new Date(s.coveredUntil).getTime() : 0;
+      if (!from || now - from > 8 * 24 * 3600000 || from >= now) { // no usable history: start at the most recent Saturday 00:00
+        const back = (dow - SATURDAY + 7) % 7; // days since Saturday (Sunday = 1)
+        from = zonedMidnight(addDays(today, -back), tz);
+      }
+      interim = { fromMs: from, toMs: now };
+    }
+    const result = await runAll({ trigger: 'schedule', interim });
     return { ran: true, key, ...result };
   }
   return { ran: false };

@@ -218,4 +218,4 @@ async function collect(businessId, { now = Date.now() } = {}) {
   };
 }
 
-module.exports = { collect, localDate, zonedMidnight, addDays, weekdayOf, WEEKDAYS };
+module.exports = { lowStockSection, expirySection, collect, localDate, zonedMidnight, addDays, weekdayOf, WEEKDAYS };

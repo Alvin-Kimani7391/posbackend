@@ -29,6 +29,7 @@ router.put('/', catchAsync(async (req, res) => {
       if (!Number.isInteger(day) || day < 0 || day > 6 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new ApiError(400, 'Each send time needs a weekday and a time like 10:00.');
       const k = `${day}-${time}`; if (!seen.has(k)) { seen.add(k); clean.push({ day, time }); }
     }
+    if (!clean.some((x) => x.day === 6)) clean.push({ day: 6, time: '10:00' }); // Saturday (the weekly report) is a must
     set.slots = clean;
   }
   await weekly.getSettings();

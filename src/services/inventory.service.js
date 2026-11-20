@@ -16,11 +16,30 @@ const escapeRegex = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const oid = (v) => new mongoose.Types.ObjectId(String(v));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
+/**
+ * Runs `fn(session)` in ONE transaction.
+ *  - external session supplied: the caller owns the transaction. Reuse it as it is: no nested transaction is started,
+ *    and the session is never committed, aborted or ended here.
+ *  - no session: start one, run fn inside withTransaction (as before) and always end it.
+ */
+async function inTransaction(externalSession, fn) {
+  if (externalSession) return fn(externalSession);
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    await session.withTransaction(async () => { result = await fn(session); });
+    return result;
+  } finally {
+    session.endSession();
+  }
+}
+const withSession = (q, session) => (session ? q.session(session) : q);
+
 /** Quantity entered in any unit of the product (2 bundles) -> BASE units (48 packets). Stock is always base units. */
-async function toBaseQuantity(businessId, product, quantity, unitId) {
+async function toBaseQuantity(businessId, product, quantity, unitId, session = null) {
   const unit = resolveUnit(product, unitId);
   if (!unit.isBase) {
-    const biz = await Business.findById(businessId).select('featureSettings').lean();
+    const biz = await withSession(Business.findById(businessId).select('featureSettings').lean(), session);
     if (!biz?.featureSettings?.unitConversions) throw ApiError.forbidden('Unit conversion is not enabled for your business', 'FEATURE_DISABLED');
     if (product.trackSerialNumber) throw ApiError.badRequest(`${product.name} is serial-tracked: enter units one by one`, 'SERIAL_BASE_ONLY');
   }
@@ -197,15 +216,15 @@ async function releaseReserved({ businessId, branchId, productId, variantId = nu
  * For location 'WAREHOUSE' pass warehouseId to read ONE warehouse; without it the branch's warehouses are summed.
  * Quantities are in BASE units.
  */
-async function getStockLevel(businessId, branchId, productId, variantId = null, location = 'RETAIL', warehouseId = null) {
+async function getStockLevel(businessId, branchId, productId, variantId = null, location = 'RETAIL', warehouseId = null, session = null) {
   if (location === 'WAREHOUSE') {
     const filter = warehouseId ? { businessId, warehouseId, productId, variantId } : { businessId, branchId, productId, variantId };
-    const rows = await WarehouseInventory.find(filter);
+    const rows = await withSession(WarehouseInventory.find(filter), session);
     const quantity = rows.reduce((s, r) => s + r.quantity, 0);
     const reservedQuantity = rows.reduce((s, r) => s + num(r.reservedQuantity), 0);
     return { quantity, reservedQuantity, availableQuantity: quantity - reservedQuantity };
   }
-  const row = await BranchInventory.findOne({ businessId, branchId, productId, variantId });
+  const row = await withSession(BranchInventory.findOne({ businessId, branchId, productId, variantId }), session);
   return { quantity: row?.quantity || 0, reservedQuantity: row?.reservedQuantity || 0, availableQuantity: (row?.quantity || 0) - (row?.reservedQuantity || 0) };
 }
 
@@ -333,12 +352,13 @@ async function getMovements(businessId, { branchId, productId, variantId, catego
   return { items, total, page, limit, pages: Math.ceil(total / limit) || 1, summary: { count: total, unitsIn, unitsOut, net: round3(unitsIn - unitsOut) } };
 }
 
-/** Manual stock adjustment (storekeeper correcting a count, marking damage/loss, etc). Runs its own transaction. */
-async function adjustStock(businessId, branchId, userId, { productId, variantId, quantity: rawQuantity, unitId, reason, type, location = 'RETAIL' }) {
-  const adjProduct = await assertItemExists(businessId, productId, variantId);
-  const { quantity } = await toBaseQuantity(businessId, adjProduct, rawQuantity, unitId);
-  if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId);
-  const business = await Business.findById(businessId);
+/** Manual stock adjustment (storekeeper correcting a count, marking damage/loss, etc). Runs its own transaction, or joins the caller's when `session` is given. */
+async function adjustStock(businessId, branchId, userId, { productId, variantId, quantity: rawQuantity, unitId, reason, type, location = 'RETAIL', session: externalSession = null }) {
+  // externalSession: the caller's open transaction (e.g. the offline stock event marker). Everything below joins it.
+  const adjProduct = await assertItemExists(businessId, productId, variantId, externalSession);
+  const { quantity } = await toBaseQuantity(businessId, adjProduct, rawQuantity, unitId, externalSession);
+  if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId, externalSession);
+  const business = await withSession(Business.findById(businessId), externalSession);
   const allowNegative = !!business?.settings?.allowNegativeStock;
 
   // ADJUSTMENT_IN/OUT, DAMAGE, EXPIRED, LOST are all manual adjustment types;
@@ -347,25 +367,19 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
   const outboundTypes = ['ADJUSTMENT_OUT', 'DAMAGE', 'EXPIRED', 'LOST'];
   const quantityDelta = outboundTypes.includes(type) ? -Math.abs(quantity) : Math.abs(quantity);
 
-  const session = await mongoose.startSession();
-  try {
-    let result;
-    await session.withTransaction(async () => {
-      result = await applyStockChange({
-        businessId, branchId, productId, variantId: variantId || null,
-        quantityDelta, type, referenceType: 'ManualAdjustment', referenceId: null,
-        reason, performedBy: userId, session, allowNegative, location,
-      });
-
-      await AuditLog.create(
-        [{ businessId, branchId, userId, action: 'inventory.adjust', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { type, quantityDelta, reason, location } }],
-        { session }
-      );
+  return inTransaction(externalSession, async (session) => {
+    const result = await applyStockChange({
+      businessId, branchId, productId, variantId: variantId || null,
+      quantityDelta, type, referenceType: 'ManualAdjustment', referenceId: null,
+      reason, performedBy: userId, session, allowNegative, location,
     });
+
+    await AuditLog.create(
+      [{ businessId, branchId, userId, action: 'inventory.adjust', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { type, quantityDelta, reason, location } }],
+      { session }
+    );
     return result;
-  } finally {
-    session.endSession();
-  }
+  });
 }
 
 /**
@@ -374,20 +388,19 @@ async function adjustStock(businessId, branchId, userId, { productId, variantId,
  * purchase.service and calls applyStockChange directly within its own
  * transaction so it can also update the supplier balance atomically.
  */
-async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, unitId, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL', updateCost = true }) {
-  const product = await assertItemExists(businessId, productId, variantId);
+async function receiveStock(businessId, branchId, userId, { productId, variantId, quantity, unitId, costPrice, batchNumber, expiryDate, manufacturingDate, reason, serials, condition, location = 'RETAIL', updateCost = true, session: externalSession = null }) {
+  // externalSession: the caller's open transaction. Stock movement, serials, batch, cost update and audit log all join it.
+  const product = await assertItemExists(businessId, productId, variantId, externalSession);
   { // unit conversion: 10 bundles @ 1,200 -> 240 packets @ 50
-    const c = await toBaseQuantity(businessId, product, quantity, unitId);
+    const c = await toBaseQuantity(businessId, product, quantity, unitId, externalSession);
     quantity = c.quantity;
     if (costPrice != null && c.factor !== 1) costPrice = Math.round(costPrice / c.factor);
   }
-  if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId);
+  if (location === 'WAREHOUSE') await assertWarehouseEnabled(businessId, externalSession);
 
-  const session = await mongoose.startSession();
-  try {
-    let result;
-    await session.withTransaction(async () => {
-      result = await applyStockChange({
+  return inTransaction(externalSession, async (session) => {
+    {
+      const result = await applyStockChange({
         businessId, branchId, productId, variantId: variantId || null,
         quantityDelta: Math.abs(quantity), type: 'OPENING_STOCK',
         referenceType: 'ManualReceive', referenceId: null, reason, performedBy: userId, session, location,
@@ -428,7 +441,7 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
       if (updateCost && costPrice != null && costPrice > 0) {
         const holder = variantId ? await ProductVariant.findOne({ _id: variantId, businessId }).session(session) : product;
         if (holder) {
-          const other = await getStockLevel(businessId, branchId, productId, variantId || null, location === 'WAREHOUSE' ? 'RETAIL' : 'WAREHOUSE').catch(() => ({ quantity: 0 }));
+          const other = await getStockLevel(businessId, branchId, productId, variantId || null, location === 'WAREHOUSE' ? 'RETAIL' : 'WAREHOUSE', null, session).catch(() => ({ quantity: 0 }));
           const prevOnHand = (result.branchInventory.quantity - Math.abs(quantity)) + (other.quantity || 0);
           const next = weightedCost({ onHand: prevOnHand, oldCost: holder.costPrice || 0, addQty: Math.abs(quantity), addCost: costPrice });
           if (next !== holder.costPrice) {
@@ -443,12 +456,11 @@ async function receiveStock(businessId, branchId, userId, { productId, variantId
         [{ businessId, branchId, userId, action: 'inventory.receive', entityType: location === 'WAREHOUSE' ? 'WarehouseInventory' : 'BranchInventory', entityId: result.branchInventory._id, newValue: { quantity, location, ...(result.costUpdate ? { costPerBase: result.costUpdate } : {}) } }],
         { session }
       );
-    });
-    return result;
-  } finally {
-    session.endSession();
-  }
+      return result;
+    }
+  });
 }
+
 
 /** Warehouse stock is a business option (feature flag `multiWarehouse`, on by default for wholesale shops). */
 async function assertWarehouseEnabled(businessId, session = null) {
@@ -459,11 +471,11 @@ async function assertWarehouseEnabled(businessId, session = null) {
   }
 }
 
-async function assertItemExists(businessId, productId, variantId) {
-  const product = await Product.findOne({ _id: productId, businessId });
+async function assertItemExists(businessId, productId, variantId, session = null) {
+  const product = await withSession(Product.findOne({ _id: productId, businessId }), session);
   if (!product) throw ApiError.notFound('Product not found');
   if (variantId) {
-    const variant = await ProductVariant.findOne({ _id: variantId, businessId, productId });
+    const variant = await withSession(ProductVariant.findOne({ _id: variantId, businessId, productId }), session);
     if (!variant) throw ApiError.notFound('Variant not found');
   }
   return product;

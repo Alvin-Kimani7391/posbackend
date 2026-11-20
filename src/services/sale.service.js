@@ -574,8 +574,10 @@ async function getSale(businessId, id) {
   return { sale, receipt, payments };
 }
 
-async function listSales(businessId, { branchId, cashierId, customerId, shiftId, from, to, paymentStatus, page, limit, search }) {
+async function listSales(businessId, { branchId, cashierId, customerId, shiftId, from, to, paymentStatus, offline, page, limit, search }) {
   const filter = { businessId };
+  if (offline === 'yes') filter.isOffline = true;
+  else if (offline === 'no') filter.isOffline = { $ne: true };
   if (branchId) filter.branchId = branchId;
   if (cashierId) filter.cashierId = cashierId;
   if (customerId) filter.customerId = customerId;

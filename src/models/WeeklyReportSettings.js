@@ -16,8 +16,10 @@ const weeklyReportSettingsSchema = new Schema({
   timezone: { type: String, default: 'Africa/Nairobi' },
   slots: { type: [slotSchema], default: () => [{ day: 6, time: '10:00' }] },
   ranKeys: { type: [String], default: [] },
+  coveredUntil: { type: Date },   // where the last report stopped; the next non-Saturday (interim) report starts here
+
   lastRun: {
-    at: Date, key: String, trigger: { type: String, enum: ['schedule', 'manual'] },
+    at: Date, key: String, trigger: { type: String, enum: ['schedule', 'manual'] }, kind: String,
     businesses: Number, sent: Number, skipped: Number, failed: Number,
   },
   updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },

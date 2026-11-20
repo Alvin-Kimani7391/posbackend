@@ -95,6 +95,25 @@ const shiftCloseSchema = z
   })
   .refine((e) => !!e.clientShiftId || !!e.shiftId, { message: 'Say which shift to close', path: ['shiftId'] });
 
+// ---- Offline STOCK events: a cashier receives / adjusts stock at the till while offline (replayed in order with the sales) ----
+const stockReceiveSchema = z.object({
+  type: z.literal('STOCK_RECEIVE'), ...eventBase,
+  productId: objectId, variantId: objectId.optional(),
+  quantity: z.number().positive().max(10000000), // base units
+  costPriceCents: cents.optional(),
+  batchNumber: z.string().trim().max(60).optional(),
+  manufacturingDate: z.coerce.date().optional(),
+  expiryDate: z.coerce.date().optional(),
+  reason: z.string().trim().max(200).optional(),
+});
+const stockAdjustSchema = z.object({
+  type: z.literal('STOCK_ADJUST'), ...eventBase,
+  productId: objectId, variantId: objectId.optional(),
+  quantity: z.number().positive().max(10000000),
+  adjustType: z.enum(['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'DAMAGE', 'EXPIRED', 'LOST']),
+  reason: z.string().trim().min(1).max(200),
+});
+
 // Each event is validated INDIVIDUALLY in the service so one malformed sale never blocks the batch.
 const pushSchema = z.object({
   deviceId: deviceIdStr,
@@ -124,6 +143,6 @@ const requiredNoteSchema = z.object({ note: z.string().trim().min(3).max(300) })
 const gapsQuery = z.object({ deviceId: deviceIdStr });
 
 module.exports = {
-  offlineSaleSchema, shiftOpenSchema, shiftCloseSchema, rejectClaimSchema, pushSchema, deviceQuery, catalogQuery,
+  offlineSaleSchema, shiftOpenSchema, shiftCloseSchema, stockReceiveSchema, stockAdjustSchema, rejectClaimSchema, pushSchema, deviceQuery, catalogQuery,
   reviewListQuery, idParamSchema, optionalNoteSchema, requiredNoteSchema, gapsQuery,
 };

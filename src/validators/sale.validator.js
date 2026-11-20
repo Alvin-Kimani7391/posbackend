@@ -53,6 +53,7 @@ const listSalesQuery = paginationQuery.extend({
   customerId: objectId.optional(),
   shiftId: objectId.optional(),
   paymentStatus: z.enum(['PAID', 'PARTIAL', 'UNPAID', 'CREDIT']).optional(),
+  offline: z.enum(['yes', 'no']).optional(), // Sales history filter: only sales made offline / only online sales
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });

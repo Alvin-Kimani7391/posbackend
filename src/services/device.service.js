@@ -190,7 +190,7 @@ async function issueGrant(businessId, user, deviceId, secret) {
     maxDiscountPercent,
     canOverridePrice: false, // price override is never allowed offline in this release
     canOpenShift: !!userHasPermission(user, 'shifts.open'),
-    canCloseShift: !!userHasPermission(user, 'shifts.close'),
+    canCloseShift: !!userHasPermission(user, 'shifts.close'), canReceiveStock: !!userHasPermission(user, 'inventory.receive'), canAdjustStock: !!userHasPermission(user, 'inventory.adjust'),
     allowCredit: policy.allowCredit,
     allowManualMpesa: policy.allowManualMpesa,
     allowCard: policy.allowCard,
@@ -322,7 +322,7 @@ async function issueRoster(businessId, manager, deviceId, secret) {
   const roster = users.map((u) => {
     const caps = {
       maxDiscountPercent: Math.min(maxDiscountPercentForRole(u.role, business), policy.maxDiscountPercent), canOverridePrice: false,
-      canOpenShift: !!userHasPermission(u, 'shifts.open'), canCloseShift: !!userHasPermission(u, 'shifts.close'),
+      canOpenShift: !!userHasPermission(u, 'shifts.open'), canCloseShift: !!userHasPermission(u, 'shifts.close'), canReceiveStock: !!userHasPermission(u, 'inventory.receive'), canAdjustStock: !!userHasPermission(u, 'inventory.adjust'),
       allowCredit: policy.allowCredit, allowManualMpesa: policy.allowManualMpesa, allowCard: policy.allowCard, allowRefunds: policy.allowRefunds,
       ...pharmacyCaps(business),
     };
