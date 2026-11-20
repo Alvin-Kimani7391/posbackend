@@ -2,7 +2,7 @@
  * Offline stock events: the idempotency marker and the stock movement commit in ONE transaction.
  * Needs a replica set for transactions, so it uses mongodb-memory-server's MongoMemoryReplSet (first run downloads mongod).
  */
-jest.mock('../src/middleware/auth', () => ({ userHasPermission: (u, p) => !(u.denied || []).includes(p) }));
+
 jest.mock('../src/services/notification.service', () => new Proxy({}, { get: () => async () => [] }));
 jest.mock('../src/services/offline-sale.service', () => {
   class IngestRejection extends Error {
@@ -21,7 +21,7 @@ const inventoryService = require('../src/services/inventory.service');
 const { ingestStockReceive, ingestStockAdjust, isMarkerDuplicate } = require('../src/services/offline-stock.service');
 
 const oid = () => new mongoose.Types.ObjectId();
-let rs; let businessId; let otherBusinessId; let branchId; let productId; let userId; let device; let claims; let seq = 0;
+let rs; let businessId; let otherBusinessId; let branchId; let productId; let userId; let cashierId; let device; let claims; let seq = 0;
 
 const qty = async (pid = productId, bid = businessId) => ((await BranchInventory.findOne({ businessId: bid, branchId, productId: pid })) || {}).quantity || 0;
 const recv = (over = {}) => ({ type: 'STOCK_RECEIVE', clientEventId: `evt-recv-${(seq += 1)}-padding`, outboxSeq: seq, occurredAt: new Date(), productId, quantity: 10, ...over });
@@ -33,18 +33,63 @@ beforeAll(async () => {
   await mongoose.connect(rs.getUri(), { dbName: 'offline-stock-test' });
   await Promise.all([BranchInventory, InventoryMovement, OfflineStockEvent, AuditLog].map((m) => m.init()));
   await Promise.all(['products', 'users', 'businesses'].map((c) => mongoose.connection.createCollection(c).catch(() => {}))); // collections must exist before a transaction touches them
-}, 120000);
-afterAll(async () => { await mongoose.disconnect(); await rs.stop(); });
+}, 600000);
+afterAll(async () => {
+  await mongoose.disconnect();
+  if (rs) await rs.stop();
+});
+
 
 beforeEach(async () => {
   jest.restoreAllMocks();
-  businessId = oid(); otherBusinessId = oid(); branchId = oid(); productId = oid(); userId = oid();
+
+  businessId = oid();
+  otherBusinessId = oid();
+  branchId = oid();
+  productId = oid();
+  userId = oid();
+  cashierId = oid();
+
   device = { deviceId: 'device-0000000000001', deviceCode: 'T1', branchId };
   claims = { sub: String(userId) };
+
   const db = mongoose.connection.db;
-  await db.collection('businesses').insertMany([{ _id: businessId, name: 'A' }, { _id: otherBusinessId, name: 'B' }]);
-  await db.collection('users').insertOne({ _id: userId, businessId, name: 'Cashier', role: 'CASHIER', status: 'active' });
-  await db.collection('products').insertOne({ _id: productId, businessId, name: 'Milk', sku: 'MLK', unit: 'piece', trackInventory: true, costPrice: 0, sellingPrice: 100, status: 'active' });
+
+  await db.collection('businesses').insertMany([
+    { _id: businessId, name: 'A' },
+    { _id: otherBusinessId, name: 'B' }
+  ]);
+
+  await db.collection('users').insertMany([
+   {
+  _id: userId,
+  businessId,
+  name: 'Manager',
+  phone: '0700000001',
+  role: 'MANAGER',
+  status: 'active'
+},
+{
+  _id: cashierId,
+  businessId,
+  name: 'Cashier',
+  phone: '0700000002',
+  role: 'CASHIER',
+  status: 'active'
+}
+  ]);
+
+  await db.collection('products').insertOne({
+    _id: productId,
+    businessId,
+    name: 'Milk',
+    sku: 'MLK',
+    unit: 'piece',
+    trackInventory: true,
+    costPrice: 0,
+    sellingPrice: 100,
+    status: 'active'
+  });
 });
 
 describe('successful events', () => {
@@ -132,12 +177,21 @@ describe('rollback and retry', () => {
     expect(isMarkerDuplicate({ code: 11000, keyPattern: { businessId: 1, deviceId: 1, clientEventId: 1 } })).toBe(true);
   });
 
-  test('a cashier without the permission is rejected and nothing is written', async () => {
-    await mongoose.connection.db.collection('users').updateOne({ _id: userId }, { $set: { denied: ['inventory.receive'] } });
-    const e = recv();
-    await expect(call(ingestStockReceive, e)).rejects.toMatchObject({ code: 'STOCK_NOT_PERMITTED' });
+  test('a cashier without stock permissions cannot receive or adjust stock', async () => {
+    claims = { sub: String(cashierId) };
+
+    const receiveEvent = recv();
+    await expect(call(ingestStockReceive, receiveEvent))
+      .rejects.toMatchObject({ code: 'STOCK_NOT_PERMITTED' });
+
+    const adjustEvent = adj();
+    await expect(call(ingestStockAdjust, adjustEvent))
+      .rejects.toMatchObject({ code: 'STOCK_NOT_PERMITTED' });
+
     expect(await qty()).toBe(0);
+    expect(await InventoryMovement.countDocuments({ businessId })).toBe(0);
     expect(await OfflineStockEvent.countDocuments({ businessId })).toBe(0);
+    expect(await AuditLog.countDocuments({ businessId })).toBe(0);
   });
 });
 
