@@ -1,6 +1,8 @@
 """guardian.py - monitoring, controlled auto-recovery and alerting. Runs every minute from cron as root, completely independent of Node, the dashboard and
 (for alert e-mail) the database. READ-ONLY apart from the guarded watchdog restart of a mongod that is not running at all."""
-import json, os, re, time, urllib.request, urllib.error
+import html, json, os, re, time, urllib.request, urllib.error
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from . import common as C
 from . import resources as RES
 
@@ -252,12 +254,20 @@ def recipients():
     return res
 
 
-def send_mail(subject, html):
+def send_mail(subject, html_body, text_body=None):
     env = C.load_env()
     to = recipients()
     if not to or not env.get("BREVO_API_KEY") or not env.get("BREVO_SENDER_EMAIL"):
         return False
-    body = json.dumps({"sender": {"email": env["BREVO_SENDER_EMAIL"], "name": env.get("BREVO_SENDER_NAME", "Six Star POS")}, "to": [{"email": e} for e in to], "subject": subject, "htmlContent": html}).encode()
+    payload = {
+        "sender": {"email": env["BREVO_SENDER_EMAIL"], "name": env.get("BREVO_SENDER_NAME", "Six Star POS")},
+        "to": [{"email": e} for e in to],
+        "subject": subject,
+        "htmlContent": html_body,
+    }
+    if text_body:
+        payload["textContent"] = text_body
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(env.get("BREVO_URL", "https://api.brevo.com/v3/smtp/email"), data=body, headers={"api-key": env["BREVO_API_KEY"], "content-type": "application/json", "accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -266,7 +276,141 @@ def send_mail(subject, html):
         return False
 
 
-esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+esc = lambda s: html.escape(str(s), quote=True)
+
+
+def _local_time(value):
+    if not value:
+        return "Not recorded"
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.astimezone(ZoneInfo("Africa/Nairobi")).strftime("%d %b %Y, %I:%M:%S %p EAT")
+    except Exception:
+        return str(value)
+
+
+def _event_report(host, event):
+    kind = event.get("kind", "")
+    title = {
+        "backup_ok": "Full database backup completed",
+        "pitr_test_passed": "Point-in-time recovery test passed",
+        "restore_test_passed": "Full restore test passed",
+        "backup_failed": "Full database backup failed",
+        "oplog_failed": "PITR oplog archiving failed",
+        "pitr_test_failed": "Point-in-time recovery test failed",
+        "restore_test_failed": "Full restore test failed",
+        "verify_failed": "Backup verification failed",
+        "oplog_gap": "PITR recovery chain has a gap",
+    }.get(kind, event.get("kind", "Infrastructure event").replace("_", " ").title())
+
+    guidance = {
+        "backup_failed": (
+            "The latest full backup did not complete. Your newest recoverable backup may be older than expected.",
+            "Inspect the backup error and guardian logs. Check MongoDB connectivity, disk space, permissions and the backup destination. Correct the cause before retrying with: sudo sixstar-mongoctl backup full. Preserve existing backups."
+        ),
+        "r2_upload_failed": (
+            "The remote backup copy was not confirmed. Off-server protection may be incomplete.",
+            "Check network connectivity and R2 configuration without displaying credentials. Inspect the upload status and retry process. Preserve the staged local copy until a remote copy is verified."
+        ),
+        "oplog_failed": (
+            "PITR archive coverage may stop advancing. Recovery to newer points in time may be unavailable.",
+            "Inspect the oplog archiving error, latest archived position, available disk space and remote upload status. Confirm chain continuity before relying on PITR. Do not delete oplog segments or restart MongoDB as a first response."
+        ),
+        "oplog_gap": (
+            "The current PITR chain has a gap. Point-in-time recovery across the missing interval may be unavailable.",
+            "Preserve all existing full backups and oplog segments. Review the gap timestamp and chain status. Confirm a new full backup and a healthy contiguous chain before relying on newer PITR coverage."
+        ),
+        "verify_failed": (
+            "The affected backup did not pass its integrity verification and should not be treated as a confirmed recovery point.",
+            "Preserve the backup and its metadata. Review the verification error and logs, then verify another known-good backup. Create and verify a fresh full backup if necessary. Do not delete the failed copy during investigation."
+        ),
+        "pitr_test_failed": (
+            "The latest PITR recovery test failed. Point-in-time recoverability has not been demonstrated.",
+            "Inspect the PITR test details and restore-test logs. Check the selected backup, oplog chain continuity and available scratch disk space. Test another verified recovery point if needed. Never restore over the live production database during diagnosis."
+        ),
+        "restore_test_failed": (
+            "The latest full restore test failed. Successful recovery from that tested backup has not been demonstrated.",
+            "Inspect the restore-test error and logs. Check backup integrity, encryption access, disk space and MongoDB restore output. Preserve the source backup and test an alternative verified backup in isolation, never over production."
+        ),
+        "retention_failed": (
+            "Backup retention cleanup did not complete. Storage usage may grow beyond its expected level.",
+            "Inspect the retention error and disk/storage usage. Check permissions and remote storage connectivity. Retry retention only after understanding the failure. Do not manually delete backup or oplog files."
+        )
+    }
+
+    rows = []
+    text_rows = []
+    def add(label, value):
+        value = str(value if value not in (None, "") else "Not recorded")
+        rows.append("<tr><td style='padding:8px;border-bottom:1px solid #e8edf2;color:#64748b;width:38%%;vertical-align:top;word-break:break-word;overflow-wrap:anywhere'>%s</td><td style='padding:8px;border-bottom:1px solid #e8edf2;color:#0b1f33;font-weight:600;vertical-align:top;word-break:break-all;overflow-wrap:anywhere'>%s</td></tr>" % (esc(label), esc(value)))
+        text_rows.append("%s: %s" % (label, value))
+
+    add("Event time", _local_time(event.get("ts")))
+    add("Server", host)
+
+    if kind == "backup_ok":
+        try:
+            from . import backup as B
+            st = B.S()
+            manifest = next((f for f in st.get("fulls", []) if f.get("id") == event.get("id")), None)
+            if manifest:
+                add("Backup ID", manifest.get("id"))
+                add("Started", _local_time(manifest.get("startedAt")))
+                add("Completed", _local_time(manifest.get("finishedAt")))
+                add("Duration", "%s seconds" % manifest.get("durationSec", "Not recorded"))
+                add("Encrypted size", "%.2f MB" % (manifest.get("sizeBytes", 0) / 1048576))
+                add("Original data size", "%.2f MB" % (manifest.get("rawBytes", 0) / 1048576))
+                add("Documents", manifest.get("totalDocs"))
+                add("Collections", len(manifest.get("counts") or {}))
+                add("Compression / encryption", "%s / %s" % (manifest.get("compression"), manifest.get("encryption")))
+                add("SHA-256", manifest.get("sha256"))
+                add("Remote upload", "Confirmed" if manifest.get("uploaded") else "Not confirmed")
+                add("Deep verification", "Passed at " + _local_time(manifest.get("verifiedAt")) if manifest.get("verifiedAt") else "Pending")
+                add("PITR chain", manifest.get("chain"))
+                chain = st.get("chain") or {}
+                if chain.get("id") == manifest.get("chain"):
+                    add("PITR chain continuity", "Contiguous" if chain.get("contiguous") else "Not confirmed")
+                    add("PITR covered until", _local_time(chain.get("coveredUntil")))
+            else:
+                add("Backup details", "Manifest not found in local backup state")
+        except Exception:
+            add("Backup details", "Could not load backup manifest; inspect the infrastructure dashboard")
+    elif kind in ("pitr_test_passed", "pitr_test_failed", "restore_test_passed", "restore_test_failed"):
+        test_kind = "pitr" if kind.startswith("pitr_") else "restore"
+        saved = C.read_json(os.path.join(C.STATE, "restore-tests.json"), {}) or {}
+        result = saved.get(test_kind) or {}
+        add("Test result", result.get("status", kind.rsplit("_", 1)[-1]))
+        add("Backup ID tested", result.get("backupId"))
+        add("Details", result.get("detail") or event.get("message"))
+        add("Documents restored", result.get("documents"))
+        add("Duration", ("%s seconds" % result.get("durationSec")) if result.get("durationSec") is not None else None)
+        if test_kind == "pitr":
+            import re
+            match = re.search(r"(\d+) oplog segment", result.get("detail", ""))
+            add("Oplog segments replayed", match.group(1) if match else None)
+    else:
+        add("Severity", event.get("severity", "Not recorded").upper())
+        add("Details", event.get("message", "No event details recorded"))
+        add("Recommended action", "Open Admin > Infrastructure > Database and review the reported event. Preserve backup data while investigating; do not perform destructive recovery actions.")
+
+    if kind in guidance:
+        impact, action = guidance[kind]
+        add("Operational impact", impact)
+        add("Recommended action", action)
+
+    color = "#dc2626" if event.get("severity") in ("critical", "high") or kind.endswith("_failed") or kind == "oplog_gap" else "#0f766e"
+    html_body = (
+        "<div style='background:#f3f6fa;padding:12px;width:100%%;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#0b1f33'>"
+        "<div style='max-width:640px;width:100%%;margin:0 auto;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden'>"
+        "<div style='background:#0b1f33;padding:18px 20px;color:#ffffff'><div style='font-size:12px;letter-spacing:1px;color:#99f6e4'>SIX STAR POS · DATABASE OPERATIONS</div>"
+        "<h2 style='margin:10px 0 0;font-size:21px'>%s</h2></div>"
+        "<div style='padding:18px 20px'><div style='display:inline-block;background:%s;color:#ffffff;padding:6px 11px;border-radius:20px;font-size:12px;font-weight:bold'>%s</div>"
+        "<table role='presentation' style='width:100%%;table-layout:fixed;border-collapse:collapse;margin-top:16px'>%s</table>"
+        "<p style='margin:20px 0 0;color:#64748b;font-size:12px'>Automated infrastructure report. Credentials and secret keys are never included.</p>"
+        "</div></div></div>"
+    ) % (esc(title), color, esc(event.get("severity", "INFO").upper()), "".join(rows))
+    text_body = "SIX STAR POS - DATABASE OPERATIONS\n%s\n%s\n\n%s" % (title, event.get("severity", "info").upper(), "\n".join(text_rows))
+    return title, html_body, text_body
 
 
 def notify(status):
@@ -295,13 +439,24 @@ def notify(status):
         sent_ok = send_mail("[%s] Database infrastructure alerts cleared" % host, "<p>All critical/high alerts have cleared (%s).</p>" % status["generatedAt"])
     if sent_ok:
         state["alerts"] = nxt
-    # informational events flagged notify=True (resource upgrade, backup completed, retention done ...)
+    # Send one detailed report per queued event; advance the cursor only after successful delivery.
     evs = C.read_jsonl(os.path.join(C.STATE, "history.jsonl"), 100)
     seen = state.get("lastEventTs", "")
-    fresh = [e for e in evs if e.get("notify") and e["ts"] > seen]
-    if fresh:
-        if send_mail("[%s] Infrastructure notice" % host, "<ul>%s</ul>" % "".join("<li>%s - %s</li>" % (esc(e["ts"]), esc(e["message"])) for e in fresh)):
-            state["lastEventTs"] = fresh[-1]["ts"]
+    fresh = [e for e in evs if e.get("notify") and e.get("ts", "") > seen]
+    duplicate_failure_events = {
+        "backup_failed", "r2_upload_failed", "oplog_failed",
+        "pitr_test_failed", "restore_test_failed", "verify_failed",
+        "oplog_gap", "retention_failed",
+    }
+    for event in fresh:
+        if event.get("kind") in duplicate_failure_events:
+            state["lastEventTs"] = event["ts"]
+            continue
+        title, report_html, report_text = _event_report(host, event)
+        if send_mail("[%s] %s" % (host, title), report_html, report_text):
+            state["lastEventTs"] = event["ts"]
+        else:
+            break
     C.write_json(sp, state, 0o600)
 
 

@@ -6,7 +6,7 @@ Safety rules enforced here:
   * a recovery instance is a separate mongod (127.0.0.1:27098) - production is never written to while it is built;
   * promoting recovered data into production needs: maintenance mode ON, the typed confirmation, and a fresh verified safety backup of the CURRENT data first;
   * --oplogReplay is NEVER combined with namespace renaming (oplog entries are not renamed and would hit the live database)."""
-import json, os, shutil, signal, socket, subprocess, tempfile, time
+import json, os, resource, shutil, signal, socket, subprocess, tempfile, time
 from . import common as C
 from . import backup as B
 from . import resources as RES
@@ -64,11 +64,17 @@ def uri(port):
     return "mongodb://127.0.0.1:%d/admin" % port
 
 
+def _set_scratch_nofile_limit():
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = min(65536, hard)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+
+
 def start_mongod(dbpath, port, cache_gb, logfile):
     os.makedirs(dbpath, exist_ok=True)
     cmd = ["mongod", "--dbpath", dbpath, "--port", str(port), "--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", str(cache_gb), "--nounixsocket", "--quiet"]
     lf = open(logfile, "ab")
-    p = subprocess.Popen(["nice", "-n", "15"] + cmd, stdout=lf, stderr=lf, start_new_session=True)
+    p = subprocess.Popen(["nice", "-n", "15"] + cmd, stdout=lf, stderr=lf, start_new_session=True, preexec_fn=_set_scratch_nofile_limit)
     lf.close()
     for _ in range(90):
         if p.poll() is not None:
@@ -168,7 +174,7 @@ def _record(kind, status, detail, **extra):
     cur[kind] = {"status": status, "ts": C.iso(), "detail": detail[:400], **extra}
     C.write_json(p, cur)
     sev = "info" if status == "passed" else ("warning" if status == "skipped" else "critical")
-    C.event("%s_test_%s" % (kind, status), sev, "%s: %s" % ("Restore test" if kind == "restore" else "Point-in-time recovery test", detail[:300]), notify=(status == "failed"))
+    C.event("%s_test_%s" % (kind, status), sev, "%s: %s" % ("Restore test" if kind == "restore" else "Point-in-time recovery test", detail[:300]), notify=(status in ("failed", "passed")))
 
 
 def _free_for(raw_bytes, path=None):

@@ -17,3 +17,6 @@ LOG=/var/log/sixstar-mongo
 # proof that backups restore: full restore test (Wed) and point-in-time recovery test (Sat), into a throwaway mongod
 30 3 * * 3  root  sixstar-mongoctl restore-test >> $LOG/restore-test.log 2>&1
 30 3 * * 6  root  sixstar-mongoctl pitr-test >> $LOG/restore-test.log 2>&1
+
+# verify pending oplog segments and chain continuity (every 15 minutes)
+*/15 * * * * root sixstar-mongoctl verify-chain >> $LOG/verify-chain.log 2>&1

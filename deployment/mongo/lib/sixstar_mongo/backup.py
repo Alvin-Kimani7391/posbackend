@@ -71,7 +71,7 @@ def fail(kind, msg, sev="critical", **extra):
     st = S()
     st["lastError"] = {"kind": kind, "ts": C.iso(), "message": C.redact(msg)[:300], **extra}
     save(st)
-    C.event(kind + "_failed", sev, C.redact(msg)[:300], notify=False)
+    C.event(kind + "_failed", sev, C.redact(msg)[:300], notify=True)
 
 
 # ------------------------------------------------------------------ the streaming pipeline
@@ -693,16 +693,23 @@ def verify(target="latest"):
 
 
 def verify_chain(limit=40):
-    """Verify segment size, SHA-256, decryption, decompression and continuity."""
+    """Verify chain continuity and prioritize unverified segments."""
     st = S()
     ch = st.get("chain")
     if not ch:
-        return
+        return {"status": "nothing-to-verify"}
 
     segs = sorted(
         [s for s in st["segments"] if s.get("chain") == ch["id"]],
         key=lambda s: s["seq"]
     )
+
+    # Deep-verify only pending segments; continuity is checked across all.
+    candidates = sorted(
+        [s for s in segs if not s.get("verified")],
+        key=lambda s: s["seq"]
+    )[:limit]
+    selected = {s["seq"] for s in candidates}
 
     prev = None
     good = True
@@ -716,16 +723,14 @@ def verify_chain(limit=40):
             good = False
 
         if prev is not None:
-            if seg_from != prev["to"]:
+            if seg_from != (prev["to"]["t"], prev["to"]["i"]):
                 good = False
             if seg["seq"] != prev["seq"] + 1:
                 good = False
 
-        # Recheck previously verified segments too, within the run limit.
-        if checked < limit:
+        if seg["seq"] in selected:
             try:
                 remote_size(seg["key"], seg["sizeBytes"])
-
                 code, sha, size = stream_hash(seg["key"])
                 if code != 0 or sha != seg["sha256"] or size != seg["sizeBytes"]:
                     raise RuntimeError("oplog segment checksum or size mismatch")
@@ -751,9 +756,38 @@ def verify_chain(limit=40):
 
         prev = seg
 
+    pending = sum(1 for s in segs if not s.get("verified"))
     ch["contiguous"] = good
     st["chain"] = ch
     save(st)
+
+    return {
+        "status": "ok" if good and pending == 0 else "failed",
+        "chain": ch["id"],
+        "segments": len(segs),
+        "checked": checked,
+        "verified": len(segs) - pending,
+        "pending": pending,
+        "contiguous": good
+    }
+
+
+def verify_chain_job():
+    """Standalone scheduled verifier, serialized against full and oplog backups."""
+    heavy = C.Lock("heavy")
+    if not heavy.acquire():
+        return {"status": "busy", "lock": "heavy"}
+
+    oplog_lock = C.Lock("oplog")
+    try:
+        if not oplog_lock.acquire():
+            return {"status": "busy", "lock": "oplog"}
+        try:
+            return verify_chain()
+        finally:
+            oplog_lock.release()
+    finally:
+        heavy.release()
 
 
 def recovery(st=None):
@@ -1011,7 +1045,7 @@ def retention(apply=True):
             "applied": apply
         }
     except Exception as e:
-        C.event("retention_failed", "warning", C.redact(str(e))[:250])
+        C.event("retention_failed", "warning", C.redact(str(e))[:250], notify=True)
         return {"status": "failed", "error": C.redact(str(e))[:200]}
     finally:
         lk.release()
@@ -1078,4 +1112,19 @@ def view():
             alerts.append((k + "_test_failed", "critical", "%s FAILED: %s - backups may not be recoverable." % (label, t.get("detail", "")[:150]), "Read restore-test.log, take a new backup."))
         elif last and (not t or C.now() - (C.parse_iso(t.get("ts")) or 0) > cf["restoreTestMaxAgeDays"] * 86400):
             alerts.append((k + "_test_old", "warning", "%s has not passed in the last %d days." % (label, cf["restoreTestMaxAgeDays"]), "sudo sixstar-mongoctl %s-test" % k))
+    # Keep a retention warning active until a later successful retention run.
+    retention_events = [
+        e for e in C.read_jsonl(os.path.join(C.STATE, "history.jsonl"), 100)
+        if e.get("kind") in ("retention_failed", "retention_done")
+    ]
+    if retention_events:
+        latest_retention = max(retention_events, key=lambda e: e.get("ts", ""))
+        if latest_retention.get("kind") == "retention_failed":
+            alerts.append((
+                "retention_failed",
+                "warning",
+                "Backup retention failed: " + str(latest_retention.get("message", ""))[:200],
+                "Inspect the retention error, disk usage and storage permissions. Correct the cause before retrying. Do not manually delete backup or oplog files."
+            ))
+
     return v, alerts

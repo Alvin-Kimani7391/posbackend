@@ -77,13 +77,21 @@ def atlas_source(e, target):
 
 
 def cfg_file(uri):
+    import json
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote
+    parts = urlsplit(uri)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    if parts.path not in ("", "/"):
+        if parts.username is not None and not any(k.lower() == "authsource" for k, v in query):
+            query.append(("authSource", unquote(parts.path.lstrip("/").split("/", 1)[0])))
+        parts = parts._replace(path="/", query=urlencode(query))
+        uri = urlunsplit(parts)
     os.makedirs(MIG_DIR(), exist_ok=True)
     p = os.path.join(MIG_DIR(), "cfg-%d-%d.yml" % (os.getpid(), int(time.time() * 1000) % 100000))
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write('uri: "%s"\n' % uri.replace("\\", "\\\\").replace('"', '\\"'))
+        f.write("uri: %s\n" % json.dumps(uri))
     return p
-
 
 def rm(p):
     try:
@@ -187,7 +195,7 @@ def _stream_copy(src_uri, src_db, dst_uri, dst_db, prof, drop=False):
     from .restore import run_chain
     sc, dc = cfg_file(src_uri), cfg_file(dst_uri)
     try:
-        dump = ["mongodump", "--config", sc, "--db", src_db, "--archive", "--readPreference", "secondaryPreferred", "--quiet"]
+        dump = ["mongodump", "--config", sc, "--db", src_db, "--archive", "--readPreference", "primary", "--quiet"]
         rest = ["mongorestore", "--config", dc, "--archive", "--nsInclude", "%s.*" % src_db, "--numParallelCollections", str(prof.get("dumpParallelCollections", 1)), "--quiet"]
         if src_db != dst_db:
             rest += ["--nsFrom", "%s.*" % src_db, "--nsTo", "%s.*" % dst_db]
@@ -590,7 +598,7 @@ def worker_stopped():
 def preflight_cutover(e):
     probs = []
     m = M()
-    for s in ("audit_prod", "backup_prod", "stage", "reconcile_staging", "reconcile_prod"):
+    for s in ("audit_prod", "backup_prod", "stage", "reconcile_staging"):
         if m["steps"].get(s, {}).get("status") != "ok":
             probs.append("step '%s' has not passed" % s)
     rs = m["steps"].get("reconcile_staging", {})

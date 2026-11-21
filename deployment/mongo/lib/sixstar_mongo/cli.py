@@ -25,6 +25,7 @@ def build():
     b.add_argument("--force", action="store_true")
     v = sub.add_parser("verify")
     v.add_argument("target", nargs="?", default="latest")
+    sub.add_parser("verify-chain", help="verify pending oplog chain segments")
     rt = sub.add_parser("retention")
     rt.add_argument("--dry-run", action="store_true")
     sub.add_parser("recovery", help="show the verified recovery points")
@@ -81,6 +82,9 @@ def main(argv):
     if c == "verify":
         from . import backup as B
         return out(B.verify(a.target))
+    if c == "verify-chain":
+        from . import backup as B
+        return out(B.verify_chain_job())
     if c == "retention":
         from . import backup as B
         return out(B.retention(apply=not a.dry_run))
